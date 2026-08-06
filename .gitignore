@@ -1,0 +1,12 @@
+node_modules/
+
+# 主机、托管私钥、token 都在 ~/.herdr-web/，本来就不在仓库里；
+# 万一有人把数据目录指到项目下（HERDR_WEB_DIR），也别让它进版本库
+.herdr-web/
+*.pem
+id_ed25519*
+id_rsa*
+token
+
+.DS_Store
+*.log

@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#23262e">
+  <title>herdr-web</title>
+  <link rel="stylesheet" href="/vendor/xterm.css">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="bar">
+    <div class="bar-l">
+      <span class="dot" id="dot"></span>
+      <span class="label" id="label">未连接</span>
+    </div>
+
+    <div class="bar-c">
+      <div class="seg" id="modeSeg">
+        <button data-mode="local" class="on">本机</button>
+        <button data-mode="host">SSH</button>
+      </div>
+      <select id="hostSel" class="sel hidden"></select>
+      <input id="target" class="target hidden" placeholder="user@host" spellcheck="false" autocomplete="off">
+      <button id="hostsBtn" class="btn icon hidden" title="主机与密钥管理">⚙</button>
+      <button id="connect" class="btn primary">连接</button>
+      <button id="runHerdr" class="btn" title="向终端写入 herdr↵">敲 herdr</button>
+    </div>
+
+    <div class="bar-r">
+      <button id="keysBtn" class="btn icon" title="软键盘条（Ctrl / Esc / 方向键）">⌨</button>
+      <button id="fontDown" class="btn icon" title="缩小字号">A−</button>
+      <button id="fontUp" class="btn icon" title="放大字号">A+</button>
+      <button id="themeBtn" class="btn icon" title="切换明暗">◐</button>
+      <button id="capsBtn" class="btn icon" title="终端能力">⌘?</button>
+    </div>
+  </header>
+
+  <main id="wrap">
+    <div id="term"></div>
+    <div id="overlay" class="overlay">
+      <div class="card">
+        <h1>herdr in the browser</h1>
+        <p id="ovMsg">点「连接」开一个本机登录 shell，然后敲 <code>herdr</code>。</p>
+        <button id="ovBtn" class="btn primary big">连接</button>
+      </div>
+    </div>
+  </main>
+
+  <!-- 手机用的软键盘条：手机没有 Ctrl，herdr 的前缀键靠它 -->
+  <nav id="softkeys" class="softkeys hidden">
+    <button data-act="kbd" class="sk" title="显示 / 收起系统键盘（也可以双击终端）">⌨</button>
+    <button data-send="&#x02;" class="sk wide">⌃B 前缀</button>
+    <button data-sticky="ctrl" class="sk">Ctrl</button>
+    <button data-sticky="alt" class="sk">Alt</button>
+    <button data-send="&#x1b;" class="sk">Esc</button>
+    <button data-send="&#x09;" class="sk">Tab</button>
+    <button data-send="&#x1b;[A" class="sk">↑</button>
+    <button data-send="&#x1b;[B" class="sk">↓</button>
+    <button data-send="&#x1b;[D" class="sk">←</button>
+    <button data-send="&#x1b;[C" class="sk">→</button>
+    <button data-send="&#x1b;[5~" class="sk">PgUp</button>
+    <button data-send="&#x1b;[6~" class="sk">PgDn</button>
+    <button data-send="&#x03;" class="sk">⌃C</button>
+    <button data-send="&#x0d;" class="sk">↵</button>
+  </nav>
+
+  <!-- 终端能力面板 -->
+  <aside id="caps" class="panel hidden">
+    <div class="panel-head">
+      <strong>程序请求的终端能力</strong>
+      <button data-close="#caps" class="btn icon">×</button>
+    </div>
+    <ul id="capsList" class="caplist"><li class="muted">连接后这里会列出程序实际用到的转义序列</li></ul>
+    <div class="panel-foot">
+      <label><input type="checkbox" id="optKitty" checked> kitty 键盘协议（Ctrl+Shift+x / Ctrl+数字 / Ctrl+Enter）</label>
+      <label><input type="checkbox" id="optMeta" checked> Option 当作 Meta（alt+1、alt+g 这类快捷键）</label>
+      <label><input type="checkbox" id="optCopySel"> 选中即复制</label>
+      <p class="muted small">复制：⌘C / Ctrl+Shift+C　粘贴：⌘V / Ctrl+Shift+V　浏览器自己吃掉的键：⌘W ⌘T ⌘N Ctrl+Tab</p>
+    </div>
+  </aside>
+
+  <!-- 主机与密钥管理 -->
+  <aside id="hosts" class="panel wide hidden">
+    <div class="panel-head">
+      <strong>主机与密钥</strong>
+      <button data-close="#hosts" class="btn icon">×</button>
+    </div>
+
+    <div class="panel-body">
+      <section>
+        <div class="sec-head">
+          <h3>主机</h3>
+          <div class="sec-act">
+            <button id="hostAdd" class="btn tiny">+ 新增</button>
+            <button id="hostImport" class="btn tiny" title="把 ~/.ssh/config 里的别名存成主机">导入 ssh_config</button>
+          </div>
+        </div>
+        <div id="hostList" class="list"></div>
+        <form id="hostForm" class="form hidden">
+          <input type="hidden" name="id">
+          <div class="row">
+            <label>名称<input name="name" placeholder="al2" required spellcheck="false"></label>
+            <label>主机<input name="host" placeholder="1.2.3.4 或 ssh_config 别名" required spellcheck="false"></label>
+          </div>
+          <div class="row">
+            <label>用户<input name="user" placeholder="留空用 ssh 默认" spellcheck="false"></label>
+            <label class="narrow">端口<input name="port" type="number" min="1" max="65535" placeholder="22"></label>
+          </div>
+          <div class="row">
+            <label>密钥
+              <select name="keyRef" id="keyRefSel"></select>
+            </label>
+            <label>跳板 ProxyJump<input name="jump" placeholder="留空则不用" spellcheck="false"></label>
+          </div>
+          <label class="check"><input type="checkbox" name="acceptNew"> 首次连接自动信任主机指纹（否则在终端里手动敲 yes）</label>
+          <div class="form-act">
+            <button type="submit" class="btn primary tiny">保存</button>
+            <button type="button" id="hostCancel" class="btn tiny">取消</button>
+            <span id="hostErr" class="err"></span>
+          </div>
+        </form>
+      </section>
+
+      <section>
+        <div class="sec-head">
+          <h3>托管密钥</h3>
+          <div class="sec-act">
+            <button id="keyGen" class="btn tiny">+ 生成 ed25519</button>
+            <button id="keyImp" class="btn tiny">导入私钥</button>
+          </div>
+        </div>
+        <div id="keyList" class="list"></div>
+        <form id="keyForm" class="form hidden">
+          <label>密钥名<input name="name" placeholder="al2" required spellcheck="false"></label>
+          <label id="pemWrap">私钥内容
+            <textarea name="privateKey" rows="5" spellcheck="false"
+              placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"></textarea>
+          </label>
+          <div class="form-act">
+            <button type="submit" class="btn primary tiny">保存</button>
+            <button type="button" id="keyCancel" class="btn tiny">取消</button>
+            <span id="keyErr" class="err"></span>
+          </div>
+        </form>
+        <p class="muted small" id="keyHint"></p>
+      </section>
+
+      <section id="sshKeysSec">
+        <div class="sec-head"><h3>~/.ssh 里现成的密钥</h3></div>
+        <div id="sshKeyList" class="list"></div>
+        <p class="muted small">这些不会被复制走，主机里选它就是直接 <code>-i</code> 引用原路径。</p>
+      </section>
+    </div>
+  </aside>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/vendor/xterm.js"></script>
+  <script src="/vendor/addon-fit.js"></script>
+  <script src="/vendor/addon-webgl.js"></script>
+  <script src="/vendor/addon-web-links.js"></script>
+  <script src="/vendor/addon-unicode11.js"></script>
+  <script src="/vendor/addon-clipboard.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
