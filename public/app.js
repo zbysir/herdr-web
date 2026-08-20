@@ -95,6 +95,46 @@ function renderCaps() {
     `<li class="${v.ok ? '' : 'no'}"><code>${esc(k)}</code><span>${esc(v.label)}</span></li>`).join('');
 }
 
+/* ------------------------------------------------------------------ 渲染看门狗 */
+// xterm.js 6.0 的 RenderService 有三条「收下重绘请求但不画」的路：
+//   1. DEC 2026 同步输出开着时，refreshRows() 把范围攒进 SynchronizedOutputHandler，
+//      等 `CSI ? 2026 l`（ESU）或 1s 兜底超时才真画；
+//   2. 真正的绘制在 requestAnimationFrame 里，后台标签页里 rAF 完全不跑；
+//   3. IntersectionObserver 判定终端不可见时直接 `_isPaused` 挂起。
+// herdr 三条全踩：它常驻开着 2026，一帧几 KB 还会被 WebSocket 和 xterm.js 的写队列
+// 拆成多次 write，跨好几个 rAF —— 攒漏一次，屏幕上就留一块没画上的空白。
+// 缓冲区里字一直是好的（滚一下或改字号强制重绘就回来了），所以这里只补重绘：
+// 数据流停下来之后强制画一次；2026 卡在开着的状态就先自己补个 ESU，
+// 不然 refresh() 会被一样攒起来。
+let paintTimer = null;
+let paintHeals = 0;
+
+const armRepaint = () => { clearTimeout(paintTimer); paintTimer = setTimeout(repaint, 180); };
+
+function repaint() {
+  clearTimeout(paintTimer);
+  if (term.modes.synchronizedOutputMode) {
+    // 流都停了还开着 = 这一帧的 ESU 没等到。自己收尾（xterm.js 自带的 1s 兜底太慢了），
+    // 这一句写下去本身就会触发全屏重绘。
+    paintHeals++;
+    term.write('\x1b[?2026l');
+    noteHeal();
+    return;
+  }
+  term.refresh(0, term.rows - 1);
+}
+
+function noteHeal() {
+  const el = $('#renderInfo');
+  el.classList.remove('hidden');
+  el.textContent = `同步输出补过 ${paintHeals} 次收尾：herdr 的 2026 帧没等到 ESU，`
+    + '重绘被攒住了（缓冲区没坏，只是没画上）。频繁出现就把上面的同步输出关掉。';
+}
+
+// 后台标签页里 rAF 不跑，攒下的那一帧要回到前台才画 —— 回来立刻补一次，别等下一批数据
+addEventListener('focus', repaint);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) repaint(); });
+
 /* ------------------------------------------------------------------ 补协议 */
 const kitty = { flags: 0, stack: [] };
 
@@ -106,6 +146,10 @@ term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, (params) => {
     if (known) noteCap(`DEC ${code}`, known[0], known[1]);
     if (code === 2031) sendScheme();   // 程序刚订阅，先告诉它当前是什么主题
   }
+  // 面板里关掉同步输出时就地吞掉，别让 xterm.js 进「只攒不画」的状态（见渲染看门狗）。
+  // 只吞单独的 `CSI ? 2026 h`（herdr 就是这么发的），混在别的参数里一律放过去。
+  const only = params.length === 1 && (Array.isArray(params[0]) ? params[0][0] : params[0]);
+  if (only === 2026 && !$('#opt2026').checked) return true;
   return false;
 });
 
@@ -333,7 +377,109 @@ function applySticky(d) {
   return out;
 }
 
+/* ---- 软键条的按键从服务端下发，在网页上编辑（存服务端，多设备共用一份）---- */
+let skKeys = [];
+
+function renderSoftkeys() {
+  $('#skRow').innerHTML = skKeys.map((k) => {
+    const attr = k.sticky ? `data-sticky="${esc(k.sticky)}"`
+      : k.act ? `data-act="${esc(k.act)}"`
+        : `data-send="${esc(k.send)}"`;
+    return `<button class="sk${k.wide ? ' wide' : ''}" ${attr} title="${esc(k.spec || k.sticky || k.act || '')}">${esc(k.label)}</button>`;
+  }).join('');
+  renderSticky();
+  syncKbdBtn();
+}
+
+async function loadSoftkeys() {
+  try {
+    skKeys = (await api.get('/softkeys')).keys || [];
+  } catch {
+    skKeys = [];                 // 拿不到就先空着，面板里还能改
+  }
+  renderSoftkeys();
+}
+
+// 编辑器：改的是一份草稿，保存成功才生效
+let skDraft = [];
+const skKind = (k) => (k.sticky ? `sticky:${k.sticky}` : k.act ? `act:${k.act}` : (k.spec ?? k.send ?? ''));
+
+function renderSkEditor() {
+  $('#skList').innerHTML = skDraft.map((k, i) => `
+    <div class="item sk-edit-row" data-i="${i}">
+      <input class="sk-label" value="${esc(k.label)}" placeholder="名字" maxlength="12">
+      <input class="sk-spec mono" value="${esc(skKind(k))}" placeholder="ctrl+b c">
+      <label class="sk-wide" title="占宽一点"><input type="checkbox" ${k.wide ? 'checked' : ''}>宽</label>
+      <div class="item-act">
+        <button class="btn tiny" data-mv="-1" title="上移（往左）">↑</button>
+        <button class="btn tiny" data-mv="1" title="下移（往右）">↓</button>
+        <button class="btn tiny danger" data-del="1" title="删掉">×</button>
+      </div>
+    </div>`).join('') || '<p class="empty">一个按键都没有，点「+ 加一个」</p>';
+}
+
+// 从输入框里收回草稿（每次改动前先同步，免得丢掉正在编辑的内容）
+function skCollect() {
+  for (const row of $$('#skList .sk-edit-row')) {
+    const i = Number(row.dataset.i);
+    const spec = row.querySelector('.sk-spec').value.trim();
+    const k = { label: row.querySelector('.sk-label').value, wide: row.querySelector('.sk-wide input').checked };
+    const m = spec.match(/^(sticky|act):(.+)$/);
+    if (m) k[m[1]] = m[2].trim(); else k.send = spec;
+    skDraft[i] = k;
+  }
+}
+
+function openSkPanel() {
+  $('#caps').classList.add('hidden');
+  $('#hosts').classList.add('hidden');
+  const panel = $('#skeys');
+  panel.classList.toggle('hidden');
+  if (panel.classList.contains('hidden')) return;
+  skDraft = skKeys.map((k) => ({ label: k.label, wide: !!k.wide, ...(k.sticky ? { sticky: k.sticky } : k.act ? { act: k.act } : { send: k.spec ?? k.send }) }));
+  $('#skErr').textContent = '';
+  renderSkEditor();
+}
+
+$('#skEdit').onclick = openSkPanel;
+$('#skAdd').onclick = () => { skCollect(); skDraft.push({ label: '', send: '' }); renderSkEditor(); };
+$('#skList').addEventListener('click', (e) => {
+  const row = e.target.closest('.sk-edit-row');
+  const btn = e.target.closest('button');
+  if (!row || !btn) return;
+  skCollect();
+  const i = Number(row.dataset.i);
+  if (btn.dataset.del) skDraft.splice(i, 1);
+  else {
+    const j = i + Number(btn.dataset.mv);
+    if (j < 0 || j >= skDraft.length) return;
+    [skDraft[i], skDraft[j]] = [skDraft[j], skDraft[i]];
+  }
+  renderSkEditor();
+});
+$('#skSave').onclick = async () => {
+  skCollect();
+  $('#skErr').textContent = '';
+  try {
+    skKeys = (await api.put('/softkeys', { keys: skDraft })).keys;
+    renderSoftkeys();
+    toast('软键条已保存');
+  } catch (e) {
+    $('#skErr').textContent = e.message;      // 服务端会指出是第几个按键、哪里不认
+  }
+};
+$('#skReset').onclick = async () => {
+  try {
+    skKeys = (await api.del('/softkeys')).keys;
+    renderSoftkeys();
+    skDraft = skKeys.map((k) => ({ label: k.label, wide: !!k.wide, ...(k.sticky ? { sticky: k.sticky } : k.act ? { act: k.act } : { send: k.spec }) }));
+    renderSkEditor();
+    toast('已恢复默认');
+  } catch (e) { $('#skErr').textContent = e.message; }
+};
+
 $('#softkeys').addEventListener('click', (e) => {
+  if (e.target.closest('#skEdit')) return;      // ⚙ 不是按键，它开配置面板
   const b = e.target.closest('.sk');
   if (!b) return;
   if (b.dataset.act === 'kbd') return toggleKeyboard();   // 这一个不能顺手 focus，否则没法收起
@@ -425,6 +571,7 @@ function connect(override) {
   exited = false;
   term.reset();          // 每次连接从干净屏幕开始
   fit.fit();
+  sentSize = `${term.cols}×${term.rows}`;   // PTY 就是按这个尺寸开的，别再重复发一次
   const q = new URLSearchParams({ token: TOKEN, cols: term.cols, rows: term.rows, ...spec });
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/pty?${q}`);
   ws.binaryType = 'arraybuffer';
@@ -432,7 +579,7 @@ function connect(override) {
   $('#overlay').classList.add('hidden');
 
   ws.onmessage = (ev) => {
-    if (typeof ev.data !== 'string') { term.write(new Uint8Array(ev.data)); return; }
+    if (typeof ev.data !== 'string') { term.write(new Uint8Array(ev.data)); armRepaint(); return; }
     const m = JSON.parse(ev.data);
     if (m.t === 'ready') {
       alive = true;
@@ -461,20 +608,42 @@ function connect(override) {
 }
 
 /* ------------------------------------------------------------------ 尺寸 */
+// ResizeObserver / visualViewport 会为了跟行列数无关的布局变化（软键条、发件箱开合、
+// 手机上滚一下地址栏）反复触发。尺寸没变还发 resize，等于白给 herdr 一个 SIGWINCH，
+// 它会把整屏重画一遍 —— 纯粹的重绘噪音，所以这里比一下再发。
 let resizeTimer = null;
+let sentSize = '';
 function relayout() {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
     try { fit.fit(); } catch { /* 容器还没测量出来 */ }
-    if (ws?.readyState === WebSocket.OPEN) {
+    const size = `${term.cols}×${term.rows}`;
+    if (ws?.readyState === WebSocket.OPEN && size !== sentSize) {
+      sentSize = size;
       ws.send(JSON.stringify({ t: 'r', cols: term.cols, rows: term.rows }));
-      if (alive) setStatus($('#label').textContent.replace(/\d+×\d+$/, `${term.cols}×${term.rows}`), 'on');
+      if (alive) setStatus($('#label').textContent.replace(/\d+×\d+$/, size), 'on');
     }
   }, 80);
 }
 new ResizeObserver(relayout).observe($('#wrap'));
 addEventListener('orientationchange', relayout);
-visualViewport?.addEventListener('resize', relayout);   // 手机弹出虚拟键盘
+/**
+ * 手机弹出虚拟键盘时把页面高度定到 visualViewport 上。
+ *
+ * 光调 fit.fit() 不够：iOS 的键盘**从不**缩布局视口，Android 也要 viewport meta 里
+ * 的 interactive-widget 才缩。html/body 写 height:100% 的话，100% 指的是没缩过的
+ * 布局视口，于是键盘直接盖住底下的软键条和发件箱 —— 终端重排了也看不见。
+ */
+function applyViewportHeight() {
+  const vv = visualViewport;
+  if (!vv) return;
+  document.documentElement.style.setProperty('--vvh', `${Math.round(vv.height)}px`);
+  // 键盘弹出时浏览器有时会把整页顶上去，拉回来，否则顶栏跑出屏幕
+  if (vv.offsetTop || scrollY) scrollTo(0, 0);
+}
+visualViewport?.addEventListener('resize', () => { applyViewportHeight(); relayout(); });
+visualViewport?.addEventListener('scroll', applyViewportHeight);
+applyViewportHeight();
 
 /* ------------------------------------------------------------------ 主机 / 密钥管理 */
 const api = {
@@ -578,6 +747,7 @@ function renderKeys() {
 
 async function refresh() {
   state = await api.get('/state');
+  cApplyCfg(state.compose);
   renderHostSelect();
   renderHosts();
   renderKeys();
@@ -701,10 +871,370 @@ $('#keyList').addEventListener('click', async (e) => {
   }
 });
 
+/* ------------------------------------------------------------------ 语音投稿发件箱 */
+// 为什么是这么一个框而不是直接对着终端说：终端是字节流，没有 selection 语义，
+// IME 只能往里灌字符。「框选重说」需要一个真正的可编辑字段 —— 有文本模型、有选区，
+// 选中后 IME 提交会覆盖选区。xterm.js 的隐藏 textarea 不算，它只转发按键。
+//
+// 发件箱，不是镜像：不做双向同步（两个缓冲区一个字节流，同步永远追不上），
+// 每次整段覆盖，发完清空本地框。远端的 Tab 补全 / 上下键历史属于「直接操作终端」
+// 那条通道，要历史就在发件箱这侧留 —— 就是下面的 hist。
+const FOLLOW = '__focused';          // 「跟着 herdr 当前激活的 pane 走」
+
+/**
+ * 发件箱的节奏。两个都是轮询/防抖的毫秒数：
+ *   poll —— 「现在焦点在哪个 pane + 那个输入框里是什么」多久对一次
+ *   push —— 开着「双向」时，停手多久把草稿写进远端输入框
+ *
+ * 默认值来自服务端（`HERDR_WEB_POLL_MS` / `HERDR_WEB_PUSH_MS`），URL 上加
+ * `?poll=600&push=400` 可以当场覆盖，方便在平板上试手感。
+ */
+const cCfg = { poll: 500, push: 700 };
+for (const k of ['poll', 'push']) {
+  const v = Number(new URLSearchParams(location.search).get(k));
+  if (v > 0) cCfg[k] = Math.max(100, v);
+}
+const cCfgFromUrl = new URLSearchParams(location.search);
+
+// 服务端下发的默认值；URL 上显式写了的不覆盖
+function cApplyCfg(c) {
+  if (!c) return;
+  for (const [k, v] of [['poll', c.pollMs], ['push', c.pushMs]]) {
+    if (!cCfgFromUrl.has(k) && v > 0) cCfg[k] = Math.max(100, v);
+  }
+}
+let cPanes = [];
+let cHist = [];
+let cHistIdx = -1;
+let cResolved = '';                  // 上一次轮询解析出来的真实 pane
+let cSynced = null;                  // 远端最后一次读到的文本，只用来发现「远端变了」
+let cOwn = false;                    // 框里装的是**用户自己写的**东西
+let cPinned = '';                    // 草稿归属的 pane
+let cPushTimer = null;
+let cInFlight = false;               // 有请求在飞时暂停轮询，免得自己追自己
+try { cHist = JSON.parse(localStorage.getItem('composeHist') || '[]'); } catch { /* 存坏了就算了 */ }
+
+const cVal = () => $('#cText').value;
+
+// 「这是我自己写的」和「远端现在是什么」必须分成两个变量。
+//
+// 一开始只用「文本 !== 上次对齐的文本」判断草稿，结果开着「双向」时：草稿被推到
+// 远端之后，对齐文本就等于草稿本身，于是草稿看起来「没改过」→ 解锁目标 → 下一拍
+// 把用户正在写的东西直接覆盖掉。cSynced 那时候同时在干两件事（发现远端变化、
+// 保护本地草稿），冲突不可避免。现在 cOwn 单独负责所有权。
+
+/**
+ * 这段草稿到底该投给谁。
+ *
+ * 「跟随焦点」不能一路跟到按下按钮那一刻：你为 A pane 写了一段话，中途焦点漂到了
+ * B（herdr 自己会因为 agent 状态变化换焦点，人也可能顺手点一下），投出去就落到 B 了。
+ * 所以**自己改过的草稿**会把目标锁定在当初瞄准的那个 pane，改动投出去之后才重新跟随。
+ *
+ * 判据是 cOwn 而不是「框里有没有字」：**自动拉回来还没动过**的内容不算草稿，
+ * 那时候切 pane 就该跟着换成新 pane 的内容。用「有没有字」当判据的话，只要框里
+ * 有东西（哪怕是刚拉回来的）目标就被钉死，切 pane 后 input 再也不更新。
+ */
+function cAimed() {
+  const sel = $('#cTarget').value;
+  if (sel !== FOLLOW) return sel;
+  return cPinned && cOwn ? cPinned : FOLLOW;
+}
+
+function cSetInfo(msg, bad) {
+  const el = $('#cInfo');
+  el.textContent = msg || '';
+  el.classList.toggle('bad', !!bad);
+  el.title = `轮询 ${cCfg.poll}ms · 双向防抖 ${cCfg.push}ms（URL 加 ?poll=&push= 可临时改）`;
+}
+
+// 把服务端给的 pane 身份写成一行；workspace / tab 的好看标签用列表缓存补
+function cLabel(r) {
+  const cached = cPanes.find((p) => p.id === r.target);
+  const where = cached ? `${cached.workspace}/${cached.tab}` : (r.workspaceId || '');
+  return `${r.followed ? '⟳ ' : ''}${r.target}${where ? ` · ${where}` : ''}`
+    + ` · ${r.agent ? `${r.agent} ${r.status}` : 'shell'}`;
+}
+
+function cRenderTargets() {
+  const sel = $('#cTarget');
+  const prev = sel.value || localStorage.getItem('composeTarget') || FOLLOW;
+  const opt = (p) => `<option value="${esc(p.id)}">${esc(
+    `${p.agent ? `${p.agent} · ` : ''}${p.workspace}/${p.tab} · ${p.id}${p.title ? ` · ${p.title}` : ''}`,
+  )}</option>`;
+  const agents = cPanes.filter((p) => p.agent);
+  const shells = cPanes.filter((p) => !p.agent);
+  sel.innerHTML =
+    `<option value="${FOLLOW}">跟随 herdr 当前 pane</option>`
+    + (agents.length ? `<optgroup label="Agent pane">${agents.map(opt).join('')}</optgroup>` : '')
+    + (shells.length ? `<optgroup label="Shell pane">${shells.map(opt).join('')}</optgroup>` : '');
+  sel.value = prev === FOLLOW || cPanes.some((p) => p.id === prev) ? prev : FOLLOW;
+}
+
+async function cLoadTargets(quiet) {
+  try {
+    cPanes = (await api.get('/herdr/panes')).panes || [];
+    cRenderTargets();
+  } catch (e) {
+    cPanes = [];
+    cRenderTargets();
+    // socket 在跑 herdr server 的那台机器上，不一定是跑 herdr-web 的这台
+    cSetInfo(`连不上 herdr：${e.message}`, true);
+    if (!quiet) toast('连不上 herdr：' + e.message, 3200);
+  }
+}
+
+const cBusy = (on) => $('#compose').classList.toggle('busy', on);
+
+/** 把远端内容放进框里：这是远端的东西，不是用户的草稿（cOwn = false）。 */
+function cAdopt(text, pane) {
+  const ta = $('#cText');
+  ta.value = text || '';
+  cSynced = ta.value;
+  cOwn = false;
+  cPinned = pane || cPinned;
+  if (document.activeElement === ta) ta.setSelectionRange(ta.value.length, ta.value.length);
+}
+
+async function cPullBack() {
+  cBusy(true);
+  try {
+    const r = await api.get(`/herdr/pull?target=${encodeURIComponent(cAimed())}`);
+    cResolved = r.target;
+    cAdopt(r.text, r.target);
+    // 手动点「拉回」是明确的意图：拿过来编辑。所以算用户的东西，锁定在这个 pane，
+    // 别让下一次焦点变化把它冲掉。
+    cOwn = !!r.text;
+    $('#cText').focus();
+    cSetInfo(`${cLabel(r)} · ${r.text ? `已拉回 ${[...r.text].length} 字` : '输入框是空的'}`);
+  } catch (e) {
+    cSetInfo('拉回失败：' + e.message, true);
+  } finally {
+    cBusy(false);
+  }
+}
+
+/**
+ * 自动拉回的一拍：谁是当前 pane、它输入框里是什么。
+ *   切了 pane  → 本地干净就直接换成新 pane 的内容；脏就留着草稿只提示
+ *   同一个 pane → 远端变了且本地干净才跟着变
+ */
+async function cTick() {
+  if (cInFlight || $('#compose').classList.contains('hidden')) return;
+  const aimed = cAimed();
+  let r;
+  try {
+    r = await api.get(`/herdr/sync?target=${encodeURIComponent(aimed)}`);
+  } catch (e) {
+    cSetInfo('herdr：' + e.message, true);
+    return;
+  }
+  const switched = r.target !== cResolved;
+  cResolved = r.target;
+  const pinNote = aimed === FOLLOW ? '' : ' · 草稿已锁定这个 pane';
+
+  if (switched) {
+    // 焦点换了 pane：框里是远端来的就直接换成新 pane 的内容，是自己写的就留着
+    if (cOwn) cSetInfo(`${cLabel(r)} · 本地有草稿，没自动拉回（点「拉回」覆盖）`);
+    else { cAdopt(r.text, r.target); cSetInfo(cLabel(r)); }
+    return;
+  }
+  if (!cOwn && (r.text || '') !== cSynced) {
+    cAdopt(r.text, r.target);
+    cSetInfo(`${cLabel(r)} · 已跟随远端改动`);
+    return;
+  }
+  cSetInfo(`${cLabel(r)}${cOwn ? ' · 本地草稿未投' : ''}${pinNote}`);
+}
+
+/** 双向同步的本地→远端那半边：停手 700ms 后把草稿写进远端输入框（不回车）。 */
+function cSchedulePush() {
+  // 只推**用户自己写的**东西。自动拉回来的内容远端本来就有，推回去纯属多余，
+  // 而且中间只要焦点动一下，就会把 A 的内容写进 B 的输入框。
+  if (!$('#cLive').checked || !cOwn) return;
+  clearTimeout(cPushTimer);
+  cPushTimer = setTimeout(async () => {
+    const text = cVal();
+    cInFlight = true;
+    try {
+      const r = await api.post('/herdr/draft', { target: cAimed(), text });
+      if (r.skipped === 'not-agent') cSetInfo(`${cLabel(r)} · 这个 pane 没有 agent 输入框，没往里推`);
+      else if (r.skipped === 'busy') cSetInfo(`${cLabel(r)} · 远端正忙，这次没推`);
+      else { cSynced = text; cPinned = r.target; cSetInfo(`${cLabel(r)} · 已同步 ${r.pushed} 字到远端`); }
+    } catch (e) {
+      cSetInfo('同步失败：' + e.message, true);
+    } finally {
+      cInFlight = false;
+    }
+  }, cCfg.push);
+}
+
+/* ---- 传图片：落盘到 herdr 那台机器，把绝对路径插进提示词 ---- */
+// agent 读不了「剪贴板里的图」，但都能读磁盘上的图片文件（claude / codex 实测都行）。
+// 所以图片这条路和文本是同一条：最后都变成投出去的那段文字。
+
+// 手机照片动辄 4000px / 几 MB。能解码就先缩到长边 2400 再传，顺便把 HEIC 这种
+// agent 读不了的格式统一成 PNG / JPEG。解不了就原样传，让服务端按魔数去认。
+async function cNormalize(file) {
+  const MAX_EDGE = 2400;
+  const png = /png/i.test(file.type);
+  try {
+    const bmp = await createImageBitmap(file);
+    const scale = Math.min(1, MAX_EDGE / Math.max(bmp.width, bmp.height));
+    if (scale === 1 && (png || /jpe?g/i.test(file.type))) { bmp.close?.(); return file; }
+    const w = Math.round(bmp.width * scale);
+    const h = Math.round(bmp.height * scale);
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    cv.getContext('2d').drawImage(bmp, 0, 0, w, h);
+    bmp.close?.();
+    return await new Promise((r) => cv.toBlob(r, png ? 'image/png' : 'image/jpeg', 0.92)) || file;
+  } catch {
+    return file;
+  }
+}
+
+function cInsert(text) {
+  const ta = $('#cText');
+  const at = ta.selectionStart ?? ta.value.length;
+  const before = ta.value.slice(0, at);
+  const chunk = (before && !/\s$/.test(before) ? ' ' : '') + text + ' ';
+  ta.value = before + chunk + ta.value.slice(at);
+  const pos = at + chunk.length;
+  ta.setSelectionRange(pos, pos);
+  ta.dispatchEvent(new Event('input'));    // 走一遍「钉住目标 + 双向推送」
+}
+
+async function cAttach(files) {
+  const imgs = [...files].filter((f) => f.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|heic)$/i.test(f.name || ''));
+  if (!imgs.length) return;
+  cBusy(true);
+  try {
+    for (let i = 0; i < imgs.length; i++) {
+      cSetInfo(`上传第 ${i + 1}/${imgs.length} 张…`);
+      const blob = await cNormalize(imgs[i]);
+      const r = await fetch(`/api/herdr/upload?token=${encodeURIComponent(TOKEN)}`, {
+        method: 'POST',
+        headers: { 'content-type': blob.type || 'application/octet-stream' },
+        body: blob,
+      });
+      const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      cInsert(j.path);
+      cSetInfo(`已插入 ${j.name}（${(j.bytes / 1024).toFixed(0)} KB）· 路径已在框里，agent 会去读这个文件`);
+    }
+    $('#cText').focus();
+  } catch (e) {
+    cSetInfo('传图失败：' + e.message, true);
+    toast('传图失败：' + e.message, 3600);
+  } finally {
+    cBusy(false);
+  }
+}
+
+async function cSay() {
+  const text = cVal();
+  if (!text.trim()) return toast('框里是空的');
+  clearTimeout(cPushTimer);
+  cBusy(true);
+  cInFlight = true;
+  cSetInfo('投递中…');
+  try {
+    const r = await api.post('/herdr/say', { target: cAimed(), text });
+    cHist = [text, ...cHist.filter((x) => x !== text)].slice(0, 30);
+    cHistIdx = -1;
+    localStorage.setItem('composeHist', JSON.stringify(cHist));
+    $('#cText').value = '';                       // 发完就清空，不做增量同步
+    cSynced = '';
+    cOwn = false;
+    cPinned = '';                                 // 框空了，重新跟随焦点
+    cResolved = r.target;
+    cSetInfo(`已投给 ${r.target}[${r.agent || 'shell'}] · ${r.chars} 字`);
+  } catch (e) {
+    cSetInfo('投稿失败：' + e.message, true);
+    toast('投稿失败：' + e.message, 3600);
+  } finally {
+    cInFlight = false;
+    cBusy(false);
+  }
+}
+
+function cRecall(dir) {
+  if (!cHist.length) return;
+  cHistIdx = Math.max(-1, Math.min(cHist.length - 1, cHistIdx + dir));
+  const ta = $('#cText');
+  ta.value = cHistIdx < 0 ? '' : cHist[cHistIdx];
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+}
+
+$('#cTarget').onchange = () => {
+  localStorage.setItem('composeTarget', $('#cTarget').value);
+  cResolved = '';        // 逼下一拍当成「切了 pane」处理
+  cTick();
+};
+$('#cReload').onclick = () => cLoadTargets();
+$('#cPull').onclick = () => cPullBack();
+$('#cSend').onclick = () => cSay();
+$('#cLive').onchange = (e) => {
+  localStorage.setItem('composeLive', e.target.checked ? '1' : '0');
+  if (e.target.checked) cSchedulePush();
+};
+$('#cText').addEventListener('input', () => {
+  cOwn = !!cVal();                                  // 框空了就把控制权交回「跟随焦点」
+  if (cOwn && !cPinned && cResolved) cPinned = cResolved;   // 一开始打字就把目标钉住
+  cSchedulePush();
+});
+
+// 传图三条路：点按钮（手机上会给相机 / 相册）、粘贴（电脑上截图完 ⌘V）、拖进来
+$('#cAttachBtn').onclick = () => $('#cFile').click();
+$('#cFile').onchange = (e) => { cAttach(e.target.files); e.target.value = ''; };
+$('#cText').addEventListener('paste', (e) => {
+  const files = [...(e.clipboardData?.files || [])];
+  if (files.length) { e.preventDefault(); cAttach(files); }
+});
+for (const ev of ['dragover', 'drop']) {
+  $('#compose').addEventListener(ev, (e) => {
+    if (![...(e.dataTransfer?.types || [])].includes('Files')) return;
+    e.preventDefault();
+    $('#compose').classList.toggle('drop', ev === 'dragover');
+    if (ev === 'drop') cAttach(e.dataTransfer.files);
+  });
+}
+$('#compose').addEventListener('dragleave', () => $('#compose').classList.remove('drop'));
+$('#cText').addEventListener('keydown', (e) => {
+  // Enter 必须留给换行（语音口述常是多行），提交走 ⌘↵ / Ctrl↵
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); cSay(); return; }
+  if (e.key === 'ArrowUp' && !cVal()) { e.preventDefault(); cRecall(1); return; }
+  if (e.key === 'ArrowDown' && cHistIdx >= 0) { e.preventDefault(); cRecall(-1); }
+});
+
+// 自动拉回的心跳。只在发件箱开着的时候干活（cTick 自己会判）。
+// 用自排队的 setTimeout 而不是 setInterval：一拍要打 3 次 socket（pane.current +
+// 两次 pane.read），间隔调小或者网络一慢，setInterval 会把请求叠起来。
+(function cLoop() {
+  setTimeout(() => { Promise.resolve(cTick()).finally(cLoop); }, cCfg.poll);
+})();
+// 从别处切回这个页面 / 这个标签页时立刻对一次，别等下一拍
+addEventListener('focus', cTick);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) cTick(); });
+
+// focus 只在用户主动点开时给：启动时不抢焦点（和「连上不自动抢焦点」一致）
+function toggleCompose(show, focus) {
+  $('#compose').classList.toggle('hidden', !show);
+  $('#composeBtn').classList.toggle('on', show);
+  localStorage.setItem('compose', show ? '1' : '0');
+  relayout();
+  if (!show) return;
+  if (!cPanes.length) cLoadTargets(true).then(cTick);
+  else cTick();
+  if (focus) $('#cText').focus();
+}
+$('#composeBtn').onclick = () => toggleCompose($('#compose').classList.contains('hidden'), true);
+
 /* ------------------------------------------------------------------ 顶栏交互 */
-// 点顶栏 / 面板不能把键盘焦点从终端抢走，否则点完「敲 herdr」还得再点一下终端才能打字
+// 点顶栏 / 面板不能把键盘焦点从终端抢走，否则点完「敲 herdr」还得再点一下终端才能打字。
+// 发件箱同理：点「投稿」不该把焦点从 textarea 抢走（textarea / select 本身在下一行放行）。
 document.addEventListener('mousedown', (e) => {
-  if (!e.target.closest('.bar, .panel, .softkeys')) return;
+  if (!e.target.closest('.bar, .panel, .softkeys, .compose')) return;
   if (e.target.closest('input:not([type=checkbox]), textarea, select')) return;
   e.preventDefault();
 });
@@ -761,15 +1291,25 @@ $('#hostsBtn').onclick = () => {
 };
 for (const b of $$('[data-close]')) b.onclick = () => $(b.dataset.close).classList.add('hidden');
 $('#optMeta').onchange = (e) => { term.options.macOptionIsMeta = e.target.checked; };
+$('#opt2026').onchange = (e) => {
+  localStorage.setItem('sync2026', e.target.checked ? '1' : '0');
+  // 关掉的时候把当前可能正开着的那一帧收尾，否则要等下一个 BSU 才生效
+  if (!e.target.checked && term.modes.synchronizedOutputMode) term.write('\x1b[?2026l');
+};
 
 /* ------------------------------------------------------------------ 启动 */
 document.documentElement.classList.toggle('light', scheme === 'light');
 for (const ev of ['focus', 'blur']) kbdEl()?.addEventListener(ev, syncKbdBtn);
 renderCaps();
 renderSticky();
+loadSoftkeys();          // 按键从服务端来
 setMode('local');
 toggleSoftkeys(localStorage.getItem('softkeys') === '1'
   || (localStorage.getItem('softkeys') === null && matchMedia('(pointer: coarse)').matches));
+// 发件箱默认开着：这是语音投稿的主入口，也方便在电脑上直接调试
+$('#opt2026').checked = localStorage.getItem('sync2026') !== '0';
+$('#cLive').checked = localStorage.getItem('composeLive') === '1';
+toggleCompose(localStorage.getItem('compose') !== '0');
 fit.fit();
 
 if (!TOKEN) {

@@ -11,6 +11,10 @@ const crypto = require('node:crypto');
 const { WebSocketServer } = require('ws');
 const pty = require('node-pty');
 const store = require('./lib/store');
+const herdr = require('./lib/herdr-api');
+const outbox = require('./lib/outbox');
+const uploads = require('./lib/uploads');
+const softkeys = require('./lib/softkeys');
 
 const HOST = process.env.HERDR_WEB_HOST || '127.0.0.1';
 const PORT = Number(process.env.HERDR_WEB_PORT || 7788);
@@ -30,6 +34,11 @@ function persistedToken() {
   return t;
 }
 const TOKEN = persistedToken();
+// 发件箱的节奏。前端拿不到 process.env，所以从 /api/state 下发。
+// 500ms 是实测挑的：切 pane 到 textarea 更新的中位延迟约 500ms，再往下调收益
+// 递减（地板是一次 sync 的 ~150-300ms），再往上调就明显能感觉到迟钝。
+const POLL_MS = Math.max(200, Number(process.env.HERDR_WEB_POLL_MS || 500));
+const PUSH_MS = Math.max(100, Number(process.env.HERDR_WEB_PUSH_MS || 700));
 const LOGIN_SHELL = process.env.HERDR_WEB_SHELL || process.env.SHELL || '/bin/zsh';
 const SSH_BIN = process.env.HERDR_WEB_SSH || '/usr/bin/ssh';
 const COPY_ID_BIN = process.env.HERDR_WEB_SSH_COPY_ID || '/usr/bin/ssh-copy-id';
@@ -151,6 +160,21 @@ function readBody(req, limit = 256 * 1024) {
   });
 }
 
+// 图片走裸字节，不走 readBody 的 JSON 那条（也不该吃 256KB 的上限）
+function readRawBody(req, limit) {
+  return new Promise((resolve, reject) => {
+    let n = 0;
+    const chunks = [];
+    req.on('data', (c) => {
+      n += c.length;
+      if (n > limit) { reject(new Error(`上传超过上限 ${Math.round(limit / 1048576)} MB`)); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
 async function handleApi(req, res, url) {
   if (!tokenOk(url.searchParams.get('token'))) {
     res.writeHead(401, { 'content-type': 'application/json' });
@@ -176,6 +200,7 @@ async function handleApi(req, res, url) {
         hostname: os.hostname(),
         keyDir: store.KEY_DIR,
         secureContext: LOOPBACK,
+        compose: { pollMs: POLL_MS, pushMs: PUSH_MS, settleMs: outbox.SETTLE_MS },
       });
     }
 
@@ -200,6 +225,16 @@ async function handleApi(req, res, url) {
       }
     }
 
+    // 软键条：在网页上编辑，存服务端，手机 / 平板 / 电脑共用一份
+    if (seg[0] === 'softkeys') {
+      if (method === 'GET') return json(200, { keys: softkeys.load(), max: softkeys.MAX_KEYS });
+      if (method === 'PUT') {
+        const { keys } = await readBody(req);
+        return json(200, { keys: softkeys.save(keys) });
+      }
+      if (method === 'DELETE') return json(200, { keys: softkeys.save(softkeys.DEFAULTS) });
+    }
+
     if (seg[0] === 'keys') {
       if (method === 'GET' && !seg[1]) return json(200, { keys: await store.listKeys() });
       if (method === 'POST' && seg[1] === 'generate') {
@@ -211,6 +246,37 @@ async function handleApi(req, res, url) {
         return json(200, { key: await store.importKey(name, privateKey) });
       }
       if (method === 'DELETE' && seg[1]) { store.removeKey(decodeURIComponent(seg[1])); return json(200, { ok: true }); }
+    }
+
+    // ---- 语音投稿的发件箱：目标列表 / 拉回远端输入框 / 覆盖式投稿 ----
+    // socket 在**跑 herdr server 的那台机器**上，不一定是跑 herdr-web 的机器。
+    // 现在只连本机（或 HERDR_WEB_SOCKET 指到的路径）；ssh 模式下 socket 在远端，
+    // 还没接（见 HANDOFF）。
+    if (seg[0] === 'herdr') {
+      if (method === 'GET' && seg[1] === 'panes') {
+        return json(200, { panes: await outbox.listTargets(), socket: herdr.socketPath() });
+      }
+      // target 省略 / 传 '__focused' = 投给此刻在 herdr 里激活的那个 pane
+      if (method === 'GET' && seg[1] === 'pull') {
+        return json(200, await outbox.pull(url.searchParams.get('target'), url.searchParams.get('mode')));
+      }
+      // 自动拉回的轮询口：一次给「焦点在哪」+「那个输入框里是什么」
+      if (method === 'GET' && seg[1] === 'sync') {
+        return json(200, await outbox.sync(url.searchParams.get('target')));
+      }
+      if (method === 'POST' && seg[1] === 'say') {
+        const { target, text } = await readBody(req);
+        return json(200, await outbox.say(target, text));
+      }
+      // 双向同步的本地→远端那半边：写进远端输入框但不回车
+      if (method === 'POST' && seg[1] === 'draft') {
+        const { target, text } = await readBody(req);
+        return json(200, await outbox.draft(target, text));
+      }
+      // 图片落盘，返回绝对路径 —— 前端把路径插进提示词，agent 自己去读文件
+      if (method === 'POST' && seg[1] === 'upload') {
+        return json(200, uploads.save(await readRawBody(req, uploads.MAX_BYTES)));
+      }
     }
 
     return json(404, { error: '没有这个接口' });

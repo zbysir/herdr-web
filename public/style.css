@@ -21,7 +21,9 @@
 }
 
 * { box-sizing: border-box; }
-html, body { height: 100%; margin: 0; overflow: hidden; overscroll-behavior: none; }
+/* 高度跟 visualViewport 走：iOS 的虚拟键盘从不缩布局视口，Android 也要
+   interactive-widget 才缩，只用 100% 的话键盘会盖住软键条和发件箱 */
+html, body { height: var(--vvh, 100%); margin: 0; overflow: hidden; overscroll-behavior: none; }
 body {
   background: var(--bg);
   color: var(--fg);
@@ -116,6 +118,29 @@ code {
   padding: 1px 5px; border-radius: 4px;
 }
 
+/* ---------------------------------------------------------------- 发件箱 */
+.compose {
+  flex: 0 0 auto;
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 7px 10px;
+  background: var(--bar); border-top: 1px solid var(--line);
+}
+.compose.hidden { display: none !important; }
+.compose-head { display: flex; align-items: center; gap: 6px; }
+.compose-head .sel { flex: 0 1 320px; min-width: 0; }
+.compose-info { flex: 1; min-width: 0; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compose-chk { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; font-size: 11.5px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.compose-info.bad { color: var(--bad); }
+.compose-text {
+  width: 100%; resize: vertical; min-height: 62px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius);
+  color: var(--fg); font-size: 14px; line-height: 1.5; padding: 8px 10px;
+}
+.compose-text:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+.compose-text::placeholder { color: var(--muted); }
+.compose.busy { opacity: .6; pointer-events: none; }
+.compose.drop { outline: 2px dashed var(--accent); outline-offset: -3px; }
+
 /* ---------------------------------------------------------------- 软键盘条 */
 .softkeys {
   flex: 0 0 auto;
@@ -133,6 +158,19 @@ code {
   padding: 10px 12px; min-width: 44px; cursor: pointer;
 }
 .sk.wide { min-width: 78px; }
+/* 按键那一排自己横向滚，⚙ 固定在右边不跟着滚走 */
+.sk-row { display: flex; gap: 6px; flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.sk-row::-webkit-scrollbar { display: none; }
+.sk-edit { flex: 0 0 auto; margin-left: 6px; }
+
+.sk-edit-row { gap: 6px; }
+.sk-edit-row .sk-label { width: 5.5em; flex: 0 0 auto; }
+.sk-edit-row .sk-spec { flex: 1 1 auto; min-width: 0; }
+.sk-edit-row input[type=text], .sk-edit-row input:not([type]) {
+  background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius);
+  color: var(--fg); font-size: 12px; padding: 5px 7px;
+}
+.sk-edit-row .sk-wide { display: flex; align-items: center; gap: 3px; font-size: 11px; color: var(--muted); flex: 0 0 auto; }
 .sk:active, .sk.on { background: var(--accent); border-color: transparent; color: #fff; }
 
 /* ---------------------------------------------------------------- 面板 */
@@ -214,4 +252,8 @@ section:last-child { border-bottom: 0; }
   .form .row { flex-direction: column; }
   .form .narrow { max-width: none; }
   .sel, .target { flex: 1; max-width: none; width: auto; }
+  /* 窄屏上目标选择独占一行，否则「拉回 / 投稿」会被挤出去 */
+  .compose-head { flex-wrap: wrap; }
+  .compose-head .sel { flex: 0 0 100%; }
+  .compose-info { order: 9; flex: 0 0 100%; }
 }

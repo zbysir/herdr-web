@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""hpull <target>          只取远端输入框内容
+hpull <target> --raw    整屏（压空行、按宽度折行）
+hpull <target> --tail N 最后 N 行非空输出
+"""
+import sys, os, textwrap, shutil
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from herdr_api import call
+from herdr_composer import extract, _plain
+
+if len(sys.argv) < 2:
+    sys.exit("usage: hpull <pane-or-agent> [--raw | --tail N]")
+target, mode = sys.argv[1], (sys.argv[2] if len(sys.argv) > 2 else "composer")
+
+g = call("pane.get", {"pane_id": target})
+if "error" in g:
+    sys.exit(f"pane.get 失败: {g['error']}")
+info = g["result"].get("pane", g["result"])
+agent = info.get("agent")
+
+r = call("pane.read", {"pane_id": target, "source": "visible",
+                       "format": "ansi", "strip_ansi": False})
+if "error" in r:
+    sys.exit(f"读取失败: {r['error']}")
+text = r["result"]["read"]["text"]
+
+if mode == "composer":
+    out = extract(text, agent)
+    if out: print(out)
+else:
+    cols = shutil.get_terminal_size((80, 24)).columns
+    lines = [l for l in (_plain(x).rstrip() for x in text.split("\n")) if l.strip()]
+    if mode == "--tail":
+        lines = lines[-int(sys.argv[3] if len(sys.argv) > 3 else 20):]
+    for l in lines:
+        print("\n".join(textwrap.wrap(l, cols)) or l)

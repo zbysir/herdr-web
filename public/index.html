@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no, interactive-widget=resizes-content">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="theme-color" content="#23262e">
@@ -30,6 +30,7 @@
     </div>
 
     <div class="bar-r">
+      <button id="composeBtn" class="btn icon" title="语音投稿发件箱（说话打字 → 投进 agent pane）">✎</button>
       <button id="keysBtn" class="btn icon" title="软键盘条（Ctrl / Esc / 方向键）">⌨</button>
       <button id="fontDown" class="btn icon" title="缩小字号">A−</button>
       <button id="fontUp" class="btn icon" title="放大字号">A+</button>
@@ -49,22 +50,39 @@
     </div>
   </main>
 
-  <!-- 手机用的软键盘条：手机没有 Ctrl，herdr 的前缀键靠它 -->
+  <!--
+    语音投稿的发件箱。这里必须是一个**真的 textarea**：终端是字节流，xterm.js 的
+    隐藏 textarea 只把按键转成字节发走、不维护可编辑文本，所以对着网页终端说话
+    只能「说得出、改不了」。有了真字段，选区 + IME 提交覆盖选区（EditText /
+    textarea 的默认行为）才能实现「框选重说」。
+
+    发件箱，不是镜像：不做双向同步，每次整段覆盖，发完清空本地框。
+  -->
+  <section id="compose" class="compose hidden">
+    <div class="compose-head">
+      <select id="cTarget" class="sel" title="投给哪个 pane。默认跟着 herdr 里激活的那个走"></select>
+      <button id="cReload" class="btn tiny icon" title="刷新 pane 列表">⟳</button>
+      <button id="cPull" class="btn tiny" title="把远端输入框里已有的内容拉进下面的框（远端按过 Tab 补全就用它）">拉回</button>
+      <!-- accept=image/* 在手机上会同时给出「相机」和「相册」。图片存到跑 herdr 的
+           那台机器上，把绝对路径插进提示词，agent 自己去读文件。 -->
+      <button id="cAttachBtn" class="btn tiny" title="传图片：存到 herdr 那台机器上，把路径插进提示词（也能直接粘贴或拖进来）">📎 图</button>
+      <input type="file" id="cFile" accept="image/*" multiple hidden>
+      <label class="compose-chk" title="本地改动跟着推回远端输入框（不回车）。只对 claude / codex 这种有真输入框的 pane 生效 —— 普通 pane 里跑的可能是 vim，那里的字符是命令不是文本。">
+        <input type="checkbox" id="cLive"> 双向
+      </label>
+      <span id="cInfo" class="compose-info muted"></span>
+      <button id="cSend" class="btn primary tiny" title="先清空远端输入行，再整段提交">投稿 ⌘↵</button>
+    </div>
+    <textarea id="cText" class="compose-text" rows="3" spellcheck="false" autocomplete="off"
+      placeholder="在这儿说话打字（用输入法的语音键）。说错的字框选重说就改掉。Enter 换行，⌘↵ / Ctrl↵ 投出去；框空时按 ↑ 取回上一条。"></textarea>
+  </section>
+
+  <!-- 手机用的软键盘条：手机没有 Ctrl，herdr 的前缀键靠它。
+       按键由 /api/softkeys 下发（存服务端，手机 / 平板 / 电脑共用一份），
+       点最右边的 ⚙ 在网页上改。 -->
   <nav id="softkeys" class="softkeys hidden">
-    <button data-act="kbd" class="sk" title="显示 / 收起系统键盘（也可以双击终端）">⌨</button>
-    <button data-send="&#x02;" class="sk wide">⌃B 前缀</button>
-    <button data-sticky="ctrl" class="sk">Ctrl</button>
-    <button data-sticky="alt" class="sk">Alt</button>
-    <button data-send="&#x1b;" class="sk">Esc</button>
-    <button data-send="&#x09;" class="sk">Tab</button>
-    <button data-send="&#x1b;[A" class="sk">↑</button>
-    <button data-send="&#x1b;[B" class="sk">↓</button>
-    <button data-send="&#x1b;[D" class="sk">←</button>
-    <button data-send="&#x1b;[C" class="sk">→</button>
-    <button data-send="&#x1b;[5~" class="sk">PgUp</button>
-    <button data-send="&#x1b;[6~" class="sk">PgDn</button>
-    <button data-send="&#x03;" class="sk">⌃C</button>
-    <button data-send="&#x0d;" class="sk">↵</button>
+    <div id="skRow" class="sk-row"></div>
+    <button id="skEdit" class="sk sk-edit" title="配置软键条">⚙</button>
   </nav>
 
   <!-- 终端能力面板 -->
@@ -78,7 +96,34 @@
       <label><input type="checkbox" id="optKitty" checked> kitty 键盘协议（Ctrl+Shift+x / Ctrl+数字 / Ctrl+Enter）</label>
       <label><input type="checkbox" id="optMeta" checked> Option 当作 Meta（alt+1、alt+g 这类快捷键）</label>
       <label><input type="checkbox" id="optCopySel"> 选中即复制</label>
+      <label><input type="checkbox" id="opt2026" checked> 同步输出 DEC 2026（防画面撕裂；留一块空白画不上来时关它）</label>
+      <p id="renderInfo" class="muted small hidden"></p>
       <p class="muted small">复制：⌘C / Ctrl+Shift+C　粘贴：⌘V / Ctrl+Shift+V　浏览器自己吃掉的键：⌘W ⌘T ⌘N Ctrl+Tab</p>
+    </div>
+  </aside>
+
+  <!-- 软键条配置 -->
+  <aside id="skeys" class="panel wide hidden">
+    <div class="panel-head">
+      <strong>软键条</strong>
+      <button data-close="#skeys" class="btn icon">×</button>
+    </div>
+    <div class="panel-body">
+      <div id="skList" class="list"></div>
+      <div class="sec-act" style="margin-top:10px">
+        <button id="skAdd" class="btn tiny">+ 加一个</button>
+        <button id="skSave" class="btn primary tiny">保存</button>
+        <button id="skReset" class="btn tiny danger">恢复默认</button>
+        <span id="skErr" class="err"></span>
+      </div>
+      <p class="muted small">
+        「按键」一栏写按键谱，空格分隔可以连发多下 —— <code>ctrl+b c</code> 就是 herdr 的前缀加 c，一下点出来。<br>
+        支持：<code>ctrl+x</code> <code>alt+x</code> <code>shift+tab</code>、具名键
+        <code>esc tab enter space bs del ins up down left right home end pgup pgdn f1-f12</code>、
+        双引号里的原样文本（<code>"herdr" enter</code> = 敲 herdr 再回车）。<br>
+        <code>Ctrl</code> / <code>Alt</code> 这种粘滞修饰键写 <code>sticky:ctrl</code> / <code>sticky:alt</code>，
+        呼出键盘写 <code>act:kbd</code>。
+      </p>
     </div>
   </aside>
 

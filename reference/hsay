@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""hsay <target> [text...]  — 覆盖式投稿：清空远端输入行，再整段提交。
+文本也可从 stdin 传入（推荐，避免中文标点被 shell 吃掉）:
+    printf %s "$TEXT" | hsay w5:p3
+"""
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from herdr_api import call
+
+if len(sys.argv) < 2:
+    sys.exit("usage: hsay <pane-or-agent> [text...]")
+target = sys.argv[1]
+text = (" ".join(sys.argv[2:]) if len(sys.argv) > 2 else sys.stdin.read()).rstrip("\n")
+if not text:
+    sys.exit("空文本，不发")
+
+g = call("pane.get", {"pane_id": target})
+if "error" in g:
+    sys.exit(f"pane.get 失败: {g['error']}")
+info = g["result"].get("pane", g["result"])
+agent = info.get("agent")
+
+# 清空。ctrl+u 实测在 zsh / Claude Code / Codex 三处都生效，对空行是 no-op，
+# 多打几次兼容多行残留。send_input 的顺序是 text 先 keys 后，所以必须单独一个请求。
+r = call("pane.send_input", {"pane_id": target, "keys": ["ctrl+u"] * 3})
+if "error" in r:
+    sys.exit(f"清空失败: {r['error']}")
+
+if agent:
+    # agent.prompt 会按 pane 当前的 bracketed-paste 模式正确编码 Enter
+    r = call("agent.prompt", {"target": target, "text": text})
+else:
+    r = call("pane.send_input", {"pane_id": target, "text": text, "keys": ["enter"]})
+if "error" in r:
+    sys.exit(f"发送失败: {r['error']}")
+print(f"→ {target}[{agent or 'shell'}]: {text[:50]}{'…' if len(text) > 50 else ''}")

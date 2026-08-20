@@ -9,7 +9,8 @@
   "scripts": {
     "start": "node server.js",
     "lan": "HERDR_WEB_HOST=0.0.0.0 node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "@xterm/addon-clipboard": "^0.2.0",

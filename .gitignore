@@ -10,3 +10,7 @@ token
 
 .DS_Store
 *.log
+
+# reference/ 里的 Python 原型
+__pycache__/
+*.pyc
