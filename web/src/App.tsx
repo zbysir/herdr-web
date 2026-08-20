@@ -250,6 +250,7 @@ export default function App() {
           onReload={() => void compose.loadPanes()}
           onAttach={compose.attach}
           onRecall={compose.recall}
+          onEscape={() => sess.current?.send('\x1b')}
           pollMs={cfg.poll}
           pushMs={cfg.push}
         />

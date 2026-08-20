@@ -16,7 +16,7 @@ import { cn } from '@/lib/utils'
  */
 export function Compose({
   text, onChangeText, panes, sel, onSelect, info, bad, busy, live, onLive,
-  onPull, onSubmit, onReload, onAttach, onRecall, pollMs, pushMs,
+  onPull, onSubmit, onReload, onAttach, onRecall, onEscape, pollMs, pushMs,
 }: {
   text: string
   onChangeText: (v: string) => void
@@ -33,6 +33,7 @@ export function Compose({
   onReload: () => void
   onAttach: (files: FileList | File[], at: () => number) => void
   onRecall: (dir: number) => void
+  onEscape: () => void
   pollMs: number
   pushMs: number
 }) {
@@ -130,6 +131,12 @@ export function Compose({
           if (files.length) { e.preventDefault(); onAttach(files, caret) }
         }}
         onKeyDown={(e) => {
+          // Esc 在一个纯 textarea 里没有任何意义，而 TUI 那边到处要用它（agent 的
+          // /usage 之类浮层就靠它退出）。发件箱是默认开着的主输入口，投稿完焦点就
+          // 停在这儿，不转发的话按 Esc 等于没反应。
+          // 只转发这一个键：方向键要留给光标和历史，⌃C 是复制，都不能抢。
+          // 输入法正在组字时不抢 —— 那时候 Esc 是取消候选。
+          if (e.key === 'Escape' && !e.nativeEvent.isComposing) { e.preventDefault(); onEscape(); return }
           // Enter 必须留给换行（语音口述常是多行），提交走 ⌘↵ / Ctrl↵
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); onSubmit(); return }
           if (e.key === 'ArrowUp' && !text) { e.preventDefault(); onRecall(1); return }
