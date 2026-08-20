@@ -10,8 +10,9 @@
 // dim（SGR 2）的文字算占位提示，不算内容 —— Codex 空框的占位文字就是这么渲染的；
 // 实测两家的真实输入都不带 dim。
 //
-// 这是 lib/composer.js 的移植，行为必须逐字节一致（test/fixtures 里的真机抓屏
-// 是共用的验收集）。
+// 这是 lib/composer.js 的移植，输入框内容必须逐字节一致（testdata 里的真机抓屏
+// 是共用的验收集）。**有一处故意不一致**：认不出输入框时旧版退回「屏幕最后一行
+// 非空」，这里返回 ok=false —— 见 Extract。
 package composer
 
 import (
@@ -200,8 +201,12 @@ func finish(vis []string, lo, hi int) string {
 }
 
 // Extract 从 pane.read 的 ANSI 快照里抽出输入框内容。
-// agent 是 pane.get 的 agent 字段（"claude" / "codex" / ""）。空框返回 ""。
-func Extract(ansiText, agent string) string {
+// agent 是 pane.get 的 agent 字段（"claude" / "codex" / ""）。
+//
+// 两种「空」必须分清：ok=true + "" 是**认出了输入框、里面是空的**；
+// ok=false 是**这一屏上认不出输入框**（没有提示符字形）。调用方对这两种的处理
+// 完全不同 —— 前者可以放心覆盖式投稿，后者不知道文字会落到哪，只能拒投。
+func Extract(ansiText, agent string) (string, bool) {
 	raw := strings.Split(ansiText, "\n")
 	plain := make([]string, len(raw))
 	vis := make([]string, len(raw))
@@ -212,13 +217,10 @@ func Extract(ansiText, agent string) string {
 
 	anchor := anchorOf(plain)
 	if anchor < 0 {
-		// 普通 shell：没有提示符字形，取最后一行非空
-		for i := len(plain) - 1; i >= 0; i-- {
-			if !blank(plain[i]) {
-				return rstrip(plain[i])
-			}
-		}
-		return ""
+		// 认不出输入框就说认不出。原来这里退回「最后一行非空」，那纯粹是猜：
+		// 屏幕最后一行往往是状态栏、上一条命令的输出、或者 agent 画的某个控件，
+		// 拉回来就是把这行垃圾塞进发件箱，用户还以为那是远端输入框里的字。
+		return "", false
 	}
 
 	var lo, hi int
@@ -234,7 +236,7 @@ func Extract(ansiText, agent string) string {
 			lo, hi = boxBounds(plain, anchor)
 		}
 	}
-	return finish(vis, lo, hi)
+	return finish(vis, lo, hi), true
 }
 
 // ScreenLines 整屏纯文本（压掉空行），给「原始屏幕」调试视图用。

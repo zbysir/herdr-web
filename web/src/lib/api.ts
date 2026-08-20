@@ -70,9 +70,10 @@ export interface PaneInfo {
   cwd: string
 }
 
-export interface SyncResult extends PaneInfo { text?: string }
+// noBox：远端那一屏上认不出输入框（没有提示符字形）。跟「输入框是空的」不是一回事。
+export interface SyncResult extends PaneInfo { text?: string; noBox?: boolean }
 export interface SayResult extends PaneInfo { chars: number; lines: number; cleared: { rounds: number; empty: boolean | null } }
-export interface DraftResult extends PaneInfo { pushed?: number; skipped?: 'not-agent' | 'busy' }
+export interface DraftResult extends PaneInfo { pushed?: number; skipped?: 'not-agent' | 'busy' | 'no-box' }
 export interface UploadResult { path: string; name: string; bytes: number; kind: string; dir: string }
 
 export interface SoftKey {

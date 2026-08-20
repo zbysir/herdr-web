@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -66,6 +67,26 @@ var upgrader = websocket.Upgrader{
 }
 
 var seq int64
+
+// HERDR_WEB_DEBUG_INPUT=1 时把写进 PTY 的每一批字节 hex 打出来。
+// 排「某个键到底发了什么」这类问题时，这是唯一不用猜的办法。
+var debugInput = os.Getenv("HERDR_WEB_DEBUG_INPUT") == "1"
+
+func logInput(where string, b []byte) {
+	if !debugInput {
+		return
+	}
+	var hex, txt string
+	for _, c := range b {
+		hex += fmt.Sprintf("%02x ", c)
+		if c >= 0x20 && c < 0x7f {
+			txt += string(rune(c))
+		} else {
+			txt += "."
+		}
+	}
+	log.Printf("[input:%s] %d 字节  %s |%s|", where, len(b), hex, txt)
+}
 
 type ctrlMsg struct {
 	T    string `json:"t"`
@@ -157,6 +178,7 @@ func (s *Server) handlePTY(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		if typ == websocket.BinaryMessage {
+			logInput("bin", data)
 			_, _ = f.Write(data)
 			continue
 		}
@@ -166,6 +188,7 @@ func (s *Server) handlePTY(w http.ResponseWriter, r *http.Request) {
 		}
 		switch m.T {
 		case "i":
+			logInput("i", []byte(m.D))
 			_, _ = f.Write([]byte(m.D))
 		case "r":
 			if m.Cols > 0 && m.Rows > 0 {

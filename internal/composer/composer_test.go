@@ -17,23 +17,48 @@ func fixture(t *testing.T, name string) string {
 	return string(b)
 }
 
+// must 用在「这一屏一定认得出输入框」的用例上，只关心抽出来的文字。
+func must(text string, ok bool) string {
+	if !ok {
+		return "<认不出输入框>"
+	}
+	return text
+}
+
 func TestRealScreens(t *testing.T) {
-	cases := []struct{ name, agent, want string }{
-		{"claude-empty", "claude", ""},
-		{"claude-typed", "claude", "帮我看看 README，里面「三种连法」那节。"},
-		{"claude-multiline", "claude", "第一行：改这个函数\n> 这行以尖括号开头，不能被当成输入框起点\n第三行结束"},
-		{"codex-empty", "codex", ""},
-		{"codex-typed", "codex", "看一下 composer.js 的 dim 处理，别改。"},
-		{"codex-multiline", "codex", "第一行：codex 多行\n> 引用行不能当起点\n第三行"},
-		{"shell-empty", "", "➜  herdr-web git:(master) ✗"},
-		{"shell-typed", "", "➜  herdr-web git:(master) ✗ echo 你好，世界"},
+	// ok=false 是「这一屏认不出输入框」。oh-my-zsh 的 ➜ 提示符不在认的字形里，
+	// 所以两张 shell 抓屏都是认不出 —— 不是「抽出了提示符行」。
+	cases := []struct {
+		name, agent, want string
+		ok                bool
+	}{
+		{"claude-empty", "claude", "", true},
+		{"claude-typed", "claude", "帮我看看 README，里面「三种连法」那节。", true},
+		{"claude-multiline", "claude", "第一行：改这个函数\n> 这行以尖括号开头，不能被当成输入框起点\n第三行结束", true},
+		{"codex-empty", "codex", "", true},
+		{"codex-typed", "codex", "看一下 composer.js 的 dim 处理，别改。", true},
+		{"codex-multiline", "codex", "第一行：codex 多行\n> 引用行不能当起点\n第三行", true},
+		{"shell-empty", "", "", false},
+		{"shell-typed", "", "", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := Extract(fixture(t, c.name), c.agent); got != c.want {
-				t.Errorf("Extract(%s, %q)\n got %q\nwant %q", c.name, c.agent, got, c.want)
+			got, ok := Extract(fixture(t, c.name), c.agent)
+			if got != c.want || ok != c.ok {
+				t.Errorf("Extract(%s, %q)\n got %q,%v\nwant %q,%v", c.name, c.agent, got, ok, c.want, c.ok)
 			}
 		})
+	}
+}
+
+// 认不出输入框的时候**不能**退回屏幕最后一行：那行通常是状态栏或者上一条输出，
+// 拉回来就是往发件箱里塞垃圾，投出去更糟（追加语义）。
+func TestNoBoxDoesNotFallBackToLastLine(t *testing.T) {
+	screen := "$ make test\nok  \tinternal/composer\t0.2s\n[status] 3 panes · 12:04"
+	for _, agent := range []string{"", "claude", "codex"} {
+		if got, ok := Extract(screen, agent); got != "" || ok {
+			t.Errorf("agent=%q: got %q,%v —— 认不出就该报认不出", agent, got, ok)
+		}
 	}
 }
 
@@ -43,8 +68,10 @@ func TestUnknownAgentSniffs(t *testing.T) {
 		{"codex-typed", "codex"},
 		{"claude-typed", "claude"},
 	} {
-		if got, want := Extract(fixture(t, c.name), ""), Extract(fixture(t, c.name), c.agent); got != want {
-			t.Errorf("%s: 嗅探 %q != 指定 %q", c.name, got, want)
+		got, gotOK := Extract(fixture(t, c.name), "")
+		want, wantOK := Extract(fixture(t, c.name), c.agent)
+		if got != want || gotOK != wantOK {
+			t.Errorf("%s: 嗅探 %q,%v != 指定 %q,%v", c.name, got, gotOK, want, wantOK)
 		}
 	}
 }
@@ -58,7 +85,7 @@ const (
 
 func TestPitfallDimIsChrome(t *testing.T) {
 	screen := rule + "\n❯ " + dim + "Run /review on my current changes" + off + "\n" + rule
-	if got := Extract(screen, "claude"); got != "" {
+	if got, _ := Extract(screen, "claude"); got != "" {
 		t.Errorf("纯 dim 占位应该返回空，得到 %q", got)
 	}
 }
@@ -68,7 +95,7 @@ func TestPitfallDimIsChrome(t *testing.T) {
 func TestPitfallTruecolorTwoIsNotDim(t *testing.T) {
 	color := "\x1b[38;2;153;153;153m"
 	screen := color + rule + off + "\n" + color + "❯" + off + " 真实内容，前面挂着 38;2 前景色\n" + color + rule + off
-	if got, want := Extract(screen, "claude"), "真实内容，前面挂着 38;2 前景色"; got != want {
+	if got, want := must(Extract(screen, "claude")), "真实内容，前面挂着 38;2 前景色"; got != want {
 		t.Errorf("got %q want %q", got, want)
 	}
 }
@@ -108,36 +135,36 @@ func TestDimStates(t *testing.T) {
 // 真正吃劲的不是判空（rstrip 顺手就把 NBSP 干掉了），
 // 而是有内容时「去掉提示符后那一个分隔空格」
 func TestPitfallNBSP(t *testing.T) {
-	if got := Extract(rule+"\n❯\u00a0\n"+rule, "claude"); got != "" {
+	if got, _ := Extract(rule+"\n❯\u00a0\n"+rule, "claude"); got != "" {
 		t.Errorf("空框应当返回空，得到 %q", got)
 	}
-	if got, want := Extract(rule+"\n❯\u00a0真实内容\n"+rule, "claude"), "真实内容"; got != want {
+	if got, want := must(Extract(rule+"\n❯\u00a0真实内容\n"+rule, "claude")), "真实内容"; got != want {
 		t.Errorf("got %q want %q —— NBSP 没归一，正文前面挂了个 NBSP", got, want)
 	}
 }
 
 func TestCodexBandExcludesStatusBar(t *testing.T) {
 	screen := "  上面的历史输出\n" + bgCol + "❯ 输入的内容" + off + "\n  gpt-5 · ~/repo · master · 状态栏在色块外"
-	if got, want := Extract(screen, "codex"), "输入的内容"; got != want {
+	if got, want := must(Extract(screen, "codex")), "输入的内容"; got != want {
 		t.Errorf("got %q want %q", got, want)
 	}
 	multi := "  历史输出\n" + bgCol + "❯ 第一行" + off + "\n" + bgCol + "  第二行" + off + "\n  状态栏"
-	if got, want := Extract(multi, "codex"), "第一行\n第二行"; got != want {
+	if got, want := must(Extract(multi, "codex")), "第一行\n第二行"; got != want {
 		t.Errorf("got %q want %q", got, want)
 	}
 }
 
 func TestClaudeQuoteLineNotAnchor(t *testing.T) {
 	screen := rule + "\n❯ 请看这段引用：\n  > 被引用的话\n  收尾一句\n" + rule
-	if got, want := Extract(screen, "claude"), "请看这段引用：\n> 被引用的话\n收尾一句"; got != want {
+	if got, want := must(Extract(screen, "claude")), "请看这段引用：\n> 被引用的话\n收尾一句"; got != want {
 		t.Errorf("got %q want %q", got, want)
 	}
 }
 
 func TestEmptyInputs(t *testing.T) {
 	for _, s := range []string{"\n\n   \n", ""} {
-		if got := Extract(s, ""); got != "" {
-			t.Errorf("Extract(%q) = %q，应当是空", s, got)
+		if got, ok := Extract(s, ""); got != "" || ok {
+			t.Errorf("Extract(%q) = %q,%v，应当是空且认不出", s, got, ok)
 		}
 	}
 }

@@ -62,6 +62,7 @@ herdr 有 `events.subscribe` 推送通道，但 agent 一 working 就是刷屏�
 - **框里一有你自己写的内容，目标就被钉在当初瞄准的那个 pane 上**，框空了才重新跟随焦点。因为 herdr 会因为 agent 状态变化自己换焦点，不锁定的话「为 A 写的话投进了 B」。自动拉回来还没动过的内容不算草稿，那时候切 pane 照样跟着换。
 - **「双向」只对 claude / codex 这种有真输入框的 pane 生效。** 普通 pane 里跑的可能是 vim 或某个选择器，那里的字符是**命令**不是文本。开着的时候也别同时在那个 pane 里手敲字——本地→远端这个方向本质上是在跟字节流抢缓冲区。
 - **远端正开着选择框 / 确认框时会拒绝投递**（清不空就不投，否则就是「残留 + 新文本」一起回车）。去那个 pane 按 `Esc` 收掉再投。
+- **agent pane 上认不出输入框时也不投**（屏幕上正开着分页器 / 编辑器 / 某个全屏控件）。这时候「拉回」也不会往框里塞东西 —— 认不出就是认不出，不会退回屏幕最后一行。shell pane 天生读不到输入行，那边不受影响，投稿照常。
 - socket 在**跑 herdr server 的那台机器**上。现在只连本机（或 `HERDR_WEB_SOCKET` 指到的路径）。
 
 ## 软键条
@@ -118,6 +119,8 @@ herdr 启动时会请求这些终端能力（用 PTY 抓下来的），对照现
 
 herdr 的快捷键基本都是 `ctrl+b` 前缀加一个普通键，legacy 编码就能表达，所以不依赖 kitty 协议。kitty 协议补的是 legacy 表达不了的组合，默认开着（能力面板里可关）：`Ctrl+Shift+字母` → `CSI 编码;6u`、`Ctrl+数字` → `CSI 编码;5u`、`Ctrl+Enter` / `Shift+Enter` / `Ctrl+Tab`。
 
+**每个 herdr session 有自己的 socket**：默认 session 是 `~/.config/herdr/herdr.sock`，`herdr --session x` 是 `~/.config/herdr/sessions/x/herdr.sock`。发件箱连的是 `HERDR_WEB_SOCKET`「那一个」，所以要对着非默认 session 用发件箱，得把这个变量指过去。
+
 **`Esc` 也在里面，而且是最要紧的一个**：程序声明 kitty 的 disambiguate flag（`CSI > 1 u`，herdr 和 Claude Code 都会）之后，Esc 必须编成 `CSI 27 u`。bare `0x1b` 是**所有**转义序列的前缀，程序收到它没法立刻判断这是一次真实的 Esc 还是一段序列的开头，只能等超时或者丢掉 —— 表现就是「网页上按 Esc 没反应」，`/usage` 之类的浮层退不出来。软键条上的 `Esc` 和发件箱里转发的 Esc 走同一套编码（服务端解析出来的字节不知道 kitty 开没开，所以孤立的 ESC 到前端会按当前模式重编）。
 
 抢不回来的键（浏览器自己吃掉）：macOS 上是 `⌘W` `⌘T` `⌘N` `Ctrl+Tab`；Windows/Linux 上还多 `Ctrl+W` `Ctrl+T` `Ctrl+N` `Ctrl+Shift+I/J/C`。真要用这些，把页面装成 PWA 能拿回一部分。
@@ -167,6 +170,7 @@ reference/            最早的 Python 原型，HANDOFF 里那些「已验证」
 | `HERDR_WEB_SOCKET` | `$HERDR_SOCKET_PATH` 或 `~/.config/herdr/herdr.sock` | 发件箱连的 herdr socket。**别依赖 `HERDR_SOCKET_PATH`**：`dropEnv` 会把 `HERDR_*` 清掉，而本进程也可能不是从 herdr pane 里起的 |
 | `HERDR_WEB_POLL_MS` | `500` | 发件箱多久对一次「焦点在哪 + 输入框里是什么」。下限 200 |
 | `HERDR_WEB_PUSH_MS` | `700` | 开着「双向」时，停手多久把草稿推到远端。下限 100 |
+| `HERDR_WEB_DEBUG_INPUT` | 关 | `=1` 时把写进 PTY 的每一批字节 hex 打到日志。排「某个键到底发出去了什么」只能靠它 —— 猜是猜不出来的 |
 | `HERDR_WEB_SETTLE_MS` | `120` | 两次 `pane.read` 之间等多久（对付快照的一帧延迟）。**别调成 0**：herdr 响应有时只要 1-2ms，两次读会落在同一帧上，清空循环会误判成「清不空」。清空那条路自己有 120ms 保底 |
 
 ## 安全

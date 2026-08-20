@@ -49,7 +49,10 @@ type Info struct {
 
 type PullResult struct {
 	Info
-	Text   string   `json:"text,omitempty"`
+	Text string `json:"text,omitempty"`
+	// NoBox：这一屏上认不出输入框（没有提示符字形）。和「输入框是空的」不是一回事，
+	// 前端要区别对待 —— 不然「认不出」看起来就像「远端把框清空了」。
+	NoBox  bool     `json:"noBox,omitempty"`
 	Screen []string `json:"screen,omitempty"`
 }
 
@@ -61,7 +64,8 @@ type DraftResult struct {
 
 type ClearResult struct {
 	Rounds int   `json:"rounds"`
-	Empty  *bool `json:"empty"`
+	Empty  *bool `json:"empty"` // nil = 没法判断（shell pane）
+	NoBox  bool  `json:"noBox,omitempty"`
 }
 
 type SayResult struct {
@@ -120,16 +124,19 @@ const minClearSettle = 120
 
 func (o *Outbox) settle() int { return o.SettleMS }
 
-func (o *Outbox) ReadComposer(id, agent string) (string, error) {
+// ReadComposer 读远端输入框。ok=false 表示这一屏上认不出输入框，此时的 "" 不能
+// 当成「框是空的」用。
+func (o *Outbox) ReadComposer(id, agent string) (text string, ok bool, err error) {
 	s := o.SettleMS
 	if s < minClearSettle {
 		s = minClearSettle
 	}
 	ansi, err := o.readSettled(id, s)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	return composer.Extract(ansi, agent), nil
+	text, ok = composer.Extract(ansi, agent)
+	return text, ok, nil
 }
 
 // ListTargets 目标列表：pane.list 的顺序 + workspace / tab 的可读标签。
@@ -184,7 +191,9 @@ func (o *Outbox) Pull(target, mode string) (*PullResult, error) {
 	if mode == "screen" {
 		r.Screen = composer.ScreenLines(ansi)
 	} else {
-		r.Text = composer.Extract(ansi, p.Agent)
+		var ok bool
+		r.Text, ok = composer.Extract(ansi, p.Agent)
+		r.NoBox = !ok
 	}
 	return r, nil
 }
@@ -200,16 +209,24 @@ func (o *Outbox) Pull(target, mode string) (*PullResult, error) {
 // 动态收敛，读一次、按行数补够、再读一次确认。
 func (o *Outbox) Clear(id, agent string) (ClearResult, error) {
 	if agent == "" {
-		// 普通 shell：Extract 返回的是提示符行本身，没法拿「空」当判据；
-		// 而 zsh / bash 的 ctrl+u 一次就干掉整个 buffer，打 3 次足够。
+		// 普通 shell：抽不出可靠的输入框（提示符五花八门，认出来的多半也是提示符行
+		// 本身），没法拿「空」当判据；而 zsh / bash 的 ctrl+u 一次就干掉整个 buffer，
+		// 打 3 次足够。所以这条路不读屏，也就不受「认不出框」影响 —— shell 照样能投。
 		err := o.C.SendKeys(id, []string{"ctrl+u", "ctrl+u", "ctrl+u"})
 		return ClearResult{Rounds: 1, Empty: nil}, err
 	}
 	const rounds = 6
 	for i := 1; i <= rounds; i++ {
-		cur, err := o.ReadComposer(id, agent)
+		cur, ok, err := o.ReadComposer(id, agent)
 		if err != nil {
 			return ClearResult{}, err
+		}
+		if !ok {
+			// 认不出输入框：**别当成已经空了**。这条路上的 "" 只说明「没看见框」，
+			// 不说明「框里没字」；当成空的话下一步就把整段文本追加进一个不知道是
+			// 什么的界面里（追加语义，见 Say）。当成「清不空」，拒投。
+			f := false
+			return ClearResult{Rounds: i - 1, Empty: &f, NoBox: true}, nil
 		}
 		if cur == "" {
 			t := true
@@ -227,9 +244,9 @@ func (o *Outbox) Clear(id, agent string) (ClearResult, error) {
 			return ClearResult{}, err
 		}
 	}
-	cur, err := o.ReadComposer(id, agent)
-	empty := cur == ""
-	return ClearResult{Rounds: rounds, Empty: &empty}, err
+	cur, ok, err := o.ReadComposer(id, agent)
+	empty := ok && cur == ""
+	return ClearResult{Rounds: rounds, Empty: &empty, NoBox: !ok}, err
 }
 
 // Draft 把草稿推到远端输入框，但**不回车**。给「双向同步」的本地→远端那半边用。
@@ -250,6 +267,10 @@ func (o *Outbox) Draft(target, text string) (*DraftResult, error) {
 	cleared, err := o.Clear(p.PaneID, p.Agent)
 	if err != nil {
 		return nil, err
+	}
+	if cleared.NoBox {
+		r.Skipped = "no-box"
+		return r, nil
 	}
 	if cleared.Empty != nil && !*cleared.Empty {
 		r.Skipped = "busy"
@@ -284,6 +305,9 @@ func (o *Outbox) Say(target, text string) (*SayResult, error) {
 	// 最常见的原因是那个 pane 正开着一个选择框 / 确认框（agent 会把它画在输入框
 	// 那块区域里），此时 agent_status 仍然可能是 idle，光看状态区分不出来 ——
 	// 「清不空」反而是个可靠信号。
+	if cleared.NoBox {
+		return nil, fmt.Errorf("那个 pane 上认不出输入框，没敢投：屏幕上可能正开着全屏界面（分页器 / 编辑器 / 某个控件）。先回到输入框再投。")
+	}
 	if cleared.Empty != nil && !*cleared.Empty {
 		return nil, fmt.Errorf("远端输入框清不空，没敢投：那个 pane 可能正开着选择框 / 确认框。先去按 Esc 收掉再投。")
 	}

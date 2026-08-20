@@ -104,19 +104,25 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
     const switched = r.target !== resolved.current
     resolved.current = r.target
     const pinNote = target === FOLLOW ? '' : ' · 草稿已锁定这个 pane'
+    // 认不出输入框时框里是空的，得说清是「没认出来」而不是「远端把框清空了」——
+    // 不然看起来像自动拉回坏了。shell pane 单独说：那边本来就读不到输入行，
+    // 但投稿走的是「盲打 + 回车」，照样能用，别让提示看起来像坏了。
+    const boxNote = !r.noBox ? ''
+      : r.agent ? ' · 认不出输入框（可能正开着全屏界面 / 选择框），这时候不会让你投'
+                : ' · shell pane 读不到输入行（投稿照常可用）'
 
     if (switched) {
       // 焦点换了 pane：框里是远端来的就直接换成新 pane 的内容，是自己写的就留着
       if (own.current) say2(`${label(r)} · 本地有草稿，没自动拉回（点「拉回」覆盖）`)
-      else { adopt(r.text ?? '', r.target); say2(label(r)) }
+      else { adopt(r.text ?? '', r.target); say2(`${label(r)}${boxNote}`) }
       return
     }
     if (!own.current && (r.text ?? '') !== synced.current) {
       adopt(r.text ?? '', r.target)
-      say2(`${label(r)} · 已跟随远端改动`)
+      say2(`${label(r)} · 已跟随远端改动${boxNote}`)
       return
     }
-    say2(`${label(r)}${own.current ? ' · 本地草稿未投' : ''}${pinNote}`)
+    say2(`${label(r)}${own.current ? ' · 本地草稿未投' : ''}${pinNote}${boxNote}`)
   }, [aimed, adopt, label, say2, visible])
 
   // 自动拉回的心跳。用自排队的 setTimeout 而不是 setInterval：一拍要打 3 次 socket
@@ -156,6 +162,7 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
       try {
         const r = await api.post<DraftResult>('/herdr/draft', { target: aimed(), text: body })
         if (r.skipped === 'not-agent') say2(`${label(r)} · 这个 pane 没有 agent 输入框，没往里推`)
+        else if (r.skipped === 'no-box') say2(`${label(r)} · 认不出输入框，这次没推`)
         else if (r.skipped === 'busy') say2(`${label(r)} · 远端正忙，这次没推`)
         else { synced.current = body; pinned.current = r.target; say2(`${label(r)} · 已同步 ${r.pushed} 字到远端`) }
       } catch (e) {
@@ -179,6 +186,13 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
     try {
       const r = await api.get<SyncResult>(`/herdr/pull?target=${encodeURIComponent(aimed())}`)
       resolved.current = r.target
+      if (r.noBox) {
+        // 认不出输入框就什么都别动：这时候的 '' 不代表「远端是空的」，拿它覆盖
+        // 只会把用户正在写的东西白白删掉。
+        pinned.current = r.target
+        say2(`${label(r)} · ${r.agent ? '认不出输入框，没拉回（可能正开着全屏界面 / 选择框）' : 'shell pane 读不到输入行，没拉回'}`, true)
+        return
+      }
       adopt(r.text ?? '', r.target)
       // 手动点「拉回」是明确的意图：拿过来编辑。所以算用户的东西，锁定在这个 pane，
       // 别让下一次焦点变化把它冲掉。
