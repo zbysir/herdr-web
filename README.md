@@ -118,6 +118,8 @@ herdr 启动时会请求这些终端能力（用 PTY 抓下来的），对照现
 
 herdr 的快捷键基本都是 `ctrl+b` 前缀加一个普通键，legacy 编码就能表达，所以不依赖 kitty 协议。kitty 协议补的是 legacy 表达不了的组合，默认开着（能力面板里可关）：`Ctrl+Shift+字母` → `CSI 编码;6u`、`Ctrl+数字` → `CSI 编码;5u`、`Ctrl+Enter` / `Shift+Enter` / `Ctrl+Tab`。
 
+**`Esc` 也在里面，而且是最要紧的一个**：程序声明 kitty 的 disambiguate flag（`CSI > 1 u`，herdr 和 Claude Code 都会）之后，Esc 必须编成 `CSI 27 u`。bare `0x1b` 是**所有**转义序列的前缀，程序收到它没法立刻判断这是一次真实的 Esc 还是一段序列的开头，只能等超时或者丢掉 —— 表现就是「网页上按 Esc 没反应」，`/usage` 之类的浮层退不出来。软键条上的 `Esc` 和发件箱里转发的 Esc 走同一套编码（服务端解析出来的字节不知道 kitty 开没开，所以孤立的 ESC 到前端会按当前模式重编）。
+
 抢不回来的键（浏览器自己吃掉）：macOS 上是 `⌘W` `⌘T` `⌘N` `Ctrl+Tab`；Windows/Linux 上还多 `Ctrl+W` `Ctrl+T` `Ctrl+N` `Ctrl+Shift+I/J/C`。真要用这些，把页面装成 PWA 能拿回一部分。
 
 复制 `⌘C`（或 `Ctrl+Shift+C`）· 粘贴 `⌘V` · 清屏 `⌘K` · `Option` 默认当 Meta。

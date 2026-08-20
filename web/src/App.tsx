@@ -250,7 +250,7 @@ export default function App() {
           onReload={() => void compose.loadPanes()}
           onAttach={compose.attach}
           onRecall={compose.recall}
-          onEscape={() => sess.current?.send('\x1b')}
+          onEscape={() => sess.current?.sendKey('\x1b')}
           pollMs={cfg.poll}
           pushMs={cfg.push}
         />
@@ -261,7 +261,7 @@ export default function App() {
           keys={keys}
           sticky={sticky}
           kbdUp={kbdUp}
-          onSend={(b) => { sess.current?.send(b); if (kbdUp) sess.current?.focus() }}
+          onSend={(b) => { sess.current?.sendKey(b); if (kbdUp) sess.current?.focus() }}
           onSticky={(w) => sess.current?.toggleSticky(w)}
           onKeyboard={() => sess.current?.toggleKeyboard()}
           onEdit={() => setPanel(panel === 'softkeys' ? null : 'softkeys')}

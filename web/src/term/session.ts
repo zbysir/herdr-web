@@ -233,9 +233,42 @@ export class Session {
 
   /* ------------------------------------------------------------- 键盘 */
 
+  /** kitty 模式生效中？（程序声明过 CSI > 1 u，且面板里没关） */
+  private kittyOn() {
+    return this.opts.kitty && !!(this.kitty.flags & 1)
+  }
+
+  /**
+   * Esc 的字节。
+   *
+   * kitty 的 disambiguate flag（0b1）就是为这个键存在的：bare 0x1b 是**所有**转义
+   * 序列的前缀，程序收到它没法立刻判断这是一次真实的 Esc 还是一段序列的开头，只能
+   * 等超时或者干脆丢掉 —— 表现就是「网页上按 Esc 没反应」。声明了这个 flag 的程序
+   * （herdr、Claude Code）等的是 CSI 27 u。
+   */
+  escBytes(mods = 1) {
+    if (!this.kittyOn()) return '\x1b'
+    return mods === 1 ? '\x1b[27u' : `\x1b[27;${mods}u`
+  }
+
+  /**
+   * 软键条 / 发件箱转发过来的现成字节。
+   *
+   * 这些字节是服务端按「按键谱」解析出来的，服务端不知道 kitty 模式开没开，所以
+   * 孤立的 ESC 到这儿要按当前模式重新编码。只特判这一个 —— 其余控制码（\r、\t、
+   * ctrl+x）legacy 编码本来就不含歧义，程序两种都认。
+   */
+  sendKey(bytes: string) {
+    this.send(bytes === '\x1b' ? this.escBytes() : bytes)
+  }
+
   private kittySeq(e: KeyboardEvent): string | null {
-    if (!this.opts.kitty || !(this.kitty.flags & 1)) return null
-    if (!e.ctrlKey || e.metaKey) return null
+    if (!this.kittyOn() || e.metaKey) return null
+
+    const mods = 1 + (e.shiftKey ? 1 : 0) + (e.altKey ? 2 : 0) + (e.ctrlKey ? 4 : 0)
+    if (e.code === 'Escape') return this.escBytes(mods)
+
+    if (!e.ctrlKey) return null
 
     let code: number | null = null
     if (/^Key[A-Z]$/.test(e.code)) code = e.code.charCodeAt(3) + 32 // KeyB -> 'b'
@@ -249,7 +282,6 @@ export class Session {
     const ambiguous = e.shiftKey || code === 13 || code === 9 || (code >= 48 && code <= 57)
     if (!ambiguous) return null
 
-    const mods = 1 + (e.shiftKey ? 1 : 0) + (e.altKey ? 2 : 0) + 4
     return `\x1b[${code};${mods}u`
   }
 
