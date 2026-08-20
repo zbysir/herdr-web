@@ -119,6 +119,37 @@ export default function App() {
     return () => mq.removeEventListener('change', f)
   }, [])
 
+  /**
+   * Esc 的 document 级兜底 —— 不管焦点在哪都能用。
+   *
+   * 之前只在发件箱的 textarea 里转发，漏了最常见的情况：**焦点落在按钮或 body 上**。
+   * 点过一下界面（顶栏、软键条、面板）焦点就会停在按钮上，此时 Esc 既不进 xterm
+   * 也不进 textarea，谁都不处理，一个字节都发不出去。用户的 PTY 输入日志里只有
+   * 焦点上报（CSI I / CSI O）和鼠标上报、没有任何键盘字节，就是这个原因。
+   *
+   * 只兜 Esc 这一个键：它在网页控件上没有语义，而 TUI 那边到处要用。
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.isComposing) return
+      // 面板开着就先收面板。必须 stopPropagation：否则这一下会既收面板又发给终端。
+      if (panel) {
+        setPanel(null)
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
+      // 终端自己聚焦时什么都不做，让 xterm 走它的正常编码路径，别重复发一次
+      if (sess.current?.keyboardUp()) return
+      e.preventDefault()
+      sess.current?.sendKey('\x1b')
+    }
+    // 用 capture 阶段：xterm.js 会在自己那个隐藏 textarea 上 stopPropagation，
+    // 挂 bubble 的话终端一聚焦就收不到事件了（「面板开着按 Esc 却发给了终端」就是这么来的）。
+    addEventListener('keydown', onKey, true)
+    return () => removeEventListener('keydown', onKey, true)
+  }, [panel])
+
   // 布局变化（软键条 / 发件箱开合）都要重排终端
   useEffect(() => { sess.current?.relayout() }, [showCompose, showKeys])
 
@@ -250,7 +281,6 @@ export default function App() {
           onReload={() => void compose.loadPanes()}
           onAttach={compose.attach}
           onRecall={compose.recall}
-          onEscape={() => sess.current?.sendKey('\x1b')}
           pollMs={cfg.poll}
           pushMs={cfg.push}
         />
