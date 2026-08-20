@@ -12,6 +12,11 @@
   --color-ok: #98c379;
   --color-bad: #e06c75;
   --radius-card: 10px;
+
+  /* ⌨ ⌃ ⇧ ↵ 这类字形在纯等宽字体里经常是缺的（会显示成小方块），
+     所以在等宽栈后面挂上系统的符号字体兜底。 */
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Apple Symbols", "Segoe UI Symbol", "Noto Sans Symbols 2", monospace;
 }
 
 :root.light {

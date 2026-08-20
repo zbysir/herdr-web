@@ -82,7 +82,7 @@ export function SoftkeysPanel({
   return (
     <Panel title="软键条" onClose={onClose}>
       <div className="flex flex-col gap-1">
-        {draft.length === 0 && <p className="px-0.5 py-1.5 text-xs text-muted">一个按键都没有，点「加一个」</p>}
+        {draft.length === 0 && <p className="px-0.5 py-1.5 text-xs text-muted">一个按键都没有，从下面「常用」里挑，或者点「加一个」手输</p>}
         {draft.map((k, i) => (
           <div key={i} className="flex items-center gap-1.5 rounded-[7px] bg-fg/4 p-1.5">
             <Input
@@ -98,32 +98,6 @@ export function SoftkeysPanel({
               placeholder="ctrl+b c"
               onChange={(e) => setDraft((d) => d.map((x, j) => (j === i ? parseKind(e.target.value, x.label, !!x.wide) : x)))}
             />
-            <Select
-              className="max-w-[8.5em] shrink-0"
-              value=""
-              title="从常用里挑一个填进这一行"
-              onChange={(e) => {
-                const it = flat[Number(e.target.value)]
-                if (it) patch(i, () => ({ ...it }))
-              }}
-            >
-              <option value="">常用…</option>
-              {(() => {
-                let n = -1
-                return presets.map((g) => (
-                  <optgroup key={g.group} label={g.group}>
-                    {g.items.map((it) => {
-                      n += 1
-                      return (
-                        <option key={n} value={n}>
-                          {it.label}{it.send ? ` — ${it.send}` : ''}
-                        </option>
-                      )
-                    })}
-                  </optgroup>
-                ))
-              })()}
-            </Select>
             <label className="flex shrink-0 items-center gap-1 text-[11px] text-muted" title="占宽一点">
               <Checkbox checked={!!k.wide} onCheckedChange={(v) => patch(i, (x) => ({ ...x, wide: !!v }))} />
               宽
@@ -139,13 +113,43 @@ export function SoftkeysPanel({
         ))}
       </div>
 
-      <div className="mt-2.5 flex items-center gap-1.5">
+      <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+        {/* 预设只在这里出现一次：它的用途是「填一个新键」，不是每行都要挑一遍。
+            已有的行直接改「按键」那一栏就行。 */}
+        <Select
+          data-testid="preset-add"
+          className="max-w-[14em]"
+          value=""
+          title="从常用里挑一个，追加到最后"
+          onChange={(e) => {
+            const it = flat[Number(e.target.value)]
+            if (it) setDraft((d) => [...d, { ...it }])
+            e.target.value = ''
+          }}
+        >
+          <option value="">+ 从常用添加…</option>
+          {(() => {
+            let n = -1
+            return presets.map((g) => (
+              <optgroup key={g.group} label={g.group}>
+                {g.items.map((it) => {
+                  n += 1
+                  return (
+                    <option key={n} value={n}>
+                      {it.label}{it.send ? ` — ${it.send}` : ''}
+                    </option>
+                  )
+                })}
+              </optgroup>
+            ))
+          })()}
+        </Select>
         <Button size="tiny" onClick={() => setDraft((d) => [...d, { label: '', send: '' }])}>
           <Plus className="size-3" />加一个
         </Button>
         <Button size="tiny" variant="primary" onClick={save}>保存</Button>
         <Button size="tiny" variant="danger" onClick={reset}>恢复默认</Button>
-        {err && <span className="text-[11.5px] text-bad">{err}</span>}
+        {err && <span className="w-full text-[11.5px] text-bad">{err}</span>}
       </div>
 
       <p className="mt-1.5 text-[11.5px]/relaxed text-muted">
