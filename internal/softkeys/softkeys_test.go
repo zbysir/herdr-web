@@ -63,12 +63,39 @@ func TestParseSpecSequences(t *testing.T) {
 	}
 }
 
+// text: 前缀发原样文本。编辑器里已经有 sticky: / act:，用户会顺手照着写 text:/new
+func TestParseSpecTextPrefix(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"text:/new", "/new"},
+		{"text:/new enter", "/new\r"},
+		{"TEXT:/new", "/new"},
+		{`text:"git status" enter`, "git status\r"}, // 带空格要引号，别在空格处劈开
+		{"ctrl+b c text:hi", "\x02chi"},
+		{"text:hi text:there", "hithere"},
+	} {
+		if got := mustParse(t, c.in); got != c.want {
+			t.Errorf("ParseSpec(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 // 不认识的东西要报错，而不是静默发出去
 func TestParseSpecRejects(t *testing.T) {
-	for _, in := range []string{"nope", "", "ctrl+ab", string(make([]byte, 300))} {
+	for _, in := range []string{"nope", "", "ctrl+ab", "text:", `text:""`, string(make([]byte, 300))} {
 		if _, err := ParseSpec(in); err == nil {
 			t.Errorf("ParseSpec(%q) 应当报错", in)
 		}
+	}
+}
+
+// 不认识的多字符 token 十有八九是想发文本，错误里得把两种写法都给出来
+func TestParseSpecRejectHint(t *testing.T) {
+	_, err := ParseSpec("/new")
+	if err == nil {
+		t.Fatal("/new 应当报错")
+	}
+	if !strings.Contains(err.Error(), "text:/new") || !strings.Contains(err.Error(), `"/new"`) {
+		t.Errorf("错误里应当提示 text:/new 和 \"/new\"，实际: %v", err)
 	}
 }
 
@@ -149,10 +176,37 @@ func TestPresetsParse(t *testing.T) {
 	for _, c := range []struct{ label, want string }{
 		{"放大", "\x02z"}, {"关标签", "\x02X"}, {"横分屏", "\x02-"},
 		{"下个 pane", "\x02\t"}, {"敲 herdr", "herdr\r"},
+		{"/usage", "/usage\r"}, {"/compact", "/compact\r"},
 	} {
 		if got := mustParse(t, byLabel[c.label]); got != c.want {
 			t.Errorf("预设 %q 的字节 = %q, want %q", c.label, got, c.want)
 		}
+	}
+}
+
+// 送命键必须预先打上 confirm：软键条上键挨得近，平板误触一下 pane 就没了
+func TestPresetsConfirm(t *testing.T) {
+	want := map[string]bool{"关 pane": true, "关标签": true, "关工作区": true, "断开": true, "/clear": true}
+	seen := map[string]bool{}
+	for _, g := range Presets() {
+		for _, it := range g.Items {
+			if it.Confirm {
+				seen[it.Label] = true
+			}
+			if want[it.Label] && !it.Confirm {
+				t.Errorf("预设「%s」应当要二次确认", it.Label)
+			}
+		}
+	}
+	for label := range seen {
+		if !want[label] {
+			t.Errorf("预设「%s」多了个 confirm，是不是勾错行了", label)
+		}
+	}
+	// confirm 要活着穿过解析，别在 normalize 里被吃掉
+	out, err := Resolve([]Key{{Label: "关 pane", Send: "ctrl+b x", Confirm: true}})
+	if err != nil || !out[0].Confirm {
+		t.Errorf("Resolve 丢了 confirm: %+v %v", out, err)
 	}
 }
 
@@ -181,6 +235,9 @@ func TestMatchesJSSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// 只比 JS 版有的那几个字段。confirm 是迁移之后加的，故意不进快照 ——
+	// 快照管的是「按键谱有没有抄错」，不是「后来不许改行为」。哪些预设带 confirm
+	// 由 TestPresetsConfirm 单独锁。
 	cmp := func(what string, got Key, want jsKey) {
 		if got.Label != want.Label || got.Wide != want.Wide ||
 			got.Send != want.Send || got.Sticky != want.Sticky || got.Act != want.Act {
@@ -196,10 +253,12 @@ func TestMatchesJSSnapshot(t *testing.T) {
 		cmp("出厂配置", def[i], snap.Defaults[i])
 	}
 
+	// 快照只管迁移过来的那几组，必须原样在最前面；之后新加的组允许往后追加。
 	pre := Presets()
-	if len(pre) != len(snap.Presets) {
-		t.Fatalf("预设组数 go=%d js=%d", len(pre), len(snap.Presets))
+	if len(pre) < len(snap.Presets) {
+		t.Fatalf("迁移过来的组少了 go=%d js=%d", len(pre), len(snap.Presets))
 	}
+	pre = pre[:len(snap.Presets)]
 	for i := range pre {
 		if pre[i].Group != snap.Presets[i].Group {
 			t.Errorf("第 %d 组组名 go=%q js=%q", i, pre[i].Group, snap.Presets[i].Group)
@@ -225,6 +284,7 @@ func TestStoreRoundTrip(t *testing.T) {
 	saved, err := s.Save([]Key{
 		{Label: "放大", Send: "ctrl+b z"},
 		{Label: "Ctrl", Sticky: "ctrl"},
+		{Label: "关 pane", Send: "ctrl+b x", Confirm: true},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -237,9 +297,16 @@ func TestStoreRoundTrip(t *testing.T) {
 	if want := `"send": "ctrl+b z"`; !strings.Contains(string(raw), want) {
 		t.Errorf("落盘内容里应当有 %s，实际:\n%s", want, raw)
 	}
+	if !saved[2].Confirm {
+		t.Error("保存后返回的 confirm 丢了")
+	}
 	back := s.Load()
-	if len(back) != 2 || back[0].Send != "\x02z" || back[0].Spec != "ctrl+b z" || back[1].Sticky != "ctrl" {
+	if len(back) != 3 || back[0].Send != "\x02z" || back[0].Spec != "ctrl+b z" || back[1].Sticky != "ctrl" {
 		t.Errorf("读回来不对: %+v", back)
+	}
+	// confirm 要落盘，不然重开一次防误触就没了
+	if !strings.Contains(string(raw), `"confirm": true`) || !back[2].Confirm {
+		t.Errorf("confirm 没落盘 / 没读回来:\n%s\n%+v", raw, back[2])
 	}
 
 	// 非法配置不该落盘

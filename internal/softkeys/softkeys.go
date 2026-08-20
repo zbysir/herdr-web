@@ -9,9 +9,13 @@
 //	{sticky: "ctrl"}    粘滞修饰键（点亮之后下一个字母组合成 ctrl+x）
 //	{act: "kbd"}        显示 / 收起系统键盘
 //
+// 另外每个按键可以打上 {confirm: true}：第一下只是「举起来」，第二下才真发出去。
+// 给关 pane / 关标签 / 断开这种误触代价很大的键用。
+//
 // 「按键谱」是空格分隔的记号，服务端解析成字节后下发给前端，前端只管照发。
 // 支持多个 token 连发，所以一个按键可以是一串操作 —— `ctrl+b c` 就是 herdr 的
-// 「前缀 + c」，一下点出来。
+// 「前缀 + c」，一下点出来。原样文本两种写法都行：`"/new" enter` 和
+// `text:/new enter`。
 package softkeys
 
 import (
@@ -28,21 +32,23 @@ const MaxKeys = 40
 
 // Key 是一个按键。Spec/Send 只在 send 形态下有值。
 type Key struct {
-	Label  string `json:"label"`
-	Wide   bool   `json:"wide,omitempty"`
-	Send   string `json:"send,omitempty"`   // 解析出来的字节（下发给前端）
-	Spec   string `json:"spec,omitempty"`   // 用户写的按键谱（回显到编辑器）
-	Sticky string `json:"sticky,omitempty"` // ctrl | alt
-	Act    string `json:"act,omitempty"`    // kbd
+	Label   string `json:"label"`
+	Wide    bool   `json:"wide,omitempty"`
+	Confirm bool   `json:"confirm,omitempty"` // 要点两下才发（防误触）
+	Send    string `json:"send,omitempty"`    // 解析出来的字节（下发给前端）
+	Spec    string `json:"spec,omitempty"`    // 用户写的按键谱（回显到编辑器）
+	Sticky  string `json:"sticky,omitempty"`  // ctrl | alt
+	Act     string `json:"act,omitempty"`     // kbd
 }
 
 // stored 是落盘的形状：只存用户写的东西，不存解析结果。
 type stored struct {
-	Label  string `json:"label"`
-	Wide   bool   `json:"wide,omitempty"`
-	Send   string `json:"send,omitempty"`
-	Sticky string `json:"sticky,omitempty"`
-	Act    string `json:"act,omitempty"`
+	Label   string `json:"label"`
+	Wide    bool   `json:"wide,omitempty"`
+	Confirm bool   `json:"confirm,omitempty"`
+	Send    string `json:"send,omitempty"`
+	Sticky  string `json:"sticky,omitempty"`
+	Act     string `json:"act,omitempty"`
 }
 
 type file struct {
@@ -87,6 +93,16 @@ func ctrlOf(ch string) (string, error) {
 
 func token(t string) (string, error) {
 	low := strings.ToLower(t)
+	// text:xxx 原样发送后面这一串，和双引号等价。多这一种写法是因为编辑器里
+	// 已经有 sticky: / act: 前缀，手输 text:/new 比去找引号顺手（尤其平板）。
+	// 带空格的还是得写 text:"a b" 或 "a b"。
+	if strings.HasPrefix(low, "text:") {
+		lit := strings.Trim(t[5:], `"`)
+		if lit == "" {
+			return "", fmt.Errorf("text: 后面是空的：%s", t)
+		}
+		return lit, nil
+	}
 	if strings.HasPrefix(low, "ctrl+") || strings.HasPrefix(low, "^") {
 		rest := t[1:]
 		if strings.HasPrefix(low, "ctrl+") {
@@ -118,13 +134,13 @@ func token(t string) (string, error) {
 	if utf8.RuneCountInString(t) == 1 {
 		return t, nil // 单个字面字符
 	}
-	return "", fmt.Errorf("不认识的按键：%s", t)
+	return "", fmt.Errorf("不认识的按键：%s（要发这串原样文本就写 text:%s 或 \"%s\"）", t, t, t)
 }
 
-var tokenRe = regexp.MustCompile(`"[^"]*"|\S+`)
+var tokenRe = regexp.MustCompile(`(?i:text:)?"[^"]*"|\S+`)
 
 // ParseSpec 解析按键谱。双引号里的内容原样发送（可以带空格）。
-// 例：`ctrl+b c`、`esc`、`"herdr" enter`、`up`、`alt+1`
+// 例：`ctrl+b c`、`esc`、`"herdr" enter`、`text:/new enter`、`up`、`alt+1`
 func ParseSpec(spec string) (string, error) {
 	s := strings.TrimSpace(spec)
 	if s == "" {
@@ -169,7 +185,9 @@ func normalize(k Key, i int) (Key, error) {
 		return Key{}, fmt.Errorf("%s 必须正好是 send / sticky / act 中的一种", at)
 	}
 
-	out := Key{Label: label, Wide: k.Wide}
+	// confirm 对 sticky / act 也照样透传：粘滞键和键盘键误触无所谓，但这里不拦，
+	// 少一条规则就少一句要背的话，前端一视同仁处理。
+	out := Key{Label: label, Wide: k.Wide, Confirm: k.Confirm}
 	switch {
 	case k.Sticky != "":
 		if k.Sticky != "ctrl" && k.Sticky != "alt" {
@@ -235,7 +253,7 @@ func (s *Store) Load() []Key {
 	}
 	keys := make([]Key, len(f.Keys))
 	for i, k := range f.Keys {
-		keys[i] = Key{Label: k.Label, Wide: k.Wide, Send: k.Send, Sticky: k.Sticky, Act: k.Act}
+		keys[i] = Key{Label: k.Label, Wide: k.Wide, Confirm: k.Confirm, Send: k.Send, Sticky: k.Sticky, Act: k.Act}
 	}
 	out, err := Resolve(keys)
 	if err != nil {
@@ -255,7 +273,7 @@ func (s *Store) Save(keys []Key) ([]Key, error) {
 	}
 	raw := make([]stored, len(keys))
 	for i, k := range keys {
-		raw[i] = stored{Label: strings.TrimSpace(k.Label), Wide: k.Wide, Sticky: k.Sticky, Act: k.Act}
+		raw[i] = stored{Label: strings.TrimSpace(k.Label), Wide: k.Wide, Confirm: k.Confirm, Sticky: k.Sticky, Act: k.Act}
 		if k.Sticky == "" && k.Act == "" {
 			raw[i].Send = strings.TrimSpace(firstNonEmpty(k.Send, k.Spec))
 		}

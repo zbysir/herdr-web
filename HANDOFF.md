@@ -26,8 +26,8 @@ HTTP 口（都要 `?token=`）：`GET /api/state`、`GET|PUT|DELETE /api/softkey
 `target` 省略或传 `__focused` = 投给此刻在 herdr 里激活的那个 pane。
 
 **移植是怎么保证没走样的**：`composer` 和旧 JS 版共用同一批真机抓屏，输出逐字节一致；
-`softkeys` 的 51 条预设不是手抄的，是从旧 JS 生成的，`testdata/js-snapshot.json` 存着
-当时的快照，测试逐条比对。两边的坑都做过变异测试（去掉 NBSP 归一 / 去掉 SGR 子参数
+`softkeys` 迁移过来的 51 条预设不是手抄的，是从旧 JS 生成的，`testdata/js-snapshot.json`
+存着当时的快照，测试比对前 6 组（后来新加的组往后追加，不进快照）。两边的坑都做过变异测试（去掉 NBSP 归一 / 去掉 SGR 子参数
 消费，真机用例立刻挂）。
 
 **去掉的东西**：web 这一层的 ssh 连远端主机（主机管理、托管私钥、`ssh-keygen`、

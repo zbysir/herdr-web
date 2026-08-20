@@ -11,15 +11,16 @@ import { cn } from '@/lib/utils'
 /** 一行的「按键」栏怎么显示：sticky/act 用 `sticky:ctrl` 这种写法，其余就是按键谱。 */
 const kindOf = (k: SoftKey) => (k.sticky ? `sticky:${k.sticky}` : k.act ? `act:${k.act}` : (k.spec ?? k.send ?? ''))
 
-/** 把「按键」栏的文本解回一条 SoftKey。 */
-function parseKind(spec: string, label: string, wide: boolean): SoftKey {
+/** 把「按键」栏的文本解回一条 SoftKey。名字 / 宽 / 确认这些旁边勾的东西原样留着。 */
+function parseKind(spec: string, k: SoftKey): SoftKey {
+  const keep = { label: k.label, wide: k.wide, confirm: k.confirm }
   const m = spec.match(/^(sticky|act):(.+)$/)
   if (m) {
     return m[1] === 'sticky'
-      ? { label, wide, sticky: m[2].trim() as 'ctrl' | 'alt' }
-      : { label, wide, act: m[2].trim() as 'kbd' }
+      ? { ...keep, sticky: m[2].trim() as 'ctrl' | 'alt' }
+      : { ...keep, act: m[2].trim() as 'kbd' }
   }
-  return { label, wide, send: spec }
+  return { ...keep, send: spec }
 }
 
 export function SoftkeysPanel({
@@ -179,11 +180,15 @@ export function SoftkeysPanel({
               className="min-w-0 flex-1"
               value={kindOf(k)}
               placeholder="ctrl+b c"
-              onChange={(e) => setDraft((d) => d.map((x, j) => (j === i ? parseKind(e.target.value, x.label, !!x.wide) : x)))}
+              onChange={(e) => setDraft((d) => d.map((x, j) => (j === i ? parseKind(e.target.value, x) : x)))}
             />
             <label className="flex shrink-0 items-center gap-1 text-[11px] text-muted" title="占宽一点">
               <Checkbox checked={!!k.wide} onCheckedChange={(v) => patch(i, (x) => ({ ...x, wide: !!v }))} />
               宽
+            </label>
+            <label className="flex shrink-0 items-center gap-1 text-[11px] text-muted" title="点两下才真发出去：第一下只是举起来（变红），3 秒不点就放下">
+              <Checkbox checked={!!k.confirm} onCheckedChange={(v) => patch(i, (x) => ({ ...x, confirm: !!v }))} />
+              两下
             </label>
             <Button size="tiny" variant="danger" className="shrink-0" title="删掉"
               onClick={() => setDraft((d) => d.filter((_, j) => j !== i))}>
@@ -216,7 +221,7 @@ export function SoftkeysPanel({
                   n += 1
                   return (
                     <option key={n} value={n}>
-                      {it.label}{it.send ? ` — ${it.send}` : ''}
+                      {it.label}{it.send ? ` — ${it.send}` : ''}{it.confirm ? '（两下）' : ''}
                     </option>
                   )
                 })}
@@ -237,9 +242,12 @@ export function SoftkeysPanel({
         「按键」一栏写按键谱，空格分隔可以连发多下 —— <code>ctrl+b c</code> 就是 herdr 的前缀加 c，一下点出来。<br />
         支持：<code>ctrl+x</code> <code>alt+x</code> <code>shift+tab</code>、具名键{' '}
         <code>esc tab enter space bs del ins up down left right home end pgup pgdn f1-f12</code>、
-        双引号里的原样文本（<code>"herdr" enter</code> = 敲 herdr 再回车）。<br />
+        原样文本两种写法都行：<code>"herdr" enter</code> 和 <code>text:/new enter</code>
+        （<code>text:</code> 后面带空格的要加引号，<code>text:"git status"</code>）。<br />
         <code>Ctrl</code> / <code>Alt</code> 这种粘滞修饰键写 <code>sticky:ctrl</code> / <code>sticky:alt</code>，
-        呼出键盘写 <code>act:kbd</code>。
+        呼出键盘写 <code>act:kbd</code>。<br />
+        勾上<strong>「两下」</strong>就是要点两次才真发出去：第一下只是举起来（键变红），
+        3 秒不点就自己放下 —— 关 pane / 关标签这种误触没法撤销的键值得勾上。
       </p>
     </Panel>
   )

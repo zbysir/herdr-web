@@ -79,6 +79,7 @@ export interface UploadResult { path: string; name: string; bytes: number; kind:
 export interface SoftKey {
   label: string
   wide?: boolean
+  confirm?: boolean   // 要点两下才发（防误触）
   send?: string    // 解析出来的字节（前端照发）
   spec?: string    // 用户写的按键谱（编辑器回显）
   sticky?: 'ctrl' | 'alt'

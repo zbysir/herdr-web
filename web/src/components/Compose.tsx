@@ -1,6 +1,7 @@
-import { useRef } from 'react'
-import { Image, RefreshCw } from 'lucide-react'
+import { useEffect, useRef } from 'react'
+import { GripHorizontal, Image, RefreshCw } from 'lucide-react'
 import { FOLLOW, type Pane } from '@/lib/api'
+import { useFloatBox } from '@/hooks/useFloatBox'
 import { Button } from './ui/button'
 import { Select } from './ui/select'
 import { Textarea } from './ui/textarea'
@@ -13,10 +14,19 @@ import { cn } from '@/lib/utils'
  * 这里必须是一个**真的 textarea**：终端是字节流，xterm.js 的隐藏 textarea 只把按键
  * 转成字节发走、不维护可编辑文本，所以对着网页终端说话只能「说得出、改不了」。有了
  * 真字段，选区 + 输入法提交覆盖选区（textarea 的默认行为）才能实现「框选重说」。
+ *
+ * 默认停靠在底部；抓左上角那个把手一拖就变成浮动面板（位置和大小记在 localStorage），
+ * 右下角还能拖大小。这是给平板准备的：输入法弹出来盖住底部时，把面板拖到空地上去。
  */
+/**
+ * 把手离**屏幕**边至少这么远：安卓手势导航把屏幕左右各约 24dp 划给了侧滑返回 / 前进，
+ * 贴着边的把手连 touchstart 都收不到。和软键条里那个常量是同一回事。
+ */
+const EDGE_SAFE = 28
+
 export function Compose({
   text, onChangeText, panes, sel, onSelect, info, bad, busy, live, onLive,
-  onPull, onSubmit, onReload, onAttach, onRecall, pollMs, pushMs,
+  onPull, onSubmit, onReload, onAttach, onRecall, pollMs, pushMs, onLayout,
 }: {
   text: string
   onChangeText: (v: string) => void
@@ -35,7 +45,14 @@ export function Compose({
   onRecall: (dir: number) => void
   pollMs: number
   pushMs: number
+  /** 停靠 / 浮动切换时通知外面重排终端（浮动之后面板脱离文档流，终端能多占一块） */
+  onLayout: () => void
 }) {
+  const { ref, box, floating, drag, dock } = useFloatBox<HTMLElement>()
+  useEffect(() => { onLayout() }, [floating, onLayout])
+  // 面板贴到屏幕边上时，把手和按钮都往里让 —— 那一条是安卓的侧滑区
+  const offL = box ? Math.max(0, EDGE_SAFE - box.x) : 0
+  const offR = box ? Math.max(0, EDGE_SAFE - (window.innerWidth - (box.x + box.w))) : 0
   const ta = useRef<HTMLTextAreaElement>(null)
   const file = useRef<HTMLInputElement>(null)
   const caret = () => ta.current?.selectionStart ?? text.length
@@ -50,11 +67,18 @@ export function Compose({
 
   return (
     <section
+      ref={ref as React.Ref<HTMLElement>}
       data-testid="compose"
       className={cn(
-        'flex shrink-0 flex-col gap-1.5 border-t border-line bg-bar px-2.5 py-[7px]',
+        'flex flex-col gap-1.5 border-line bg-bar px-2.5 py-[7px]',
+        floating
+          ? 'fixed z-20 rounded-[10px] border shadow-[0_12px_44px_rgba(0,0,0,.5)]'
+          : 'shrink-0 border-t',
         busy && 'pointer-events-none opacity-60',
       )}
+      style={box
+        ? { left: box.x, top: box.y, width: box.w, height: box.h, paddingLeft: 10 + offL, paddingRight: 10 + offR }
+        : undefined}
       onDragOver={(e) => { if ([...e.dataTransfer.types].includes('Files')) e.preventDefault() }}
       onDrop={(e) => {
         if (![...e.dataTransfer.types].includes('Files')) return
@@ -63,6 +87,19 @@ export function Compose({
       }}
     >
       <div className="flex flex-wrap items-center gap-1.5">
+        {/* 把手。touch-none 是必须的：不然手指一动浏览器先把它当页面滚动吃掉 */}
+        <Button
+          size="tiny"
+          className="shrink-0 cursor-grab touch-none px-1.5 active:cursor-grabbing"
+          title="拖我：把发件箱挪到输入法盖不住的地方（双击放回底部）"
+          onPointerDown={(e) => drag(e, 'move')}
+          onDoubleClick={dock}
+        >
+          <GripHorizontal className="size-3.5" />
+        </Button>
+        {floating && (
+          <Button size="tiny" className="shrink-0" title="放回底部" onClick={dock}>停靠</Button>
+        )}
         <Select
           data-testid="compose-target"
           className="min-w-0 flex-[0_1_320px] max-md:flex-[0_0_100%]"
@@ -119,7 +156,7 @@ export function Compose({
         ref={ta}
         data-testid="compose-text"
         rows={3}
-        className="min-h-[62px]"
+        className={cn('min-h-[62px]', floating && 'min-h-0 flex-1 resize-none')}
         spellCheck={false}
         autoComplete="off"
         value={text}
@@ -137,6 +174,32 @@ export function Compose({
           if (e.key === 'ArrowDown') { e.preventDefault(); onRecall(-1) }
         }}
       />
+
+      {/* 改大小：左右两条边 + 右下角。左右都给，是因为平板上换只手拿就得换边拖 */}
+      {floating && (
+        <>
+          <span
+            className="absolute top-2 bottom-2 w-4 cursor-ew-resize touch-none rounded-l-[10px] hover:bg-fg/10"
+            style={{ left: offL }}
+            title="拖左边改宽度（右边不动）"
+            onPointerDown={(e) => drag(e, 'w')}
+          />
+          <span
+            className="absolute top-2 bottom-9 w-4 cursor-ew-resize touch-none rounded-r-[10px] hover:bg-fg/10"
+            style={{ right: offR }}
+            title="拖右边改宽度"
+            onPointerDown={(e) => drag(e, 'e')}
+          />
+          <span
+            className="absolute bottom-0 grid size-7 cursor-nwse-resize touch-none place-items-center text-muted select-none"
+            style={{ right: offR }}
+            title="拖我改大小（宽 + 高）"
+            onPointerDown={(e) => drag(e, 'se')}
+          >
+            ◢
+          </span>
+        </>
+      )}
     </section>
   )
 }

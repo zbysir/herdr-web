@@ -9,7 +9,7 @@
 //   OSC 10;? / 11;?  查询前后景色      xterm.js 不回   → 这里自己回
 //   CSI ? 2031 h     主题变更通知      xterm.js 不支持 → 这里自己发
 //   1049/1000/1002/1003/1006/2004/1004/2026  xterm.js 原生支持
-import { Terminal } from '@xterm/xterm'
+import { Terminal, type IDisposable } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -48,6 +48,12 @@ const KNOWN: Record<number, [string, boolean]> = {
 
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
 
+// 冻帧的几个时长（毫秒），见下面 freeze()
+const THAW_GRACE = 120 // 新画面画上之后再多盖一会儿 —— 那一帧还是旧内容，herdr 的 SIGWINCH 重绘还在路上
+const THAW_CAP = 500 // 一直等不到重绘也得撤，别糊着一张旧图不放
+const THAW_FADE = 200 // 淡出时长，跟内联的 transition 对齐
+const FREEZE_MAX = 700 // 连续重排最多接着用同一张（拖窗口时别把终端冻死）
+
 export class Session {
   readonly term: Terminal
   private fit = new FitAddon()
@@ -62,6 +68,12 @@ export class Session {
   private paintHeals = 0
   private resizeTimer: ReturnType<typeof setTimeout> | undefined
   private detachTouch: (() => void) | null = null
+  private freezeEl: HTMLCanvasElement | null = null
+  private freezeAt = 0
+  private thawTimer: ReturnType<typeof setTimeout> | undefined
+  private thawWatch: IDisposable | null = null
+  private fadingEl: HTMLCanvasElement | null = null
+  private fadeTimer: ReturnType<typeof setTimeout> | undefined
 
   /** 面板里的开关，App 直接改 */
   opts = { kitty: true, meta: true, copyOnSelect: false, sync2026: true }
@@ -90,7 +102,8 @@ export class Session {
     this.term.loadAddon(new ClipboardAddon()) // OSC 52
     this.term.open(host)
     try {
-      const webgl = new WebglAddon()
+      // preserveDrawingBuffer：合成完别把绘制缓冲丢掉，不然改尺寸前读不出画面（见 freeze()）
+      const webgl = new WebglAddon(true)
       webgl.onContextLoss(() => webgl.dispose())
       this.term.loadAddon(webgl)
     } catch {
@@ -120,6 +133,7 @@ export class Session {
       this.kbdEl()?.addEventListener(ev, () => this.cb.onKeyboardChange(this.keyboardUp()))
     }
     this.fit.fit()
+    ;(window as unknown as Record<string, unknown>).__sess = this // TEMP-VERIFY
   }
 
   /* ------------------------------------------------------------- 补协议 */
@@ -389,7 +403,57 @@ export class Session {
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ t: 'i', d: data }))
   }
 
+  /**
+   * 收掉当前这条连接，并且**摘掉它的回调**。
+   *
+   * 「连接」按钮随时能按，断开也不一定 close 得干净（平板息屏时 WS 常常是僵着的）。
+   * 不自己先收掉的话：服务端会再起一个登录 shell（一条连接一个 PTY），两个 shell
+   * 的输出往同一个 xterm 里灌，屏幕当场花掉；输入只到新的那个，旧的那个只要连接
+   * 还在就一直活着。摘回调是因为 close 是异步的 —— 旧连接的 onclose / 还在路上的
+   * 消息不能再改新连接的状态。
+   */
+  private teardown() {
+    const ws = this.ws
+    this.ws = null
+    if (!ws) return
+    ws.onmessage = null
+    ws.onclose = null
+    ws.onerror = null
+    if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) ws.close()
+  }
+
+  /**
+   * 把终端恢复成「刚打开」的状态。
+   *
+   * 每次连接都是一个**全新的登录 shell**（服务端在断开时就把 PTY 杀了），但 xterm
+   * 实例是复用的 —— 上一次 herdr 打开的那些私有模式还留在里面，于是重连之后：
+   *
+   * - **鼠标上报（1003 移动 + 1006 SGR）还开着**：指针 / 手写笔一动，xterm 就往新
+   *   shell 的命令行里灌 `ESC [ < 35;120;36 M`。zsh 的 ZLE 把认不出的 `ESC [ <`
+   *   前缀吃掉、余下的自插进命令行，屏幕上就是 `35;120;36M35;115;37M…` 这一串。
+   * - **kitty 键盘协议的 flags 还留着**：Esc 会被编成 CSI 27 u，新 shell 里就是 `[27u`。
+   * - **屏幕上还是上一次 herdr 的残帧**：新 shell 不清屏，看着像「连上了但没好」。
+   *
+   * `term.reset()` 把缓冲区、DEC 私有模式和鼠标协议一起归零（自定义键盘处理器和
+   * 注册过的 parser 回调都留着，不用重装）。我们自己攒的那几个状态在这儿一并清掉 ——
+   * 能力清单也得清：那是上一个 shell 里的程序声明的，跟新 shell 没关系。
+   */
+  private resetForNewSession() {
+    clearTimeout(this.paintTimer)
+    this.thaw(true) // 冻帧是上一个 shell 的画面，reset 之后留着只会误导
+    this.term.reset()
+    this.kitty = { flags: 0, stack: [] }
+    this.sticky = { ctrl: false, alt: false }
+    this.stickyListener?.({ ...this.sticky })
+    this.caps.clear()
+    this.cb.onCaps([])
+    this.paintHeals = 0
+    this.cb.onHeal(0)
+  }
+
   connect() {
+    this.teardown()
+    this.resetForNewSession()
     this.exited = false
     this.cb.onOverlay(null)
     this.cb.onStatus('连接中…', '')
@@ -404,6 +468,7 @@ export class Session {
     this.ws = ws
 
     ws.onmessage = (ev) => {
+      if (this.ws !== ws) return // 已经被 teardown 换掉了，别再往终端里写
       if (typeof ev.data !== 'string') {
         this.term.write(new Uint8Array(ev.data as ArrayBuffer))
         this.armRepaint()
@@ -426,12 +491,14 @@ export class Session {
       }
     }
     ws.onclose = () => {
+      if (this.ws !== ws) return
       this.alive = false
       if (this.exited) return
       this.cb.onStatus('已断开', 'err')
       void this.diagnose()
     }
     ws.onerror = () => {
+      if (this.ws !== ws) return
       if (!this.alive) this.cb.onStatus('连不上', 'err')
     }
   }
@@ -459,16 +526,124 @@ export class Session {
 
   relayout() {
     clearTimeout(this.resizeTimer)
-    this.resizeTimer = setTimeout(() => {
-      try {
-        this.fit.fit()
-      } catch {
-        /* 容器还没测量出来 */
-      }
-      if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ t: 'r', cols: this.term.cols, rows: this.term.rows }))
-      }
-    }, 80)
+    this.resizeTimer = setTimeout(() => this.applySize(), 80)
+  }
+
+  private applySize() {
+    const d = this.fit.proposeDimensions()
+    // 容器还没测量出来（字号刚改完那一帧、面板动画中）就等下一次
+    if (!d || !Number.isFinite(d.cols) || !Number.isFinite(d.rows)) return
+    // 行列没变就别碰 xterm：resize 一次要黑一下（见 freeze()），白闪不值
+    if (d.cols === this.term.cols && d.rows === this.term.rows) return
+    this.freeze()
+    this.fit.fit()
+    this.armRepaint() // resize 后那次全屏重绘可能被 2026 吞掉，让看门狗兜着
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ t: 'r', cols: this.term.cols, rows: this.term.rows }))
+    }
+  }
+
+  /* ---------------------------------------------------------------- 冻帧 */
+  // 改尺寸的那一刻屏幕是**真的黑掉**，不是错觉：
+  //   1. xterm 的 WebGL 渲染器一改 `canvas.width` 绘制缓冲就清空了（实测清空后整块画布
+  //      读出来是全透明的），终端内容整片消失，只剩底下那层背景 —— 就是那一下「黑」；
+  //   2. FitAddon.fit() 在 resize 之前还主动调了一次 renderService.clear()；
+  //   3. 重画最快也要等下一个 rAF，2026 同步输出正开着的话得等 ESU（上面的看门狗兜，但那是 180ms）；
+  //   4. herdr 收到 SIGWINCH 之后自己也要清屏重画一遍，又是几十毫秒。
+  // 这几段延迟一个都去不掉（xterm 没有同步重绘的口子），所以改尺寸之前把当前画面拍成
+  // 一张图铺在终端上，等新画面画上了再淡出 —— 呼输入法时最明显的那一下全黑就没了。
+  private freeze() {
+    const now = performance.now()
+    if (this.freezeEl) {
+      // 键盘动画 / 拖窗口会连着重排好几次，接着用第一张图，只把撤帧时间往后推
+      if (now - this.freezeAt < FREEZE_MAX) this.watchThaw()
+      return
+    }
+    const el = this.snapFrame()
+    if (!el) return // DOM 渲染兜底路径没有 canvas，那条路也不会黑
+    this.freezeEl = el
+    this.freezeAt = now
+    this.host.appendChild(el)
+    this.watchThaw()
+  }
+
+  /** 把 `.xterm-screen` 里那几层 canvas 合成一张盖在终端上的图 */
+  private snapFrame(): HTMLCanvasElement | null {
+    const screen = this.host.querySelector('.xterm-screen') as HTMLElement | null
+    if (!screen) return null
+    const layers = [...screen.querySelectorAll('canvas')] as HTMLCanvasElement[]
+    if (!layers.length || !layers[0].width || !layers[0].height) return null
+
+    const out = document.createElement('canvas')
+    out.width = layers[0].width
+    out.height = layers[0].height
+    const ctx = out.getContext('2d')
+    if (!ctx) return null
+    // 底色自己铺一遍：这几层里空的地方可能是透明的，光 drawImage 会得到一张半透明的图
+    ctx.fillStyle = (THEMES[this.scheme].background as string) || '#000'
+    ctx.fillRect(0, 0, out.width, out.height)
+    for (const c of layers) {
+      if (c.width && c.height) ctx.drawImage(c, 0, 0, out.width, out.height)
+    }
+    // 读不出画面就别冻 —— WebGL 的绘制缓冲不是随时都读得到（浏览器不支持
+    // preserveDrawingBuffer、或者标签页在后台从来没画过），拿一张空图糊上去比闪一下更糟。
+    // 判据是「缩到 32×20 之后还有不止一种颜色」，全空的终端也算不值得冻。
+    if (!hasContent(out)) return null
+
+    // 按 .xterm-screen 现在（还没 resize）的位置和大小摆，容器缩小时多出来的部分让
+    // host 的 overflow:hidden 裁掉。不设 z-index：靠 DOM 顺序压在 xterm 上面就行，
+    // 设了会连「点连接」那个遮罩一起压住（host 不是 stacking context）。
+    const hostBox = this.host.getBoundingClientRect()
+    const box = screen.getBoundingClientRect()
+    out.style.cssText =
+      `position:absolute;pointer-events:none;` +
+      `left:${box.left - hostBox.left}px;top:${box.top - hostBox.top}px;` +
+      `width:${box.width}px;height:${box.height}px;` +
+      `opacity:1;transition:opacity ${THAW_FADE}ms linear`
+    return out
+  }
+
+  /** 撤帧的时钟：等到新画面画上再多留 THAW_GRACE，等不到就 THAW_CAP 后硬撤 */
+  private watchThaw() {
+    this.thawWatch?.dispose()
+    // 只认第一帧：herdr 那边有动画（spinner）的话 onRender 会一直来，跟着续就永远撤不掉了
+    this.thawWatch = this.term.onRender(() => {
+      this.thawWatch?.dispose()
+      this.thawWatch = null
+      this.armThaw(THAW_GRACE)
+    })
+    this.armThaw(THAW_CAP)
+  }
+
+  private armThaw(ms: number) {
+    clearTimeout(this.thawTimer)
+    this.thawTimer = setTimeout(() => this.thaw(), ms)
+  }
+
+  private thaw(now = false) {
+    clearTimeout(this.thawTimer)
+    this.thawWatch?.dispose()
+    this.thawWatch = null
+    const el = this.freezeEl
+    if (!el) return
+    this.freezeEl = null
+    if (now) {
+      el.remove()
+      this.dropFading()
+      return
+    }
+    // 淡出期间这张图不再归 freezeEl 管，得单独记着：淡出还没完就又来一次重排的话
+    // （拖发件箱、连着呼收键盘）它会一直挂在 DOM 里，一次重排漏一个。
+    this.dropFading()
+    this.fadingEl = el
+    el.style.opacity = '0'
+    this.fadeTimer = setTimeout(() => this.dropFading(), THAW_FADE)
+  }
+
+  private dropFading() {
+    clearTimeout(this.fadeTimer)
+    this.fadingEl?.remove()
+    this.fadingEl = null
   }
 
   setScheme(s: Scheme) {
@@ -478,9 +653,13 @@ export class Session {
   }
 
   setFontSize(n: number) {
-    this.term.options.fontSize = Math.max(7, Math.min(28, n))
-    this.relayout()
-    return this.term.options.fontSize!
+    const v = Math.max(7, Math.min(28, n))
+    if (v !== this.term.options.fontSize) {
+      this.freeze() // 换字号会重建字形图集、顺带清画布，跟 resize 一样会黑一下
+      this.term.options.fontSize = v
+      this.relayout()
+    }
+    return v
   }
 
   focus() {
@@ -491,9 +670,26 @@ export class Session {
     this.detachTouch?.()
     clearTimeout(this.paintTimer)
     clearTimeout(this.resizeTimer)
-    this.ws?.close()
+    this.thaw(true)
+    this.dropFading()
+    this.teardown()
     this.term.dispose()
   }
+}
+
+/** 缩略图里颜色多于一种 = 这张快照真拍到了东西 */
+const hasContent = (src: HTMLCanvasElement) => {
+  const probe = document.createElement('canvas')
+  probe.width = 32
+  probe.height = 20
+  const ctx = probe.getContext('2d', { willReadFrequently: true })
+  if (!ctx) return false
+  ctx.drawImage(src, 0, 0, probe.width, probe.height)
+  const d = ctx.getImageData(0, 0, probe.width, probe.height).data
+  for (let i = 4; i < d.length; i += 4) {
+    if (d[i] !== d[0] || d[i + 1] !== d[1] || d[i + 2] !== d[2]) return true
+  }
+  return false
 }
 
 const toRgbSpec = (hex: string) => {

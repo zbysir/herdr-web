@@ -97,7 +97,8 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  useViewportHeight(useCallback(() => sess.current?.relayout(), []))
+  const relayout = useCallback(() => sess.current?.relayout(), [])
+  useViewportHeight(relayout)
 
   useEffect(() => { sess.current?.setScheme(scheme) }, [scheme])
   useEffect(() => {
@@ -236,7 +237,9 @@ export default function App() {
       </header>
 
       <main className="relative min-h-0 flex-1">
-        <div ref={host} className="term-host absolute inset-0 pt-1.5 pr-1 pb-1 pl-2" />
+        {/* overflow-hidden：容器一缩（呼输入法）到终端重排完之间，xterm 的画布还是旧的高度，
+            不裁的话它会画到发件箱上面去；冻帧那张图也靠这个裁 */}
+        <div ref={host} className="term-host absolute inset-0 overflow-hidden pt-1.5 pr-1 pb-1 pl-2" />
         {overlay && (
           <div className="absolute inset-0 z-5 grid place-items-center bg-bg/85 p-5 backdrop-blur-[3px]">
             <div className="max-w-[460px] text-center">
@@ -283,6 +286,7 @@ export default function App() {
           onRecall={compose.recall}
           pollMs={cfg.poll}
           pushMs={cfg.push}
+          onLayout={relayout}
         />
       )}
 
@@ -295,6 +299,7 @@ export default function App() {
           onSticky={(w) => sess.current?.toggleSticky(w)}
           onKeyboard={() => sess.current?.toggleKeyboard()}
           onEdit={() => setPanel(panel === 'softkeys' ? null : 'softkeys')}
+          onLayout={relayout}
         />
       )}
     </div>
