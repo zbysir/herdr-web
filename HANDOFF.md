@@ -6,20 +6,37 @@ herdr-web 是这个功能唯一能落地的地方——原因见下一节。项�
 
 ## 实现现状（已落地）
 
-下面「建议的开发顺序」里的 1–4 都做完了，端到端在真 pane 上验过。代码：
+下面「原来建议的开发顺序」里的 1–4 全做完了，端到端在真 pane 上验过，而且已经从
+Node 全量重写成 **Go 后端 + React 前端，单二进制**（`make build` → `./herdr-web`）。
 
-| 文件 | 内容 |
+| 位置 | 内容 |
 |---|---|
-| `lib/herdr-api.js` | socket 客户端，一次调用一条连接（服务端不支持 pipeline） |
-| `lib/composer.js` | 按 agent 分派的输入框抽取，`herdr_composer.py` 的移植 |
-| `lib/outbox.js` | 列目标 / 拉回 / 清空 / 投稿 / 推草稿 |
-| `lib/uploads.js` | 图片落盘（按魔数认类型），返回给 agent 读的绝对路径 |
-| `test/composer.test.js` + `test/fixtures/*.ansi` | 18 个用例，fixture 是真机抓屏；`npm test` |
-| `public/index.html` `app.js` `style.css` 里的 `#compose` | 发件箱 UI，顶栏 `✎` 开关，默认开着 |
+| `internal/herdr/` | socket 客户端，一次调用一条连接（服务端不支持 pipeline） |
+| `internal/composer/` | 按 agent 分派的输入框抽取；`testdata/*.ansi` 是真机抓屏 |
+| `internal/outbox/` | 列目标 / 拉回 / 清空 / 投稿 / 推草稿 |
+| `internal/softkeys/` | 软键条配置 + 按键谱解析；`data.go` 是从旧 JS 版生成的 |
+| `internal/uploads/` | 图片落盘（按魔数认类型），返回给 agent 读的绝对路径 |
+| `internal/server/` | HTTP 路由 + PTY/WebSocket + 静态资源 |
+| `web/src/term/` | xterm.js 胶水：补协议、触屏手势、重绘看门狗（命令式，不套 React） |
+| `web/src/hooks/useCompose.ts` | 发件箱状态机（所有权 / 目标锁定 / 自动拉回 / 双向推送） |
 
-HTTP 口（都要 `?token=`）：`GET /api/herdr/panes`、`GET /api/herdr/sync`、`GET /api/herdr/pull`、`POST /api/herdr/say`、`POST /api/herdr/draft`、`POST /api/herdr/upload`（裸字节）。`target` 省略或传 `__focused` = 投给此刻在 herdr 里激活的那个 pane。
+HTTP 口（都要 `?token=`）：`GET /api/state`、`GET|PUT|DELETE /api/softkeys`、
+`GET /api/herdr/panes`、`GET /api/herdr/sync`、`GET /api/herdr/pull`、
+`POST /api/herdr/say`、`POST /api/herdr/draft`、`POST /api/herdr/upload`（裸字节）。
+`target` 省略或传 `__focused` = 投给此刻在 herdr 里激活的那个 pane。
 
-**没做**：ssh 模式下 socket 在远端那条路（见文末「socket 在哪台机器上」），仍然只连本机。这台机器上 `ssh localhost` 本来就不通（README 记了），没法验，所以没写。`lib/herdr-api.js` 的 `socketPath()` 是唯一的接入点。
+**移植是怎么保证没走样的**：`composer` 和旧 JS 版共用同一批真机抓屏，输出逐字节一致；
+`softkeys` 的 51 条预设不是手抄的，是从旧 JS 生成的，`testdata/js-snapshot.json` 存着
+当时的快照，测试逐条比对。两边的坑都做过变异测试（去掉 NBSP 归一 / 去掉 SGR 子参数
+消费，真机用例立刻挂）。
+
+**去掉的东西**：web 这一层的 ssh 连远端主机（主机管理、托管私钥、`ssh-keygen`、
+`~/.ssh` 扫描、ssh_config 导入）。要连别的机器直接在 herdr 里 ssh —— herdr 自己就能干，
+没必要在这儿再实现一套，顺带把「浏览器能碰到私钥」这个面也去掉了。
+
+**没做**：ssh 模式下 socket 在远端那条路（见文末「socket 在哪台机器上」），仍然只连本机。
+这台机器上 `ssh localhost` 本来就不通，没法验，所以没写。`internal/config` 的
+`DefaultSocket()` 是唯一的接入点。
 
 ## 为什么必须在网页里加一个真 textarea
 
@@ -36,24 +53,24 @@ xterm.js 的隐藏 textarea **不算**：它只把按键转成字节流发走，
 需求方要的是「不用选 pane，就用我在 herdr 里激活的那个」和「切 pane 自动拉回，改动双向同步」。落地时拆成三件事，风险差很多：
 
 - **跟随焦点**（默认开）。目标默认是哨兵值 `__focused`，服务端在**按下按钮那一刻**用 `pane.current` 解析。
-- **自动拉回**（默认开，2s 一拍）。只读，安全。带**脏草稿保护**：本地内容和上次对齐的不一样时绝不覆盖，只在状态行提示。
+- **自动拉回**（默认开，500ms 一拍，`HERDR_WEB_POLL_MS` 可调）。只读，安全。带**脏草稿保护**：本地内容和上次对齐的不一样时绝不覆盖，只在状态行提示。
 - **本地 → 远端推草稿**（`✎ 双向` 开关，默认关）。这就是原设计反对的那半边，所以加了两道闸：
   - **只推有 `agent` 字段的 pane。** 普通 pane 里跑的可能是 vim 或某个选择器，那里的字符是**命令**不是文本——跟着焦点乱推会直接触发操作。
-  - **草稿锁定目标。** 「跟随焦点」不能一路跟到提交那一刻：为 A 写的话，中途 herdr 自己因为 agent 状态变化换了焦点（实测会），投出去就落到 B 了。所以框里一有内容就把目标钉在当初瞄准的 pane 上，框空了才重新跟随。这条是踩出来的——没锁定之前，一段写给 claude 的话被投进了 codex。
+  - **草稿锁定目标。** 「跟随焦点」不能一路跟到提交那一刻：为 A 写的话，中途 herdr 自己因为 agent 状态变化换了焦点（实测会），投出去就落到 B 了。所以框里一有**自己写的**内容就把目标钉在当初瞄准的 pane 上，框空了才重新跟随（自动拉回来没动过的不算）。这条是踩出来的——没锁定之前，一段写给 claude 的话被投进了 codex。
 
   推草稿走 `pane.send_input` 只带 text 不带 keys（不回车），推之前照样要先清空。
 
 #### 「所有权」必须单独一个变量，别用文本比较推
 
-这三个 bug 全出在同一个地方，值得单独记一笔。前端一开始只有 `cSynced`（上次和远端对齐的文本），用 `文本 !== cSynced` 当「本地有草稿」的判据。它同时在干两件事——**发现远端变了** 和 **保护本地草稿**——于是：
+这三个 bug 全出在同一个地方，值得单独记一笔。前端一开始只有一个「上次和远端对齐的文本」（旧代码里叫 `cSynced`，现在是 `useCompose` 里的 `synced`），用「文本 !== 它」当「本地有草稿」的判据。它同时在干两件事——**发现远端变了** 和 **保护本地草稿**——于是：
 
 1. **切 pane 内容不更新。** 拿「框里有没有字」当锁定判据时，自动拉回来的内容也会把目标钉死，之后切 pane 永远不刷新。判据得是「这是不是我自己写的」。
-2. **开着双向时草稿被覆盖。** 草稿推到远端之后 `cSynced` 就等于草稿本身，于是草稿看起来「没改过」→ 解锁 → 下一拍被远端内容覆盖。
+2. **开着双向时草稿被覆盖。** 草稿推到远端之后 `synced` 就等于草稿本身，于是草稿看起来「没改过」→ 解锁 → 下一拍被远端内容覆盖。
 3. **开双向的瞬间把 A 的内容写进 B。** 勾上开关就推一次，推的却是「自动拉回来的」内容，中间焦点一动就落到别的 pane 里。
 
-现在拆成两个变量：`cSynced` 只负责「远端最后一次读到什么」，`cOwn` 只负责「框里是不是用户自己写的」。自动拉回、目标锁定、要不要推草稿，全看 `cOwn`。框空了 `cOwn` 归 false，控制权交回「跟随焦点」。
+现在拆成两个：`synced` 只负责「远端最后一次读到什么」，`own` 只负责「框里是不是用户自己写的」。自动拉回、目标锁定、要不要推草稿，全看 `own`。框空了 `own` 归 false，控制权交回「跟随焦点」。
 
-另外 `pull` / `sync` 也必须走**读两次取后一次**（`readSettled`）。单次读会拿到上一帧，表现就是「切了 pane 框里还是旧内容」，更糟的是自动拉回会把这一帧陈旧内容记成「已对齐」，用户接着在陈旧内容上编辑。
+另外 `Pull` / `Sync` 也必须走**读两次取后一次**（`readSettled`）。单次读会拿到上一帧，表现就是「切了 pane 框里还是旧内容」，更糟的是自动拉回会把这一帧陈旧内容记成「已对齐」，用户接着在陈旧内容上编辑。
 
 原设计那句话仍然成立：**冲突的那一半是本地→远端**。开着 `双向` 的时候别同时在那个 pane 里手敲字。
 
@@ -71,7 +88,7 @@ send_text "abc" → send_text "def"   结果：abcdef
 
 > **更正**：原来这里写「无条件打 3 次兼容多行残留」，**不够**。实测 Claude Code 和 Codex 都是 **N 行输入要 2N−1 次** `ctrl+u`（一次删掉本行内容，再一次删掉这个空行），3 次只够两行。5 行残留打 3 次会剩下第 1 行，然后跟新文本一起发出去。
 >
-> 所以 `clearComposer()` 不拍固定次数，而是**读一次、按残留行数补够、再读一次确认**，收敛为止（5 行残留一轮搞定）。shell pane 例外：`extract` 返回的是提示符行本身，没法拿「空」当判据，而 zsh/bash 的 `ctrl+u` 一次就干掉整个 buffer，所以那边仍然是固定 3 次。
+> 所以 `Clear()` 不拍固定次数，而是**读一次、按残留行数补够、再读一次确认**，收敛为止（5 行残留一轮搞定）。shell pane 例外：`extract` 返回的是提示符行本身，没法拿「空」当判据，而 zsh/bash 的 `ctrl+u` 一次就干掉整个 buffer，所以那边仍然是固定 3 次。
 
 **清不空就别投。** 见下面「agent 弹出选择框时」那条。
 
@@ -79,7 +96,7 @@ send_text "abc" → send_text "def"   结果：abcdef
 
 `$HERDR_SOCKET_PATH`，默认 `~/.config/herdr/herdr.sock`。换行分隔 JSON，请求 `{id, method, params}`。全量 schema 用 `herdr api schema --json`——208 个 method/event，CLI 只暴露了一部分（`pane.send_input`、`events.subscribe` 都没有对应 CLI 子命令）。
 
-`server.js` 的 `DROP_ENV` 会把 `HERDR_*` 从 PTY 环境里清掉（防嵌套启动），而 server 进程自己也可能根本不是从 herdr pane 里起的，所以**别依赖 `HERDR_SOCKET_PATH` 存在**，解析不到就退回默认路径。
+`internal/server/pty.go` 的 `dropEnv` 会把 `HERDR_*` 从 PTY 环境里清掉（防嵌套启动），而 server 进程自己也可能根本不是从 herdr pane 里起的，所以**别依赖 `HERDR_SOCKET_PATH` 存在**，解析不到就退回默认路径。
 
 已验证的语义：
 
@@ -99,7 +116,7 @@ send_text "abc" → send_text "def"   结果：abcdef
 | **`agent.prompt` 端到端通了** | 先塞两行残留，再投一段，pane 上收到的就是新文本本身，没有残留前缀 |
 | **多行输入在活 pane 上验过了** | 两家都用 `shift+enter` 换行；抽出来的多行原文一字不差（含以 `>` 开头的续行） |
 | **`agent_status` 不能用来判断「正开着对话框」** | 实测一个正在显示选择器的 Claude Code pane，`agent_status` 是 `idle`；另一次同样的对话框又报 `blocked`。两个方向都不可靠 |
-| **API 里没有图片通道，但 agent 能读磁盘上的图** | 给一张 320×200 左红右蓝中间绿带的 PNG 的**绝对路径**，claude 和 codex 都描述对了（codex 会打一行 `Viewed Image`）。所以传图＝落盘 + 把路径当文本投出去，见 `lib/uploads.js` |
+| **API 里没有图片通道，但 agent 能读磁盘上的图** | 给一张 320×200 左红右蓝中间绿带的 PNG 的**绝对路径**，claude 和 codex 都描述对了（codex 会打一行 `Viewed Image`）。所以传图＝落盘 + 把路径当文本投出去，见 `internal/uploads/` |
 
 `pane.read` 的 source 只有 `visible` / `recent` / `recent_unwrapped` / `detection`——三者在 agent pane 上返回的都是整屏，`detection` 并不是裁剪过的区域。
 
@@ -119,11 +136,11 @@ connect 后等 150ms 再 send -> 209ms      # 又量化到 100 的倍数
 
 结论和影响：
 
-- **每次 `call()` 的地板是 ~100ms**（紧凑循环里会共振成稳定的 106ms；散着打有时能捡到 10–20ms）。
-- 所以 `readSettled()` **不需要再 sleep**：两次读之间本来就隔了一个 tick，第二次一定是新帧。原来那 120ms 是白送的，`HERDR_WEB_SETTLE_MS` 默认已经改成 0。
-- 一拍 `sync` 打 3 次调用（`pane.current` + 两次 `pane.read`），实测 ~150–320ms。想再快只能减少调用次数，调 sleep 没用。
+- 那个 106ms 是**紧凑循环里的共振**，不是地板：每次响应都刚好卡在 tick 上，下一次 connect 就总是刚过点。散着打有时只要 1–2ms。
+- 一拍 `sync` 打 3 次调用（`pane.current` + 两次 `pane.read`），实测 ~150–320ms。
+- **曾经据此推断「readSettled 不用 sleep」，那是错的。** 理由是「每次调用固定 ~106ms，两次读天然隔了一个 tick」；但既然 1–2ms 也可能，两次读就会落在同一帧上。实测把 settle 调成 0，清空循环 6 轮跑完仍然清不空（整个 `Clear()` 27ms 就返回了，读的全是同一帧陈旧内容），`Say()` 于是一律报「清不空」。所以 `HERDR_WEB_SETTLE_MS` 默认 120，而且 `ReadComposer()` 自己有 120ms 保底 —— 清空那条路的正确性最要紧，不受配置调低影响。
 
-要真正拿到亚毫秒，客户端得在 connect 的同一个系统调用序列里把请求写出去 —— node 的 `net` 做不到。真到了嫌慢那一步，方向是**减少每拍的调用数**，不是调超时。
+要真正拿到亚毫秒，客户端得在 connect 的同一个系统调用序列里把请求写出去 —— Go 的 `net.DialTimeout` + 立刻 `Write` 也未必赢得了这个竞争（赢不了就只是慢一跳，不影响正确性）。真到了嫌慢那一步，方向是**减少每拍的调用数**，不是调 sleep。
 
 ## 读屏抽输入框：按 agent 分派
 
@@ -152,7 +169,7 @@ herdr 自己就是这么干的。manifest 在 `~/.local/state/herdr/agent-detect
 
 **agent 弹出选择框 / 确认框的时候，输入框那块区域画的是那个控件。** 抽取会把整个控件当成"输入框内容"返回（实测拉回来 255 个字符的 checkbox 界面），投出去就是一堆垃圾。
 
-判据不能用 `agent_status`（见上表，`idle` / `blocked` 都出现过），也不该去猜 UI 特征。可靠信号是**清不空**：对话框开着时 `ctrl+u` 打不掉那块区域，`clearComposer()` 收敛不到空。所以 `say()` 在 `cleared.empty === false` 时直接**拒绝投递**并报错，而不是硬投——追加语义下硬投就是 `残留 + 新文本`。
+判据不能用 `agent_status`（见上表，`idle` / `blocked` 都出现过），也不该去猜 UI 特征。可靠信号是**清不空**：对话框开着时 `ctrl+u` 打不掉那块区域，`clearComposer()` 收敛不到空。所以 `Say()` 在「清不空」时直接**拒绝投递**并报错，而不是硬投——追加语义下硬投就是 `残留 + 新文本`。
 
 这条是踩出来的：验证「拉回」时随手按了个 `up`，结果那个 pane 正显示一个提问控件，503 个字符连着一起投了进去。
 

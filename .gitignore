@@ -1,11 +1,16 @@
-node_modules/
+# Go 产物
+/herdr-web
 
-# 主机、托管私钥、token 都在 ~/.herdr-web/，本来就不在仓库里；
+# 前端依赖和构建产物
+web/node_modules/
+web/dist/
+# 嵌进二进制的那份由 make build 生成，只留占位
+internal/webui/dist/*
+!internal/webui/dist/.gitkeep
+
+# 主机数据、token 都在 ~/.herdr-web/，本来就不在仓库里；
 # 万一有人把数据目录指到项目下（HERDR_WEB_DIR），也别让它进版本库
 .herdr-web/
-*.pem
-id_ed25519*
-id_rsa*
 token
 
 .DS_Store

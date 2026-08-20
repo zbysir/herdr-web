@@ -1,0 +1,491 @@
+{
+ "defaults": [
+  {
+   "label": "⌨",
+   "wide": false,
+   "send": "",
+   "sticky": "",
+   "act": "kbd"
+  },
+  {
+   "label": "⌃B 前缀",
+   "wide": true,
+   "send": "ctrl+b",
+   "sticky": "",
+   "act": ""
+  },
+  {
+   "label": "Ctrl",
+   "wide": false,
+   "send": "",
+   "sticky": "ctrl",
+   "act": ""
+  },
+  {
+   "label": "Alt",
+   "wide": false,
+   "send": "",
+   "sticky": "alt",
+   "act": ""
+  },
+  {
+   "label": "Esc",
+   "wide": false,
+   "send": "esc",
+   "sticky": "",
+   "act": ""
+  },
+  {
+   "label": "Tab",
+   "wide": false,
+   "send": "tab",
+   "sticky": "",
+   "act": ""
+  },
+  {
+   "label": "↑",
+   "wide": false,
+   "send": "up",
+   "sticky": "",
+   "act": ""
+  },
+  {
+   "label": "↓",
+   "wide": false,
+   "send": "down",
+   "sticky": "",
+   "act": ""
+  },
+  {
+   "label": "←",
+   "wide": false,
+   "send": "left",
+   "sticky": "",
+   "act": ""
+  },
+  {
+   "label": "→",
+   "wide": false,
+   "send": "right",
+   "sticky": "",
+   "act": ""
+  },
+  {
+   "label": "PgUp",
+   "wide": false,
+   "send": "pgup",
+   "sticky": "",
+   "act": ""
+  },
+  {
+   "label": "PgDn",
+   "wide": false,
+   "send": "pgdn",
+   "sticky": "",
+   "act": ""
+  },
+  {
+   "label": "⌃C",
+   "wide": false,
+   "send": "ctrl+c",
+   "sticky": "",
+   "act": ""
+  },
+  {
+   "label": "↵",
+   "wide": false,
+   "send": "enter",
+   "sticky": "",
+   "act": ""
+  }
+ ],
+ "presets": [
+  {
+   "group": "前缀 / 通用",
+   "items": [
+    {
+     "label": "⌃B 前缀",
+     "wide": true,
+     "send": "ctrl+b",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "帮助",
+     "wide": false,
+     "send": "ctrl+b ?",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "设置",
+     "wide": false,
+     "send": "ctrl+b s",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "侧边栏",
+     "wide": false,
+     "send": "ctrl+b b",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "跳转",
+     "wide": false,
+     "send": "ctrl+b g",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "断开",
+     "wide": false,
+     "send": "ctrl+b q",
+     "sticky": "",
+     "act": ""
+    }
+   ]
+  },
+  {
+   "group": "标签",
+   "items": [
+    {
+     "label": "新标签",
+     "wide": false,
+     "send": "ctrl+b c",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "下个标签",
+     "wide": false,
+     "send": "ctrl+b n",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "上个标签",
+     "wide": false,
+     "send": "ctrl+b p",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "关标签",
+     "wide": false,
+     "send": "ctrl+b X",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "标签 1",
+     "wide": false,
+     "send": "ctrl+b 1",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "标签 2",
+     "wide": false,
+     "send": "ctrl+b 2",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "标签 3",
+     "wide": false,
+     "send": "ctrl+b 3",
+     "sticky": "",
+     "act": ""
+    }
+   ]
+  },
+  {
+   "group": "Pane",
+   "items": [
+    {
+     "label": "竖分屏",
+     "wide": false,
+     "send": "ctrl+b v",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "横分屏",
+     "wide": false,
+     "send": "ctrl+b -",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "关 pane",
+     "wide": false,
+     "send": "ctrl+b x",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "放大",
+     "wide": false,
+     "send": "ctrl+b z",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "下个 pane",
+     "wide": false,
+     "send": "ctrl+b tab",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "pane ←",
+     "wide": false,
+     "send": "ctrl+b h",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "pane ↓",
+     "wide": false,
+     "send": "ctrl+b j",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "pane ↑",
+     "wide": false,
+     "send": "ctrl+b k",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "pane →",
+     "wide": false,
+     "send": "ctrl+b l",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "调大小",
+     "wide": false,
+     "send": "ctrl+b r",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "改名",
+     "wide": false,
+     "send": "ctrl+b P",
+     "sticky": "",
+     "act": ""
+    }
+   ]
+  },
+  {
+   "group": "工作区",
+   "items": [
+    {
+     "label": "工作区",
+     "wide": false,
+     "send": "ctrl+b w",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "新工作区",
+     "wide": false,
+     "send": "ctrl+b N",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "改名",
+     "wide": false,
+     "send": "ctrl+b W",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "关工作区",
+     "wide": false,
+     "send": "ctrl+b D",
+     "sticky": "",
+     "act": ""
+    }
+   ]
+  },
+  {
+   "group": "终端按键",
+   "items": [
+    {
+     "label": "Esc",
+     "wide": false,
+     "send": "esc",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "Tab",
+     "wide": false,
+     "send": "tab",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "↵",
+     "wide": false,
+     "send": "enter",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "↑",
+     "wide": false,
+     "send": "up",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "↓",
+     "wide": false,
+     "send": "down",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "←",
+     "wide": false,
+     "send": "left",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "→",
+     "wide": false,
+     "send": "right",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "PgUp",
+     "wide": false,
+     "send": "pgup",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "PgDn",
+     "wide": false,
+     "send": "pgdn",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "Home",
+     "wide": false,
+     "send": "home",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "End",
+     "wide": false,
+     "send": "end",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "⌃C",
+     "wide": false,
+     "send": "ctrl+c",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "⌃D",
+     "wide": false,
+     "send": "ctrl+d",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "⌃L 清屏",
+     "wide": false,
+     "send": "ctrl+l",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "⌃U 清行",
+     "wide": false,
+     "send": "ctrl+u",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "⌃R 搜索",
+     "wide": false,
+     "send": "ctrl+r",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "⌃Z",
+     "wide": false,
+     "send": "ctrl+z",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "Shift+Tab",
+     "wide": false,
+     "send": "shift+tab",
+     "sticky": "",
+     "act": ""
+    }
+   ]
+  },
+  {
+   "group": "特殊 / 文本",
+   "items": [
+    {
+     "label": "⌨ 键盘",
+     "wide": false,
+     "send": "",
+     "sticky": "",
+     "act": "kbd"
+    },
+    {
+     "label": "Ctrl",
+     "wide": false,
+     "send": "",
+     "sticky": "ctrl",
+     "act": ""
+    },
+    {
+     "label": "Alt",
+     "wide": false,
+     "send": "",
+     "sticky": "alt",
+     "act": ""
+    },
+    {
+     "label": "敲 herdr",
+     "wide": true,
+     "send": "\"herdr\" enter",
+     "sticky": "",
+     "act": ""
+    },
+    {
+     "label": "git status",
+     "wide": true,
+     "send": "\"git status\" enter",
+     "sticky": "",
+     "act": ""
+    }
+   ]
+  }
+ ]
+}

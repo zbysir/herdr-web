@@ -1,0 +1,186 @@
+// Package herdr 是 herdr socket API 的极简客户端。
+//
+// 换行分隔 JSON，请求 {id, method, params}，响应 {id, result} 或
+// {id, error:{code,message}}。
+//
+// 服务端**一个连接只处理一个请求**，不支持 pipeline（同连接塞两个请求，只回
+// 第一个的响应，第二个直接丢）。所以每次调用都开一条新连接。
+//
+// 注意延迟：请求字节必须在服务端 accept 的那一刻已经在 socket 缓冲区里，否则要
+// 等下一个 ~100ms 的 tick。实测 connect 之后哪怕只隔 0.5ms 再发，就要 ~106ms。
+// 这里 Dial 完立刻 Write，能赢就赢，赢不了也只是慢一跳（不影响正确性）。
+package herdr
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"net"
+	"time"
+)
+
+type Client struct {
+	Socket  string
+	Timeout time.Duration
+}
+
+func New(socket string) *Client {
+	return &Client{Socket: socket, Timeout: 10 * time.Second}
+}
+
+// Error 是服务端返回的业务错误（区别于连不上之类的传输错误）。
+type Error struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func (e *Error) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	return e.Code
+}
+
+type response struct {
+	ID     string          `json:"id"`
+	Result json.RawMessage `json:"result"`
+	Error  *Error          `json:"error"`
+}
+
+// Call 发一个请求，把 result 解到 out（out 可以是 nil）。
+func (c *Client) Call(method string, params any, out any) error {
+	if params == nil {
+		params = map[string]any{}
+	}
+	req, err := json.Marshal(map[string]any{"id": "web", "method": method, "params": params})
+	if err != nil {
+		return err
+	}
+
+	conn, err := net.DialTimeout("unix", c.Socket, c.Timeout)
+	if err != nil {
+		return fmt.Errorf("连不上 herdr socket %s（herdr server 没在跑？）: %w", c.Socket, err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(c.Timeout))
+
+	if _, err := conn.Write(append(req, '\n')); err != nil {
+		return fmt.Errorf("写 herdr socket 失败: %w", err)
+	}
+
+	line, err := bufio.NewReaderSize(conn, 1<<20).ReadBytes('\n')
+	if err != nil && len(line) == 0 {
+		return fmt.Errorf("herdr 没给响应: %w", err)
+	}
+	var r response
+	if err := json.Unmarshal(line, &r); err != nil {
+		return fmt.Errorf("herdr 返回的不是合法 JSON: %w", err)
+	}
+	if r.Error != nil {
+		return r.Error
+	}
+	if out != nil && len(r.Result) > 0 {
+		return json.Unmarshal(r.Result, out)
+	}
+	return nil
+}
+
+/* ------------------------------------------------------------- 用到的响应形状 */
+
+// Pane 是 pane.get / pane.current / pane.list 里的 pane 对象。
+type Pane struct {
+	PaneID      string `json:"pane_id"`
+	WorkspaceID string `json:"workspace_id"`
+	TabID       string `json:"tab_id"`
+	Focused     bool   `json:"focused"`
+	CWD         string `json:"cwd"`
+	Agent       string `json:"agent"`
+	AgentStatus string `json:"agent_status"`
+	Title       string `json:"terminal_title_stripped"`
+}
+
+type paneWrap struct {
+	Pane *Pane `json:"pane"`
+}
+
+type PaneList struct {
+	Panes []Pane `json:"panes"`
+}
+
+type WorkspaceList struct {
+	Workspaces []struct {
+		WorkspaceID string `json:"workspace_id"`
+		Number      int    `json:"number"`
+		Label       string `json:"label"`
+	} `json:"workspaces"`
+}
+
+type TabList struct {
+	Tabs []struct {
+		TabID  string `json:"tab_id"`
+		Number int    `json:"number"`
+		Label  string `json:"label"`
+	} `json:"tabs"`
+}
+
+type readWrap struct {
+	Read struct {
+		Text string `json:"text"`
+	} `json:"read"`
+}
+
+func (c *Client) PaneGet(id string) (*Pane, error) {
+	var w paneWrap
+	if err := c.Call("pane.get", map[string]any{"pane_id": id}, &w); err != nil {
+		return nil, err
+	}
+	if w.Pane == nil {
+		return nil, fmt.Errorf("pane.get 没返回 pane")
+	}
+	return w.Pane, nil
+}
+
+func (c *Client) PaneCurrent() (*Pane, error) {
+	var w paneWrap
+	if err := c.Call("pane.current", nil, &w); err != nil {
+		return nil, err
+	}
+	if w.Pane == nil || w.Pane.PaneID == "" {
+		return nil, fmt.Errorf("herdr 里没有激活的 pane")
+	}
+	return w.Pane, nil
+}
+
+func (c *Client) PaneList() ([]Pane, error) {
+	var l PaneList
+	err := c.Call("pane.list", nil, &l)
+	return l.Panes, err
+}
+
+// ReadANSI 拿带转义序列的整屏。必须 format:"ansi" + strip_ansi:false ——
+// format:"text" 即使 strip_ansi:false 也不含 ESC。
+func (c *Client) ReadANSI(id string) (string, error) {
+	var w readWrap
+	err := c.Call("pane.read", map[string]any{
+		"pane_id": id, "source": "visible", "format": "ansi", "strip_ansi": false,
+	}, &w)
+	return w.Read.Text, err
+}
+
+func (c *Client) SendKeys(id string, keys []string) error {
+	return c.Call("pane.send_input", map[string]any{"pane_id": id, "keys": keys}, nil)
+}
+
+// SendText 一个请求里的顺序是 text 先、keys 后，所以 text+enter 可以合成一次。
+func (c *Client) SendText(id, text string, keys []string) error {
+	p := map[string]any{"pane_id": id, "text": text}
+	if len(keys) > 0 {
+		p["keys"] = keys
+	}
+	return c.Call("pane.send_input", p, nil)
+}
+
+// AgentPrompt 会按 pane 当前的 bracketed-paste 模式正确编码 Enter，别自己拼 \r。
+func (c *Client) AgentPrompt(target, text string) error {
+	return c.Call("agent.prompt", map[string]any{"target": target, "text": text}, nil)
+}

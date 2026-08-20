@@ -10,7 +10,7 @@ import (
 // 所以这里的期望值必须和 lib/composer.js 的输出逐字节一致。
 func fixture(t *testing.T, name string) string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("..", "..", "test", "fixtures", name+".ansi"))
+	b, err := os.ReadFile(filepath.Join("testdata", name+".ansi"))
 	if err != nil {
 		t.Fatalf("读不到 fixture %s: %v", name, err)
 	}
