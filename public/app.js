@@ -393,7 +393,9 @@ function renderSoftkeys() {
 
 async function loadSoftkeys() {
   try {
-    skKeys = (await api.get('/softkeys')).keys || [];
+    const r = await api.get('/softkeys');
+    skKeys = r.keys || [];
+    skPresets = r.presets || [];
   } catch {
     skKeys = [];                 // 拿不到就先空着，面板里还能改
   }
@@ -404,11 +406,31 @@ async function loadSoftkeys() {
 let skDraft = [];
 const skKind = (k) => (k.sticky ? `sticky:${k.sticky}` : k.act ? `act:${k.act}` : (k.spec ?? k.send ?? ''));
 
+// 「常用」下拉：选一条就把这一行的名字和按键谱填好，不用记按键谱怎么写。
+// 列表由服务端下发（照 herdr 的默认 keybinding 抄的），生僻的仍然手输。
+let skPresets = [];
+let skFlat = [];                 // 拍平之后按下标取
+
+// option 的 value 就是拍平后的下标。别用「组名 + 分隔符 + 序号」拼字符串 ——
+// 分隔符本身就是个坑（踩过：本该是空格的那个字节写成了 NUL，整个文件都变成 binary）。
+function skPresetOptions() {
+  skFlat = [];
+  return skPresets.map((g) => {
+    const opts = g.items.map((it) => {
+      skFlat.push(it);
+      return `<option value="${skFlat.length - 1}">${esc(it.label)}${it.send ? ` \u2014 ${esc(it.send)}` : ''}</option>`;
+    }).join('');
+    return `<optgroup label="${esc(g.group)}">${opts}</optgroup>`;
+  }).join('');
+}
+
 function renderSkEditor() {
+  const opts = skPresetOptions();
   $('#skList').innerHTML = skDraft.map((k, i) => `
     <div class="item sk-edit-row" data-i="${i}">
       <input class="sk-label" value="${esc(k.label)}" placeholder="名字" maxlength="12">
       <input class="sk-spec mono" value="${esc(skKind(k))}" placeholder="ctrl+b c">
+      <select class="sk-preset" title="从常用里挑一个填进这一行"><option value="">常用…</option>${opts}</select>
       <label class="sk-wide" title="占宽一点"><input type="checkbox" ${k.wide ? 'checked' : ''}>宽</label>
       <div class="item-act">
         <button class="btn tiny" data-mv="-1" title="上移（往左）">↑</button>
@@ -443,6 +465,17 @@ function openSkPanel() {
 
 $('#skEdit').onclick = openSkPanel;
 $('#skAdd').onclick = () => { skCollect(); skDraft.push({ label: '', send: '' }); renderSkEditor(); };
+// 选了「常用」里的一条 -> 填进这一行（名字、按键谱、宽窄一起带过来）
+$('#skList').addEventListener('change', (e) => {
+  const sel = e.target.closest('.sk-preset');
+  if (!sel || sel.value === '') return;
+  const row = sel.closest('.sk-edit-row');
+  const it = skFlat[Number(sel.value)];
+  if (!row || !it) return;
+  skCollect();
+  skDraft[Number(row.dataset.i)] = { ...it };
+  renderSkEditor();
+});
 $('#skList').addEventListener('click', (e) => {
   const row = e.target.closest('.sk-edit-row');
   const btn = e.target.closest('button');

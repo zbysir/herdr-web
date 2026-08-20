@@ -88,3 +88,19 @@ test('校验：三种形态只能占一种，标签有长度上限', () => {
 test('没写标签就用按键谱兜底', () => {
   assert.strictEqual(resolve([{ send: 'ctrl+b c' }])[0].label, 'ctrl+b c');
 });
+
+test('「常用」下拉里每一条都能解析（防止列表里手抖打错按键谱）', () => {
+  const { PRESETS } = require('../lib/softkeys');
+  const flat = PRESETS.flatMap((g) => g.items.map((it) => ({ ...it, group: g.group })));
+  assert.ok(flat.length > 20, '预设太少了，是不是漏了');
+  for (const it of flat) {
+    assert.doesNotThrow(() => resolve([it]), `预设「${it.group} / ${it.label}」解析失败`);
+  }
+  // 抽查几条关键的字节，别只验"不抛错"
+  const spec = (label) => flat.find((x) => x.label === label).send;
+  assert.strictEqual(parseSpec(spec('放大')), '\x02z');          // prefix+z
+  assert.strictEqual(parseSpec(spec('关标签')), '\x02X');        // prefix+shift+x
+  assert.strictEqual(parseSpec(spec('横分屏')), '\x02-');        // prefix+minus
+  assert.strictEqual(parseSpec(spec('下个 pane')), '\x02\t');    // prefix+tab
+  assert.strictEqual(parseSpec(spec('敲 herdr')), 'herdr\r');
+});

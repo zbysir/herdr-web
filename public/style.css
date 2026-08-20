@@ -257,3 +257,8 @@ section:last-child { border-bottom: 0; }
   .compose-head .sel { flex: 0 0 100%; }
   .compose-info { order: 9; flex: 0 0 100%; }
 }
+.sk-edit-row .sk-preset {
+  flex: 0 0 auto; max-width: 8.5em;
+  background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius);
+  color: var(--fg); font-size: 11.5px; padding: 4px 5px;
+}

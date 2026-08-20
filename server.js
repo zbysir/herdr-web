@@ -227,7 +227,7 @@ async function handleApi(req, res, url) {
 
     // 软键条：在网页上编辑，存服务端，手机 / 平板 / 电脑共用一份
     if (seg[0] === 'softkeys') {
-      if (method === 'GET') return json(200, { keys: softkeys.load(), max: softkeys.MAX_KEYS });
+      if (method === 'GET') return json(200, { keys: softkeys.load(), max: softkeys.MAX_KEYS, presets: softkeys.PRESETS });
       if (method === 'PUT') {
         const { keys } = await readBody(req);
         return json(200, { keys: softkeys.save(keys) });
