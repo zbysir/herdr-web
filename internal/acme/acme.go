@@ -104,8 +104,15 @@ func newDNS(name string) (challenge.Provider, error) {
 /* ------------------------------------------------------------------ 对外 */
 
 // Files 是证书落盘的位置。
+//
+// **测试环境和正式环境分开存。** 否则「用 staging 试一次」会把线上那张真证书覆盖成
+// 浏览器不认的那张 —— 一个调试动作把生产打挂。分开之后还顺带解决了另一个坑：
+// 从 staging 切回正式时不会把 staging 那张当成「现有的还够用」。
 func (c Config) Files() (certFile, keyFile string) {
 	base := filepath.Join(c.Dir, "acme", safeName(c.Domains))
+	if c.Staging {
+		base += ".staging"
+	}
 	return base + ".crt", base + ".key"
 }
 

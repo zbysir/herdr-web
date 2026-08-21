@@ -110,8 +110,15 @@ function TermSection({
           宽屏顶栏里那三个还在，这里是同一套动作，不是另一份状态 */}
       <div className="mb-2 flex flex-wrap items-center gap-2 border-b border-line pb-3">
         <span className="text-xs text-muted tabular-nums">字号 {fontSize}px</span>
-        <Button size="icon" title="缩小字号" onClick={() => onFont(-1)}><AArrowDown className="size-4" /></Button>
-        <Button size="icon" title="放大字号" onClick={() => onFont(1)}><AArrowUp className="size-4" /></Button>
+        {/* 加减贴成一个控件：它们操作的是同一个量，分开两个方块看着像两件事 */}
+        <div className="flex overflow-hidden rounded-md border border-line">
+          <Button size="icon" className="rounded-none border-0 border-r border-line" title="缩小字号" onClick={() => onFont(-1)}>
+            <AArrowDown className="size-4" />
+          </Button>
+          <Button size="icon" className="rounded-none border-0" title="放大字号" onClick={() => onFont(1)}>
+            <AArrowUp className="size-4" />
+          </Button>
+        </div>
         <span className="ml-2 text-xs text-muted">{scheme === 'dark' ? '暗色' : '亮色'}</span>
         <Button size="icon" title="切换明暗" onClick={onScheme}><CircleHalf className="size-4" /></Button>
       </div>

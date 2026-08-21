@@ -22,6 +22,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -30,6 +31,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"git.huglight.cn/bysir/herdr-web/internal/acme"
+	"git.huglight.cn/bysir/herdr-web/internal/admin"
 	"git.huglight.cn/bysir/herdr-web/internal/auth"
 	"git.huglight.cn/bysir/herdr-web/internal/config"
 	"git.huglight.cn/bysir/herdr-web/internal/ctl"
@@ -137,26 +139,26 @@ func serve(webDir string) error {
 	gate.ExemptLoopback = cfg.TrustProxy || !cfg.Exposed
 
 	// ACME 要在 tlsgen 之前：签完把路径交给它，后面就当成「用户指定的证书」走。
+	var acmeMgr *acme.Manager
 	if cfg.ACMEDNS != "" {
-		ac := acme.Config{
+		acmeMgr = acme.NewManager(acme.Config{
 			Dir: cfg.DataDir, Domains: cfg.Hostnames, Email: cfg.ACMEEmail,
 			DNS: cfg.ACMEDNS, Staging: cfg.ACMEStaging,
-		}
-		certFile, keyFile, renewed, err := ac.Ensure()
-		if err != nil {
-			return fmt.Errorf("ACME 签证书失败: %w", err)
-		}
-		if renewed {
+		})
+		if a := acmeMgr.Ensure(false); a.Err != "" {
+			return fmt.Errorf("ACME 签证书失败: %s", a.Err)
+		} else if a.Renewed {
 			log.Printf("已签下 %s 的证书", strings.Join(cfg.Hostnames, " "))
 		}
+		certFile, keyFile := acmeMgr.Config().Files()
 		cfg.TLSCert, cfg.TLSKey, cfg.TLSMode = certFile, keyFile, "files"
 
 		// 半天看一次要不要续。续完不用重启 —— tlsgen 那边会在十秒内热重载。
 		go func() {
 			for range time.Tick(12 * time.Hour) {
-				if _, _, renewed, err := ac.Ensure(); err != nil {
-					alert("证书续期失败（先看 DNS 凭据还在不在）：" + err.Error())
-				} else if renewed {
+				if a := acmeMgr.Ensure(false); a.Err != "" {
+					alert("证书续期失败（先看 DNS 凭据还在不在）：" + a.Err)
+				} else if a.Renewed {
 					log.Printf("证书已续期，热重载会在十秒内生效")
 				}
 			}
@@ -220,7 +222,32 @@ func serve(webDir string) error {
 		defer l.Close()
 	}
 
-	banner(cfg, store, passkeys, cert, web == nil)
+	// 管理口：只绑 127.0.0.1。为什么单独一个口而不是在主服务上加个认证页面，
+	// 见 internal/admin 的包注释（一句话：不能靠源 IP 判断「本机」，而且管理页
+	// 不能依赖它自己要管的那个证书）。
+	adminAddr := fmt.Sprintf("127.0.0.1:%d", cfg.Port+1)
+	adminLn, err := net.Listen("tcp", adminAddr)
+	if err != nil {
+		log.Printf("管理口 %s 起不来（不影响主服务）: %v", adminAddr, err)
+	} else {
+		defer adminLn.Close()
+		certFile := cfg.TLSCert
+		if cert != nil && cert.SelfSigned {
+			certFile = filepath.Join(cfg.Dir, "tls", "cert.pem")
+		}
+		h := admin.Handler(admin.Deps{
+			Cfg: cfg, Store: store, Passkeys: passkeys, Gate: gate, ACME: acmeMgr,
+			CertFile: certFile, SelfSigned: cert != nil && cert.SelfSigned,
+			PairURL: func(code string) string { return pairURL(cfg, code) },
+		})
+		go func() {
+			if err := http.Serve(adminLn, h); err != nil {
+				log.Printf("管理口挂了: %v", err)
+			}
+		}()
+	}
+
+	banner(cfg, store, passkeys, cert, web == nil, adminAddr)
 	defer store.Flush() // 把攒着的 LastSeen 落盘
 	return http.Serve(ln, srv.Handler())
 }
@@ -480,7 +507,7 @@ func certIPs(cfg *config.Config) []net.IP {
 	return ips
 }
 
-func banner(cfg *config.Config, store *auth.Store, passkeys *auth.Passkeys, cert *tlsgen.Result, noWeb bool) {
+func banner(cfg *config.Config, store *auth.Store, passkeys *auth.Passkeys, cert *tlsgen.Result, noWeb bool, adminAddr string) {
 	fmt.Println()
 	fmt.Println("  herdr-web 已启动")
 	fmt.Println("  " + base(cfg, "127.0.0.1") + "/")
@@ -496,6 +523,7 @@ func banner(cfg *config.Config, store *auth.Store, passkeys *auth.Passkeys, cert
 		}
 		fmt.Printf("  %s/   %s%s\n", base(cfg, n.Address), n.Name, tag)
 	}
+	fmt.Printf("  管理页（只本机能开）：http://%s/\n", adminAddr)
 	fmt.Printf("  shell：%s   数据目录：%s\n", cfg.Shell, cfg.Dir)
 	fmt.Printf("  herdr socket：%s\n", cfg.Socket)
 
