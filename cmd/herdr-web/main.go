@@ -15,6 +15,7 @@ package main
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io/fs"
 	"log"
@@ -28,6 +29,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"git.huglight.cn/bysir/herdr-web/internal/acme"
 	"git.huglight.cn/bysir/herdr-web/internal/auth"
 	"git.huglight.cn/bysir/herdr-web/internal/config"
 	"git.huglight.cn/bysir/herdr-web/internal/ctl"
@@ -134,6 +136,33 @@ func serve(webDir string) error {
 	//   - 没暴露 → 本机 / 局域网，照常豁免。
 	gate.ExemptLoopback = cfg.TrustProxy || !cfg.Exposed
 
+	// ACME 要在 tlsgen 之前：签完把路径交给它，后面就当成「用户指定的证书」走。
+	if cfg.ACMEDNS != "" {
+		ac := acme.Config{
+			Dir: cfg.DataDir, Domains: cfg.Hostnames, Email: cfg.ACMEEmail,
+			DNS: cfg.ACMEDNS, Staging: cfg.ACMEStaging,
+		}
+		certFile, keyFile, renewed, err := ac.Ensure()
+		if err != nil {
+			return fmt.Errorf("ACME 签证书失败: %w", err)
+		}
+		if renewed {
+			log.Printf("已签下 %s 的证书", strings.Join(cfg.Hostnames, " "))
+		}
+		cfg.TLSCert, cfg.TLSKey, cfg.TLSMode = certFile, keyFile, "files"
+
+		// 半天看一次要不要续。续完不用重启 —— tlsgen 那边会在十秒内热重载。
+		go func() {
+			for range time.Tick(12 * time.Hour) {
+				if _, _, renewed, err := ac.Ensure(); err != nil {
+					alert("证书续期失败（先看 DNS 凭据还在不在）：" + err.Error())
+				} else if renewed {
+					log.Printf("证书已续期，热重载会在十秒内生效")
+				}
+			}
+		}()
+	}
+
 	var cert *tlsgen.Result
 	if cfg.ServesTLS() {
 		if cert, err = tlsgen.Load(cfg.Dir, cfg.TLSCert, cfg.TLSKey, certIPs(cfg), cfg.Hostnames); err != nil {
@@ -177,10 +206,12 @@ func serve(webDir string) error {
 		return fmt.Errorf("监听 %s 失败: %w", addr, err)
 	}
 	if cert != nil {
-		ln = tls.NewListener(ln, &tls.Config{
-			Certificates: []tls.Certificate{cert.Cert},
-			MinVersion:   tls.VersionTLS12,
-		})
+		cert.OnReload = func(leaf *x509.Certificate) {
+			if leaf != nil {
+				log.Printf("换上了新证书（到期 %s）", leaf.NotAfter.Format("2006-01-02"))
+			}
+		}
+		ln = tls.NewListener(ln, cert.TLSConfig())
 	}
 
 	if l, err := ctl.Listen(cfg.Dir, ctlHandler(cfg, store, gate)); err != nil {
@@ -492,6 +523,16 @@ func banner(cfg *config.Config, store *auth.Store, passkeys *auth.Passkeys, cert
 			fmt.Println("  证书：自签")
 			fmt.Println("    CA 指纹  SHA-256 " + short(cert.CAFP))
 			fmt.Println("    想彻底去掉浏览器警告：把 " + cert.CAPath + " 装到设备上并信任")
+		} else if cfg.ACMEDNS != "" {
+			left := "?"
+			if d, ok := (acme.Config{Dir: cfg.DataDir, Domains: cfg.Hostnames}).ValidFor(); ok {
+				left = fmt.Sprintf("%.0f 天后到期", d.Hours()/24)
+			}
+			env := "正式"
+			if cfg.ACMEStaging {
+				env = "**测试环境（浏览器不认这张证书）**"
+			}
+			fmt.Printf("  证书：ACME 自动签发（DNS-01 / %s / %s），%s\n", cfg.ACMEDNS, env, left)
 		} else {
 			fmt.Println("  证书：用的是 " + cfg.TLSCert)
 		}

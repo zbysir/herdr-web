@@ -384,6 +384,19 @@ func TestStoreRoundTrip(t *testing.T) {
 		t.Errorf("没上条的键应当留在库里: %+v", off)
 	}
 
+	// **读出来原样存回去**必须能过：编辑器就是这么干的（两个字段都回传，Send 是
+	// 上次解析出的字节）。拿 Send 当谱重解一次的话 Tab 的 "\t" 会变成「谱是空的」
+	if _, err := s.Save(DefaultConfig()); err != nil {
+		t.Fatal(err)
+	}
+	round := s.Load()
+	if _, err := s.Save(round); err != nil {
+		t.Fatalf("读出来原样存回去应当能过: %v", err)
+	}
+	if back := s.Load(); len(back.Lib) != len(round.Lib) || back.Lib[5].Spec != round.Lib[5].Spec {
+		t.Errorf("原样存回去之后变了: %+v vs %+v", back.Lib[5], round.Lib[5])
+	}
+
 	// 老文件（row / off 长在按键上、没有 bar）要能迁过来
 	oldFile := `{"keys":[{"label":"⌨","act":"kbd"},{"label":"Esc","send":"esc","row":2},{"label":"库里","send":"tab","off":true}],"rows":2}`
 	_ = os.WriteFile(s.path(), []byte(oldFile), 0o600)

@@ -140,17 +140,26 @@ export interface DraftResult extends PaneInfo { pushed?: number; skipped?: 'not-
 export interface UploadResult { path: string; name: string; bytes: number; kind: string; dir: string }
 
 export interface SoftKey {
+  id?: string         // 稳定标识，软键条按这个引用（服务端存盘时补齐）
   label: string
   wide?: boolean
   confirm?: boolean   // 要点两下才发（防误触）
-  row?: 1 | 2         // 2 = 软键条第二行；空 / 1 = 第一行
-  off?: boolean       // 只在键库里，不上条（这时候 row 没意义）
   send?: string    // 解析出来的字节（前端照发）
   spec?: string    // 用户写的按键谱（编辑器回显）
   sticky?: 'ctrl' | 'alt'
   act?: 'kbd' | 'img' // 网页端自己处理，不发字节
 }
 export interface PresetGroup { group: string; items: SoftKey[] }
-export interface SoftkeysResponse { keys: SoftKey[]; rows: 1 | 2; max: number; presets: PresetGroup[] }
-/** PUT / DELETE /softkeys 的回包：行数和键一起进出，见服务端注释 */
-export interface SoftkeysSaved { keys: SoftKey[]; rows: 1 | 2 }
+/**
+ * 软键条配置分两半（见服务端 internal/softkeys 的包注释）：
+ * `lib` 是「我的按键」的定义，`bar` 每行是一串指向 lib 的 **id**。
+ * 存 id 才能做到「同一个键两行各放一个」「改一处定义条上全变」。
+ */
+export interface SoftkeysConfig { rows: 1 | 2; lib: SoftKey[]; bar: string[][] }
+export interface SoftkeysResponse extends SoftkeysConfig { max: number; maxBar: number; presets: PresetGroup[] }
+
+/** 把 bar 里的 id 换成真的按键定义。认不出的 id 直接跳过（服务端不该给出这种，防一手） */
+export function resolveBar(lib: SoftKey[], bar: string[][]): SoftKey[][] {
+  const by = new Map(lib.map((k) => [k.id, k]))
+  return bar.map((row) => row.map((id) => by.get(id)).filter((k): k is SoftKey => !!k))
+}

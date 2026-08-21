@@ -1,17 +1,47 @@
 @import "tailwindcss";
 @import "@xterm/xterm/css/xterm.css";
 
-/* 沿用原来那套 one-dark 取向的配色，明暗两套 */
+/*
+  配色是 Supabase 那一套「零饱和中性灰 + 一点品牌绿」，换掉了原来 one-dark 取向的
+  蓝灰。两条取舍值得记一下：
+
+  1. 灰阶**不带色调**（S=0 的纯灰）。原来的 #1b1e24 是偏蓝的板岩灰，和终端里那些
+     彩色输出叠在一起显脏；纯灰的底让内容自己出彩，界面自己往后退。
+  2. 绿只当**强调色**，不做「选中就整块涂满」。打开 / 选中态一律是「底抬高一层灰 +
+     边框亮一点 + 文字变绿」；饱和填充只留给真正的主操作（投稿 / 配对 / 保存）和
+     粘滞修饰键那种「按下去了必须一眼看见」的状态。原来那个满屏亮蓝色块就是这么来的。
+*/
 @theme {
-  --color-bg: #1b1e24;
-  --color-bar: #23262e;
-  --color-line: #32363f;
-  --color-fg: #c8ccd4;
-  --color-muted: #7d8492;
-  --color-accent: #61afef;
-  --color-ok: #98c379;
-  --color-bad: #e06c75;
-  --radius-card: 10px;
+  /* 灰阶四档：bg 画布（终端）→ bar 面板（顶栏 / 底部面板 / 浮层）→ ctl 控件
+     → ctl-hi 控件 hover。每档差 ~8 个灰阶，够分层又不会像描了边。 */
+  --color-bg: #121212;
+  --color-bar: #1a1a1a;
+  --color-ctl: #232323;
+  --color-ctl-hi: #2c2c2c;
+  /* line 是常规分隔线（比 bar 亮一点点，看得见但不抢眼）；line-hi 给 hover
+     和「这块能拖」的把手 —— 边框变亮本身就是可交互的暗示。 */
+  --color-line: #2a2a2a;
+  --color-line-hi: #3d3d3d;
+
+  /* 文字三档：正文 / 次要（标签、说明）/ 更次要（占位、时间戳、把手） */
+  --color-fg: #ededed;
+  --color-muted: #a0a0a0;
+  --color-faint: #6f6f6f;
+
+  /* 品牌绿。brand 是文字 / 图标 / 描边那一档；brand-bg + brand-line + brand-fg
+     是主按钮那一套填充 —— 深绿底 + 亮一档的描边 + 近白字，而不是把亮绿直接涂满
+     （亮绿涂满在 13px 的小按钮上会刺眼，而且会跟终端里的绿色输出打架）。 */
+  --color-brand: #3ecf8e;
+  --color-brand-bg: #1c6a47;
+  --color-brand-line: #2b8f61;
+  --color-brand-fg: #f2fdf7;
+
+  --color-ok: #3ecf8e;
+  --color-bad: #e5484d;
+
+  /* 浮层用 12px（面板 / 卡片），控件一律 rounded-md=6px —— 两档就够，
+     原来 7/8/10px 混着用，边角看着毛。 */
+  --radius-card: 12px;
 
   /* 手机竖屏这一档。低于这个宽度：底部面板不给拖（把手自己就占地方），软键条一行横滑、
      键小一号，顶栏收成一行。和 hooks/usePhone.ts 里的 PHONE_MAX 是同一个数。 */
@@ -24,18 +54,32 @@
 }
 
 :root.light {
-  --color-bg: #fafafa;
-  --color-bar: #f0f0f2;
-  --color-line: #d9dae0;
-  --color-fg: #383a42;
-  --color-muted: #8a8f9a;
-  --color-accent: #4078f2;
-  --color-ok: #50a14f;
-  --color-bad: #e45649;
+  --color-bg: #fcfcfc;
+  --color-bar: #f4f4f5;
+  /* 亮色里「抬高一层」是往白走：控件是白的、面板是灰的，跟暗色里的方向一致 */
+  --color-ctl: #ffffff;
+  --color-ctl-hi: #ebebec;
+  --color-line: #e3e3e5;
+  --color-line-hi: #cfcfd2;
+  --color-fg: #171717;
+  --color-muted: #5f6066;
+  --color-faint: #8b8c92;
+  /* 亮底上 #3ecf8e 当文字太浅（对比度 ~1.9:1），整条绿往下压两档 */
+  --color-brand: #157f56;
+  --color-brand-bg: #157f56;
+  --color-brand-line: #0f6b47;
+  --color-brand-fg: #ffffff;
+  --color-ok: #12915f;
+  --color-bad: #d02b31;
 }
 
-/* 高度跟 visualViewport 走：iOS 的虚拟键盘从不缩布局视口，Android 也要
+/* 高度跟着 visualViewport 走：iOS 的虚拟键盘从不缩布局视口，Android 也要
    interactive-widget 才缩。只写 100% 的话键盘会盖住软键条和发件箱。 */
+/* 原生控件（<select> 弹出的那张列表、输入法候选框、系统滚动条）跟着这一档走。
+   不写的话暗色主题下 select 的下拉是**白底黑字**，点开一下亮得晃眼。 */
+:root { color-scheme: dark; }
+:root.light { color-scheme: light; }
+
 html, body, #root {
   height: var(--vvh, 100%);
   margin: 0;
@@ -47,8 +91,35 @@ body {
   color: var(--color-fg);
   font: 13px/1.5 -apple-system, "SF Pro Text", "PingFang SC", system-ui, sans-serif;
   -webkit-text-size-adjust: 100%;
+  /* 中文标点和数字挤在小字号里时，不抗锯齿的描边会显得脏 */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 .xterm .xterm-viewport { background: transparent !important; }
+
+::selection {
+  background: color-mix(in srgb, var(--color-brand) 26%, transparent);
+}
+
+/*
+  滚动条：面板里那几块（设置页、键区）默认会画出系统那条又宽又亮的滚动条，在
+  #1a1a1a 的面板上非常扎眼。收成一条 8px 的细线，不占位、不抢注意力，hover 才变亮。
+  Firefox 走 scrollbar-*，WebKit 走伪元素，两套都写。
+*/
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-hi) transparent;
+}
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+  background-color: var(--color-line-hi);
+}
+::-webkit-scrollbar-thumb:hover { background-color: var(--color-faint); }
+::-webkit-scrollbar-corner { background: transparent; }
 
 /* 触屏上干掉长按弹出的选择 / 查找气泡，它会顺带把键盘也顶出来 */
 @media (pointer: coarse) {

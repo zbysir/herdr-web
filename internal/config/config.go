@@ -51,6 +51,15 @@ type Config struct {
 	TLSCert string
 	TLSKey  string
 	TLSMode string
+
+	// ACME：自己去签证书，走 DNS-01。ACMEDNS 是服务商名字（空 = 不签）。
+	//
+	// 为什么必须 DNS-01：HTTP-01 只认 80、TLS-ALPN-01 只认 443，穿透出来的端口经常
+	// 都不是这两个。DNS-01 不需要任何入站连接，所以 NAT 后面、甚至把域名指到内网地址
+	// 都能签 —— 于是纯局域网部署也能有受信任证书（passkey 就靠它）。
+	ACMEDNS     string
+	ACMEEmail   string
+	ACMEStaging bool
 	// Insecure=true 才允许「暴露出去 + 没有 TLS」这种裸奔配置。
 	Insecure bool
 
@@ -184,9 +193,12 @@ func Load() (*Config, error) {
 		OnConnect:   v.GetString("onconnect"),
 		OnConnectMS: intOf(v, "onconnect_ms", 250, 0),
 
-		TLSCert: v.GetString("tls_cert"),
-		TLSKey:  v.GetString("tls_key"),
-		TLSMode: strings.ToLower(v.GetString("tls")),
+		TLSCert:     v.GetString("tls_cert"),
+		TLSKey:      v.GetString("tls_key"),
+		TLSMode:     strings.ToLower(v.GetString("tls")),
+		ACMEDNS:     strings.ToLower(strings.TrimSpace(v.GetString("acme_dns"))),
+		ACMEEmail:   v.GetString("acme_email"),
+		ACMEStaging: v.GetBool("acme_staging"),
 		// 这几个开关 1 / true / yes 都认（viper 的 GetBool），比只认 "1" 宽容
 		Insecure:      v.GetBool("insecure"),
 		Exposed:       v.GetBool("exposed"),
@@ -233,6 +245,15 @@ func Load() (*Config, error) {
 	}
 	if c.TLSCert != "" {
 		c.TLSMode = "files"
+	}
+	// 配了 ACME 就是「本进程自己终止 TLS」。真正的证书路径要等签完才知道，所以先占一个
+	// 档位名，serve() 那边签完再换成 files —— 这样启动早期那个「暴露了没 TLS 就拒绝启动」
+	// 的检查才不会误判。
+	if c.ACMEDNS != "" {
+		c.TLSMode = "acme"
+		if len(c.Hostnames) == 0 {
+			return nil, errors.New("配了 HERDR_WEB_ACME_DNS 就得给 HERDR_WEB_HOSTNAME —— 证书总得签给某个域名")
+		}
 	}
 	if c.Exposed {
 		c.TrustLoopback = false // 声明暴露之后这个豁免只会是个洞
@@ -291,7 +312,9 @@ func (c *Config) PasskeyOrigins() []string {
 }
 
 // ServesTLS：本进程自己终止 TLS 吗。
-func (c *Config) ServesTLS() bool { return c.TLSMode == "auto" || c.TLSMode == "files" }
+func (c *Config) ServesTLS() bool {
+	return c.TLSMode == "auto" || c.TLSMode == "files" || c.TLSMode == "acme"
+}
 
 // BrowserHTTPS：**浏览器眼里**是不是 https。cookie 的 Secure 属性要跟着这个走，
 // 而不是跟着本进程有没有 TLS —— 前置终止 TLS 时本进程收的是 http，但浏览器是 https。

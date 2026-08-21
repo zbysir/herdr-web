@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Keyboard, Pencil, CircleHalf, Gear, AArrowDown, AArrowUp, Maximize, Minimize } from './icons'
-import { api, UNAUTHED, type SoftKey, type SoftkeysResponse, type State, type UnauthedDetail, type WhoAmI } from '@/lib/api'
+import { api, resolveBar, UNAUTHED, type SoftKey, type SoftkeysResponse, type State, type UnauthedDetail, type WhoAmI } from '@/lib/api'
 import { Session } from '@/term/session'
 import { initialScheme, type Scheme } from '@/term/themes'
 import { useViewportHeight } from '@/hooks/useViewportHeight'
@@ -80,9 +80,9 @@ export default function App() {
     lsBool('softkeys', matchMedia('(pointer: coarse)').matches),
   )
   const [live, setLive] = useState(() => lsBool('composeLive', false))
-  const [keys, setKeys] = useState<SoftKey[]>([])
-  // 软键条几行（服务端存的设置）。编辑器存完会连着键一起回来
-  const [keyRows, setKeyRows] = useState<1 | 2>(1)
+  // 软键条每行的按键（已按 id 解析好）。几行、哪个键在哪一行都是服务端存的配置，
+  // 编辑器存完把整份配置回传过来
+  const [bar, setBar] = useState<SoftKey[][]>([])
   const [cfg, setCfg] = useState({ poll: urlNum('poll') ?? 500, push: urlNum('push') ?? 700 })
   const [state, setState] = useState<State | null>(null)
 
@@ -248,8 +248,7 @@ export default function App() {
       } catch { /* 拿不到就用默认值 */ }
       try {
         const sk = await api.get<SoftkeysResponse>('/softkeys')
-        setKeys(sk.keys)
-        setKeyRows(sk.rows || 1)
+        setBar(resolveBar(sk.lib, sk.bar))
       } catch { /* 软键条拿不到就先空着，面板里还能改 */ }
       void compose.loadPanes(true)
     })()
@@ -482,7 +481,7 @@ export default function App() {
             opts={opts}
             setOpt={(k, v) => setOpts((o) => ({ ...o, [k]: v }))}
             heals={heals}
-            onSaved={(k, r) => { setKeys(k); setKeyRows(r) }}
+            onSaved={(lib, b) => setBar(resolveBar(lib, b))}
             toast={toast}
             state={state}
             fontSize={fontSize}
@@ -501,8 +500,7 @@ export default function App() {
           onLayout={relayout}
           keys={showKeys ? (
             <Softkeys
-              keys={keys}
-              rows={keyRows}
+              bar={bar}
               sticky={sticky}
               kbdUp={kbdUp}
               onSend={(b) => { sess.current?.sendKey(b); if (kbdUp) sess.current?.focus() }}

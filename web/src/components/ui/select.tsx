@@ -1,5 +1,6 @@
 // 原生 <select>：手机上会调起系统选择器（比自绘列表好用得多），
 // 而这个项目的下拉全是「选一个 pane / 选一个预设」这类朴素场景。
+// 弹出来那张列表的明暗归 CSS 的 color-scheme 管（见 index.css），这儿只管收起来的样子。
 import * as React from 'react'
 import { cn } from '@/lib/utils'
 
@@ -8,8 +9,9 @@ export const Select = React.forwardRef<HTMLSelectElement, React.SelectHTMLAttrib
     <select
       ref={ref}
       className={cn(
-        'rounded-[7px] border border-line bg-bg px-[9px] py-1.5 text-xs text-fg font-mono cursor-pointer',
-        'focus:outline focus:outline-accent focus:border-accent',
+        'rounded-md border border-line bg-ctl px-2.5 py-1.5 text-xs text-fg font-mono cursor-pointer',
+        'outline-none transition-[border-color,box-shadow] duration-100',
+        'hover:border-line-hi focus:border-brand/70 focus:ring-2 focus:ring-brand/15',
         className,
       )}
       {...props}

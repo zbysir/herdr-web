@@ -10,8 +10,11 @@ export const Checkbox = React.forwardRef<
   <C.Root
     ref={ref}
     className={cn(
-      'size-4 shrink-0 rounded-[4px] border border-line bg-bg cursor-pointer',
-      'data-[state=checked]:bg-accent data-[state=checked]:border-transparent data-[state=checked]:text-white',
+      'size-4 shrink-0 rounded-[5px] border border-line-hi bg-bg cursor-pointer',
+      'outline-none transition-[background-color,border-color] duration-100',
+      'hover:border-brand/50 focus-visible:ring-2 focus-visible:ring-brand/35',
+      // 勾上是唯一该用饱和绿的地方：一排复选框里要能扫一眼看出哪几个开着
+      'data-[state=checked]:border-brand data-[state=checked]:bg-brand data-[state=checked]:text-bg',
       className,
     )}
     {...props}

@@ -57,16 +57,29 @@ herdr-web 后面是**一个登录 shell**（发件箱那条路即使不开终端
 HERDR_WEB_HOST=0.0.0.0 ./herdr-web        # 自动自签证书，扫终端里的二维码
 ```
 
-**C**：把域名的 A 记录指到内网地址（`herdr.example.com → 192.168.1.5`），用 **DNS-01** 签证书
-（`lego` / `acme.sh` 都行）。DNS-01 不需要外网能连进来，所以内网地址也签得出来。公网上一个
-端口都不用开。
+**C**：把域名的 A 记录指到内网地址（`herdr.example.com → 192.168.1.5`），**证书 herdr-web
+自己会签**（DNS-01 不需要外网能连进来，所以内网地址也签得出来）。公网上一个端口都不用开。
 
 ```bash
 HERDR_WEB_HOST=0.0.0.0 \
 HERDR_WEB_HOSTNAME=herdr.example.com \
-HERDR_WEB_TLS_CERT=/path/fullchain.pem HERDR_WEB_TLS_KEY=/path/privkey.pem \
+HERDR_WEB_ACME_DNS=cloudflare \
+CLOUDFLARE_DNS_API_TOKEN=... \
 ./herdr-web
 ```
+
+支持 `cloudflare` / `alidns`（阿里云）/ `tencentcloud`（腾讯云）/ `route53`（AWS）/
+`digitalocean` / `huaweicloud`。**第一次先加 `HERDR_WEB_ACME_STAGING=1`** 跑通流程 ——
+正式环境同一组域名一周只给 5 张证书，反复试会把自己锁一周。签完的证书放在
+`~/.herdr-web/data/acme/`，到期前 30 天自动续，续完**不用重启**（热重载）。
+
+已经有证书（`lego` / `acme.sh` / certbot 管的）也行，直接指过去：
+
+```bash
+HERDR_WEB_TLS_CERT=/path/fullchain.pem HERDR_WEB_TLS_KEY=/path/privkey.pem ./herdr-web
+```
+
+那种也会热重载 —— 你的续期脚本换了文件，十秒内自己捡起来，不用重启。
 
 **D**：家宽在 NAT 后面没有公网入站，所以要么有公网 IP（**先检查有没有公网 IPv6，很多宽带都有，
 那就什么隧道都不用**），要么用隧道。隧道分两类，区别不是好不好配，是**这个口在不在公网上**：
@@ -97,7 +110,7 @@ HERDR_WEB_PUBLIC_URL=https://herdr.example.com:12345 \   # 公网端口和本地
 | 砍掉 | 省了什么 | 代价 |
 |---|---|---|
 | 域名（改用 IP + 自签） | 不用买域名、不用配 DNS token | 每台设备第一次要点「继续访问」，而且**永久失去 passkey**（浏览器规定它的标识必须是域名，IP 不行） |
-| 反代 | 少一个组件 | 无 —— 而且更安全：反代是会解密你终端画面的那一跳，去掉它就是端到端加密 |
+| 反代 | 少一个组件 | 无 —— 而且更安全：反代是会解密你终端画面的那一跳，去掉它就是端到端加密。证书让 `HERDR_WEB_ACME_DNS` 自己签就行 |
 | 隧道 | 少一个组件 | 只有在你有公网 IP（含 IPv6）时才能砍，否则外网连不上 |
 | TLS（`HERDR_WEB_INSECURE=1`） | 什么都不用准备 | **别这么干**。同网抓包就拿到你的凭据和整个终端。只适合临时调试 |
 | 撤销 / 限速 / Host 白名单 | — | 不提供关掉的开关，它们没有摩擦，也没有理由关 |

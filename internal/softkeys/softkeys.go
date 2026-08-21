@@ -247,7 +247,10 @@ func normalize(k Key, i int) (Key, error) {
 		}
 		out.Act = k.Act
 	default:
-		out.Spec = strings.TrimSpace(k.Send)
+		// **认 Spec 优先**：编辑器回传的那份往往两个字段都在（Spec 是用户写的 "tab"，
+		// Send 是服务端上次解析出来的字节 "\t"）。拿 Send 当谱再解一次的话，"\t"
+		// TrimSpace 之后是空串 —— 报「按键谱是空的」，而用户什么都没改（踩过）。
+		out.Spec = strings.TrimSpace(firstNonEmpty(k.Spec, k.Send))
 		send, err := ParseSpec(out.Spec)
 		if err != nil {
 			return Key{}, fmt.Errorf("%s：%w", at, err)

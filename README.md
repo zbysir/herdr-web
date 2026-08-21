@@ -230,7 +230,8 @@ cmd/herdr-web/        main：flag、子命令、监听、启动横幅、网卡�
 internal/
   config/             环境变量（viper，只认 env）、路径、部署形态（TLS 档位 / 暴露声明 / 白名单）
   auth/               配对码 + 设备凭据（只存哈希）+ 限速封锁（gate.go）
-  tlsgen/             本地 CA + 短期叶子证书；或者加载指定的真证书
+  acme/               DNS-01 自动签发和续期（只 import 用到的 provider，见包注释）
+  tlsgen/             本地 CA + 短期叶子证书 / 指定的真证书，都带热重载
   ctl/                ~/.herdr-web/ctl.sock：子命令和跑着的服务之间的通道
   herdr/              herdr socket 客户端（一次调用一条连接）
   composer/           按 agent 分派抽输入框 + testdata 里的真机抓屏
@@ -336,6 +337,9 @@ export HERDR_WEB_TLS=auto
 |---|---|---|
 | `HERDR_WEB_EXPOSED` | 关 | `=1` **声明这个口能从公网碰到**（frp / 端口转发 / 隧道）。走 frp 时本进程往往只监听 127.0.0.1，「监听地址是不是本机」这个判据完全失效，没法自动测，只能你自己说。声明之后：强制要求 TLS、关掉本机免配对 |
 | `HERDR_WEB_TLS_CERT` / `_KEY` | 空 | 用指定的证书。自己有域名、DNS-01 签了张真证书就走这条 —— 浏览器零警告、不用装描述文件，最省事 |
+| `HERDR_WEB_ACME_DNS` | 空 | 让 herdr-web **自己去签证书**，值是 DNS 服务商：`cloudflare` / `alidns` / `tencentcloud` / `route53` / `digitalocean` / `huaweicloud`。走 DNS-01，所以不需要外网能连进来 —— NAT 后面、甚至域名指到内网地址都能签。凭据只从环境变量读、不落盘（各家要哪几个变量见 `.env.example`，写错了启动时会告诉你） |
+| `HERDR_WEB_ACME_EMAIL` | 空 | ACME 账号邮箱。可以空着，但那样到期提醒也收不到 |
+| `HERDR_WEB_ACME_STAGING` | 关 | `=1` 用 Let's Encrypt 测试环境。**调试时一定先开**：正式环境同一组域名一周只给 5 张证书，试几次就把自己锁一周 |
 | `HERDR_WEB_TLS` | 见说明 | `auto` 自签（本地 CA + 397 天叶子，IP 变了自动重签）/ `off` 明文 / `proxy` 前置已经终止了 TLS。默认：暴露或听局域网 → `auto`，纯本机 → `off` |
 | `HERDR_WEB_HOSTNAME` | 空 | 允许出现在 `Host` 头里的域名，逗号分隔。**IP 一律放行，域名必须在名单里** —— 这是 DNS rebinding 的唯一防线，不在名单里直接 421 |
 | `HERDR_WEB_PUBLIC_URL` | 空 | 你**实际访问**的地址（`https://herdr.example.com:17788`）。frp 的公网端口和本地端口经常不是一个，不给就横幅上的二维码是废的。里面的域名自动进白名单 |

@@ -5,6 +5,7 @@ import { Button } from './ui/button'
 import { Checkbox } from './ui/checkbox'
 import { SoftkeysPanel } from './SoftkeysPanel'
 import { DevicesPanel } from './DevicesPanel'
+import { cn } from '@/lib/utils'
 
 /**
  * 一个设置面板，装完所有设置。
@@ -38,7 +39,7 @@ export function SettingsPanel({
   opts: TermOpts
   setOpt: (k: keyof TermOpts, v: boolean) => void
   heals: number
-  onSaved: (keys: SoftKey[], rows: 1 | 2) => void
+  onSaved: (lib: SoftKey[], bar: string[][]) => void
   toast: (m: string) => void
   /** 启动时那次 /api/state 的结果，「终端」页底下当环境信息显示；没拿到就不显示 */
   state?: State | null
@@ -51,17 +52,24 @@ export function SettingsPanel({
   return (
     <Panel title="设置" onClose={onClose} className="w-[560px]">
       {/* 分页条粘在顶上：软键条那页很长，滚下去还得能换页。
-          按键用默认尺寸而不是 tiny —— 手指要点得中 */}
-      <nav className="sticky top-0 z-1 -mx-3 mb-2 flex gap-1.5 border-b border-line bg-bar px-3 pt-0.5 pb-2">
+          下划线式，不是三个填充按钮 —— 三个色块并排时「当前是哪一页」只能靠颜色深浅
+          去猜，而下划线是位置信息，扫一眼就知道自己在第几页。手指要点得中的那点高度
+          靠 py-2.5 撑（约 38px），不靠按钮外壳。 */}
+      <nav className="sticky top-0 z-1 -mx-4 mb-3 flex gap-5 border-b border-line bg-bar px-4">
         {TABS.map((t) => (
-          <Button
+          <button
             key={t.id}
+            type="button"
             data-testid={`settings-tab-${t.id}`}
-            on={tab === t.id}
+            className={cn(
+              'relative -mb-px cursor-pointer border-b-2 px-0.5 py-2.5 text-[13px] outline-none',
+              'transition-colors focus-visible:ring-2 focus-visible:ring-brand/35',
+              tab === t.id ? 'border-brand text-fg' : 'border-transparent text-muted hover:text-fg',
+            )}
             onClick={() => onTab(t.id)}
           >
             {t.label}
-          </Button>
+          </button>
         ))}
       </nav>
 
@@ -89,22 +97,23 @@ function TermSection({
   scheme: 'dark' | 'light'
   onScheme: () => void
 }) {
+  // 每条一行、勾在最左边。gap 给 2.5：勾和字贴太近时一排四条看着像一坨
   const row = (k: keyof TermOpts, label: string) => (
-    <label className="flex cursor-pointer items-start gap-1.5">
-      <Checkbox checked={opts[k]} onCheckedChange={(v) => setOpt(k, !!v)} />
-      <span>{label}</span>
+    <label className="flex cursor-pointer items-start gap-2.5 rounded-md py-1 transition-colors hover:text-fg">
+      <span className="pt-px"><Checkbox checked={opts[k]} onCheckedChange={(v) => setOpt(k, !!v)} /></span>
+      <span className="text-[13px]/relaxed">{label}</span>
     </label>
   )
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-0.5">
       {/* 字号和明暗：手机竖屏（< 440px）的顶栏放不下这三个图标，那一档只能从这儿调。
           宽屏顶栏里那三个还在，这里是同一套动作，不是另一份状态 */}
-      <div className="mb-1 flex flex-wrap items-center gap-1.5 border-b border-line pb-2.5">
-        <span className="text-muted">字号 {fontSize}px</span>
+      <div className="mb-2 flex flex-wrap items-center gap-2 border-b border-line pb-3">
+        <span className="text-xs text-muted tabular-nums">字号 {fontSize}px</span>
         <Button size="icon" title="缩小字号" onClick={() => onFont(-1)}><AArrowDown className="size-4" /></Button>
         <Button size="icon" title="放大字号" onClick={() => onFont(1)}><AArrowUp className="size-4" /></Button>
-        <Button size="icon" className="ml-1.5" title="切换明暗" onClick={onScheme}><CircleHalf className="size-4" /></Button>
-        <span className="text-muted">{scheme === 'dark' ? '暗' : '亮'}</span>
+        <span className="ml-2 text-xs text-muted">{scheme === 'dark' ? '暗色' : '亮色'}</span>
+        <Button size="icon" title="切换明暗" onClick={onScheme}><CircleHalf className="size-4" /></Button>
       </div>
 
       {row('kitty', 'kitty 键盘协议（Ctrl+Shift+x / Ctrl+数字 / Ctrl+Enter）')}
@@ -113,22 +122,22 @@ function TermSection({
       {row('sync2026', '同步输出 DEC 2026（防画面撕裂；留一块空白画不上来时关它）')}
 
       {heals > 0 && (
-        <p className="text-[11.5px]/relaxed text-muted">
+        <p className="text-xs/relaxed text-muted">
           同步输出补过 {heals} 次收尾：herdr 的 2026 帧没等到 ESU，重绘被攒住了
           （缓冲区没坏，只是没画上）。频繁出现就把上面的同步输出关掉。
         </p>
       )}
 
-      <p className="mt-1 border-t border-line pt-2.5 text-[11.5px]/relaxed text-muted">
+      <p className="mt-3 border-t border-line pt-3 text-xs/relaxed text-muted">
         复制：⌘C / Ctrl+Shift+C　粘贴：⌘V　清屏：⌘K　浏览器自己吃掉的键：⌘W ⌘T ⌘N Ctrl+Tab
       </p>
 
       {state && (
-        <dl className="m-0 grid grid-cols-[auto_1fr] gap-x-2.5 gap-y-1 text-[11.5px] text-muted">
-          <dt>后端</dt>
-          <dd className="m-0 truncate">{state.user}@{state.hostname} · {state.shell}</dd>
-          <dt>socket</dt>
-          <dd className="m-0 truncate">{state.herdrSocket}</dd>
+        <dl className="m-0 mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+          <dt className="text-faint">后端</dt>
+          <dd className="m-0 truncate text-muted">{state.user}@{state.hostname} · {state.shell}</dd>
+          <dt className="text-faint">socket</dt>
+          <dd className="m-0 truncate font-mono text-muted">{state.herdrSocket}</dd>
         </dl>
       )}
     </div>

@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -41,6 +42,73 @@ type Result struct {
 	CAPath       string
 	SelfSigned   bool
 	DNSNames     []string // 证书里的域名，给 Host 白名单当输入
+	// OnReload 换上新证书之后回调一次（打日志用）。
+	OnReload func(*x509.Certificate)
+
+	// 热重载：证书在磁盘上被换掉（ACME 续期、IP 变了重签）之后，跑着的进程要能捡起来。
+	// 不然表现是「续期脚本明明成功了，某天早上所有设备一起报证书过期，重启一下就好」——
+	// 而这个进程重启的代价比普通 web 服务高得多：每个连着的终端都会断、PTY 被杀。
+	certFile, keyFile string
+	mu                sync.RWMutex
+	cur               *tls.Certificate
+	mtimes            [2]time.Time
+	checked           time.Time
+}
+
+// TLSConfig 给 tls.NewListener 用。走 GetCertificate 回调而不是静态的 Certificates，
+// 这样换证书不用重启。
+func (r *Result) TLSConfig() *tls.Config {
+	r.cur = &r.Cert
+	r.mtimes = r.stat()
+	r.checked = time.Now()
+	return &tls.Config{GetCertificate: r.get, MinVersion: tls.VersionTLS12}
+}
+
+func (r *Result) get(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	r.reloadIfChanged()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.cur, nil
+}
+
+func (r *Result) stat() [2]time.Time {
+	var out [2]time.Time
+	for i, p := range [2]string{r.certFile, r.keyFile} {
+		if st, err := os.Stat(p); err == nil {
+			out[i] = st.ModTime()
+		}
+	}
+	return out
+}
+
+// reloadIfChanged 每 10 秒最多看一次 —— 每次握手都 stat 两个文件太浪费。
+func (r *Result) reloadIfChanged() {
+	if r.certFile == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if time.Since(r.checked) < 10*time.Second {
+		return
+	}
+	r.checked = time.Now()
+	now := r.stat()
+	if now == r.mtimes {
+		return
+	}
+	// **只有整对都能对上才替换**：续期工具写 cert 和 key 是两次、不原子的，
+	// 中间那一瞬读到的是「新证书 + 旧私钥」。X509KeyPair 会校验它们配不配对，
+	// 不配对就保留旧的、下一拍再试 —— 宁可服务一张过期证书（用户能点继续），
+	// 也不能握手直接失败。
+	c, err := tls.LoadX509KeyPair(r.certFile, r.keyFile)
+	if err != nil {
+		return
+	}
+	r.cur = &c
+	r.mtimes = now
+	if r.OnReload != nil {
+		go r.OnReload(c.Leaf)
+	}
 }
 
 // Load 优先用 certFile/keyFile；两个都空就在 dir/tls 下自签（够用就复用，不够就重签）。
@@ -55,7 +123,10 @@ func Load(dir, certFile, keyFile string, ips []net.IP, names []string) (*Result,
 			return nil, err
 		}
 		c.Leaf = leaf
-		return &Result{Cert: c, LeafFP: fingerprint(c.Certificate[0]), DNSNames: leaf.DNSNames}, nil
+		return &Result{
+			Cert: c, LeafFP: fingerprint(c.Certificate[0]), DNSNames: leaf.DNSNames,
+			certFile: certFile, keyFile: keyFile,
+		}, nil
 	}
 
 	d := filepath.Join(dir, "tls")
@@ -66,7 +137,7 @@ func Load(dir, certFile, keyFile string, ips []net.IP, names []string) (*Result,
 	if err != nil {
 		return nil, err
 	}
-	leafPEM, keyPEM, leafDER, err := loadOrMakeLeaf(d, caCert, caKey, ips, names)
+	leafPEM, keyPEM, leafDER, err := loadOrMakeLeaf(d, caCert, caDER, caKey, ips, names)
 	if err != nil {
 		return nil, err
 	}
@@ -74,12 +145,10 @@ func Load(dir, certFile, keyFile string, ips []net.IP, names []string) (*Result,
 	if err != nil {
 		return nil, err
 	}
-	// 把 CA 也带上：有些客户端拿到完整链才不报「证书不完整」，而且不影响「根本来就不被信任」
-	// 这件事 —— 该点的「继续访问」还是要点，除非装了 CA。
-	cert.Certificate = append(cert.Certificate, caDER)
 	return &Result{
 		Cert: cert, LeafFP: fingerprint(leafDER), CAFP: fingerprint(caDER),
 		CAPath: filepath.Join(d, "ca.pem"), SelfSigned: true, DNSNames: names,
+		certFile: filepath.Join(d, "cert.pem"), keyFile: filepath.Join(d, "key.pem"),
 	}, nil
 }
 
@@ -111,14 +180,14 @@ func loadOrMakeCA(d string) (*x509.Certificate, *ecdsa.PrivateKey, []byte, error
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if err := writePair(certPath, keyPath, der, key); err != nil {
+	if err := writePair(certPath, keyPath, der, der, key); err != nil {
 		return nil, nil, nil, err
 	}
 	c, err := x509.ParseCertificate(der)
 	return c, key, der, err
 }
 
-func loadOrMakeLeaf(d string, ca *x509.Certificate, caKey *ecdsa.PrivateKey, ips []net.IP, names []string) (certPEM, keyPEM, der []byte, err error) {
+func loadOrMakeLeaf(d string, ca *x509.Certificate, caDER []byte, caKey *ecdsa.PrivateKey, ips []net.IP, names []string) (certPEM, keyPEM, der []byte, err error) {
 	certPath, keyPath := filepath.Join(d, "cert.pem"), filepath.Join(d, "key.pem")
 	if oldDER, _, e := readPair(certPath, keyPath); e == nil {
 		if c, e := x509.ParseCertificate(oldDER); e == nil && covers(c, ca, ips, names) {
@@ -151,7 +220,9 @@ func loadOrMakeLeaf(d string, ca *x509.Certificate, caKey *ecdsa.PrivateKey, ips
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if err := writePair(certPath, keyPath, der, key); err != nil {
+	// 写 fullchain（叶子 + CA）而不是只写叶子：热重载那边只会重新读这个文件，
+	// 要是链上的 CA 只活在内存里，重载之后就丢了。
+	if err := writePair(certPath, keyPath, append(der, caDER...), der, key); err != nil {
 		return nil, nil, nil, err
 	}
 	cp, _ := os.ReadFile(certPath)
@@ -216,12 +287,24 @@ func readPair(certPath, keyPath string) ([]byte, *ecdsa.PrivateKey, error) {
 	return cblk.Bytes, key, nil
 }
 
-func writePair(certPath, keyPath string, der []byte, key *ecdsa.PrivateKey) error {
+// writePair：chain 是要写进证书文件的（可能是 叶子+CA 两块），der 只用来算指纹。
+func writePair(certPath, keyPath string, chain, der []byte, key *ecdsa.PrivateKey) error {
 	kb, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644); err != nil {
+	// 用复数版：ParseCertificate（单数）后面还有数据会直接报 trailing data，
+	// 而我们传进来的就是「叶子 DER + CA DER」拼在一起的。
+	var buf []byte
+	if certs, err := x509.ParseCertificates(chain); err == nil {
+		for _, c := range certs {
+			buf = append(buf, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})...)
+		}
+	}
+	if len(buf) == 0 {
+		buf = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	}
+	if err := os.WriteFile(certPath, buf, 0o644); err != nil {
 		return err
 	}
 	return os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: kb}), 0o600)
