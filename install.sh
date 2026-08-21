@@ -7,6 +7,10 @@
 # 环境变量：
 #   HERDR_WEB_INSTALL_DIR   装到哪（默认 ~/.local/bin）
 #   HERDR_WEB_INSTALL_VER   装哪一版（默认最新，写法 v1.2.3）
+#
+# 管道用法下变量要给 sh，不是给 curl —— 给错了不报错，只是静默用默认值：
+#   curl -fsSL …/install.sh | HERDR_WEB_INSTALL_DIR=/opt/bin sh    # 对
+#   HERDR_WEB_INSTALL_DIR=/opt/bin curl -fsSL …/install.sh | sh    # 错
 set -eu
 
 REPO=zbysir/herdr-web
