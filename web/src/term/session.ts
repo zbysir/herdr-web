@@ -40,6 +40,7 @@ function openLink(uri: string) {
   }
   window.open(u.href, '_blank', 'noopener,noreferrer')
 }
+import { pathLinkProvider } from './paths'
 import { THEMES, type Scheme } from './themes'
 import { attachTouch } from './touch'
 
@@ -55,6 +56,12 @@ export interface SessionCallbacks {
    * 文本交回 UI，让它出一个「点一下复制」—— 那一下点击本身就是手势。
    */
   onCopyBlocked: (text: string) => void
+  /**
+   * 终端里点了一条文件路径。**给的是屏幕上的原样**（可能是相对的、可能带 `~`）——
+   * 解析基准是那个 pane 的 cwd，而「哪个 pane」只有 React 那边知道（面板列表在它手上），
+   * 所以这一层只管认出来往上传，不管解。
+   */
+  onPath: (raw: string) => void
 }
 
 // 程序请求过的私有模式 → 人话 + 我们是否真支持
@@ -82,6 +89,17 @@ const THAW_CAP = 500 // 一直等不到重绘也得撤，别糊着一张旧图�
 const THAW_FADE = 200 // 淡出时长，跟内联的 transition 对齐
 const FREEZE_MAX = 700 // 连续重排最多接着用同一张（拖窗口时别把终端冻死）
 
+// 自动重连（见下面的 retry / wake）。
+//
+// 手机和平板锁屏时系统会把页面挂起，WebSocket 跟着断 —— 这一侧拦不住，那是系统在
+// 回收后台标签页的资源，页面里没有任何开关能留住它。所以不去「解决断线」，而是让
+// 回来的时候自己连上：一条 WebSocket 一个 PTY，重连拿到的是**新的登录 shell**，
+// 但 herdr 的 pane 都活在 herdr server 里，`herdr` 一敲就 attach 回去 —— 和人手点
+// 那一下完全等价，那就别让人手点。
+const RETRY_MS = [400, 800, 1500, 3000, 5000, 8000] // 最后一档一直用下去
+const MAX_RETRY = 8 // 连不上就别无限敲后端（前台可见时约 30 秒），改成把原因摊在遮罩上
+const PROBE_MS = 3000 // 「你还活着吗」的等回音时间
+
 export class Session {
   readonly term: Terminal
   private fit = new FitAddon()
@@ -92,6 +110,10 @@ export class Session {
   private scheme: Scheme
   private alive = false
   private exited = false
+  private want = false // 人点过「连接」= 表态要连着，掉线就自动重连
+  private retries = 0
+  private retryTimer: ReturnType<typeof setTimeout> | undefined
+  private probeTimer: ReturnType<typeof setTimeout> | undefined
   private paintTimer: ReturnType<typeof setTimeout> | undefined
   private paintHeals = 0
   private resizeTimer: ReturnType<typeof setTimeout> | undefined
@@ -125,6 +147,9 @@ export class Session {
 
     this.term.loadAddon(this.fit)
     this.term.loadAddon(new WebLinksAddon((_e, uri) => openLink(uri)))
+    // 文件路径可点：agent 打出 `/Users/x/out/chart.png`，点一下直接开图。
+    // 这条路**天生不关心图在不在当前 workspace 下** —— 路径是 agent 自己给的。
+    this.term.registerLinkProvider(pathLinkProvider(this.term, (p) => this.cb.onPath(p)))
     this.term.loadAddon(new Unicode11Addon())
     this.term.unicode.activeVersion = '11'
     // OSC 52（终端里的程序自己写剪贴板 —— herdr 的 COPY 模式按 `y` 走的就是这条）。
@@ -168,6 +193,11 @@ export class Session {
     for (const ev of ['focus', 'blur']) {
       this.kbdEl()?.addEventListener(ev, () => this.cb.onKeyboardChange(this.keyboardUp()))
     }
+    // 「人回来了」的三个信号（见 wake）：切回这个标签页 / 解锁、网络回来、
+    // pageshow（iOS 从 BFCache 里把页面拿回来时不发 visibilitychange）。
+    document.addEventListener('visibilitychange', this.wake)
+    addEventListener('online', this.wake)
+    addEventListener('pageshow', this.wake)
     this.fit.fit()
   }
 
@@ -445,6 +475,8 @@ export class Session {
    * 消息不能再改新连接的状态。
    */
   private teardown() {
+    clearTimeout(this.probeTimer)
+    this.probeTimer = undefined
     const ws = this.ws
     this.ws = null
     if (!ws) return
@@ -482,7 +514,20 @@ export class Session {
     this.cb.onHeal(0)
   }
 
+  /**
+   * 连上（人点「连接」走这条）。
+   *
+   * 手点这一下同时是**「我要一直连着」的表态**：之后不管是锁屏挂起、切网还是后端重启，
+   * 都由 retry / wake 自己接回来，不再让人回到页面上先点一次按钮。
+   */
   connect() {
+    this.want = true
+    this.retries = 0
+    this.open()
+  }
+
+  private open() {
+    clearTimeout(this.retryTimer)
     this.teardown()
     this.resetForNewSession()
     this.exited = false
@@ -494,6 +539,11 @@ export class Session {
 
     ws.onmessage = (ev) => {
       if (this.ws !== ws) return // 已经被 teardown 换掉了，别再往终端里写
+      // 有任何东西进来就说明这条连接是活的，探活的计时器可以撤了（不必等 `p` 那一帧）
+      if (this.probeTimer !== undefined) {
+        clearTimeout(this.probeTimer)
+        this.probeTimer = undefined
+      }
       if (typeof ev.data !== 'string') {
         this.term.write(new Uint8Array(ev.data as ArrayBuffer))
         this.armRepaint()
@@ -502,8 +552,11 @@ export class Session {
       const m = JSON.parse(ev.data) as { t: string; label?: string; msg?: string; code?: number }
       if (m.t === 'ready') {
         this.alive = true
+        this.retries = 0
         this.cb.onStatus(`${m.label}  ${this.term.cols}×${this.term.rows}`, 'on')
         if (!matchMedia('(pointer: coarse)').matches) this.term.focus()
+      } else if (m.t === 'p') {
+        /* 探活的回音，上面已经把计时器撤了 */
       } else if (m.t === 'exit') {
         this.exited = true
         this.alive = false
@@ -517,10 +570,11 @@ export class Session {
     }
     ws.onclose = () => {
       if (this.ws !== ws) return
+      const hadReady = this.alive
       this.alive = false
+      // exit / fatal 是「说明白了才断」的：那两条自己弹了遮罩，重连只会把话冲掉
       if (this.exited) return
-      this.cb.onStatus('已断开', 'err')
-      void this.diagnose()
+      void this.dropped(ws, hadReady)
     }
     ws.onerror = () => {
       if (this.ws !== ws) return
@@ -528,28 +582,112 @@ export class Session {
     }
   }
 
-  // 连不上的两种原因表现一样（WS 都是直接 close），用一次 HTTP 请求区分开
-  private async diagnose() {
+  /* --------------------------------------------------------- 断了之后 */
+
+  /**
+   * 掉线了，决定是自己接回来还是把原因摊出来。
+   *
+   * **连上过**（收到过 ready）说明后端和凭据都没问题，断的是网络 / PTY —— 直接重连。
+   * **压根没连上**得先问一次 `/api/state`：凭据被撤了这种情况重连一万次也没用，而重连
+   * 的动静（每次 open 都 `term.reset()`）反而会把真正的原因刷掉。
+   */
+  private async dropped(ws: WebSocket, hadReady: boolean) {
+    if (!hadReady) {
+      const v = await this.diagnose()
+      if (this.ws !== ws) return // 等这个 fetch 的工夫人已经手点过「连接」了
+      if (!v.retry) {
+        this.cb.onStatus('连不上', 'err')
+        this.cb.onOverlay(v.msg, '重试')
+        return
+      }
+    }
+    this.retry()
+  }
+
+  /** 排下一次重连。退避是为了后端真挂了 / 真没网时别把手机的电烧在握手上。 */
+  private retry() {
+    if (!this.want || this.exited) return
+    // 页面不可见时重连是白费：iOS 锁屏之后定时器基本不跑，就算真连上了系统也马上
+    // 再把它掐掉（还白起一个登录 shell）。挂着不动，等 wake() —— 回到前台那一下才是
+    // 真正该连的时刻，而且从最短那档重新开始。
+    if (document.visibilityState !== 'visible' || navigator.onLine === false) {
+      this.cb.onStatus('已断开', 'err')
+      return
+    }
+    if (this.retries >= MAX_RETRY) {
+      this.cb.onStatus('连不上', 'err')
+      void this.diagnose().then((v) => this.cb.onOverlay(v.msg, '重试'))
+      return
+    }
+    const wait = RETRY_MS[Math.min(this.retries, RETRY_MS.length - 1)]
+    this.retries++
+    this.cb.onStatus(`断了，重连中…（第 ${this.retries} 次）`, 'err')
+    clearTimeout(this.retryTimer)
+    this.retryTimer = setTimeout(() => this.open(), wait)
+  }
+
+  /**
+   * 页面回到前台 / 网络回来了 —— 也就是「人回来了」。
+   *
+   * 三种情况：连接已经没了就立刻连（不等退避，从最短那档重新数）；正在连就让它连；
+   * 看着还开着的**也要探一下**，因为锁屏挂起之后的 WebSocket 常常是僵的（readyState
+   * 还是 OPEN、send 也不报错，但对面早没了）。浏览器里读不到协议层的 ping/pong（那是
+   * UA 自己处理、不过 JS 的手），所以只能在应用层自己发一帧问一句。
+   */
+  private wake = () => {
+    if (!this.want || this.exited) return
+    if (document.visibilityState !== 'visible' || navigator.onLine === false) return
+    const st = this.ws?.readyState
+    if (st === WebSocket.CONNECTING) return
+    if (st === WebSocket.OPEN) {
+      this.probe()
+      return
+    }
+    this.retries = 0
+    this.open()
+  }
+
+  private probe() {
+    const ws = this.ws
+    if (!ws || ws.readyState !== WebSocket.OPEN || this.probeTimer !== undefined) return
+    try {
+      ws.send(JSON.stringify({ t: 'p' }))
+    } catch {
+      // send 都抛了，那这条连接肯定是废的
+      this.retries = 0
+      this.open()
+      return
+    }
+    this.probeTimer = setTimeout(() => {
+      this.probeTimer = undefined
+      if (this.ws !== ws) return
+      console.warn('[herdr-web] 连接没回音，当断了处理')
+      this.retries = 0
+      this.open() // open 里会先 teardown，僵着的那条连同它的 PTY 一起收掉
+    }, PROBE_MS)
+  }
+
+  // 连不上的几种原因表现一样（WS 都是直接 close），用一次 HTTP 请求区分开。
+  // retry 说这个原因值不值得再试：凭据 / 跨站是「再试一万次也一样」，那就别自动重连了。
+  private async diagnose(): Promise<{ retry: boolean; msg: string }> {
     let r: Response
     try {
       r = await fetch('/api/state', { credentials: 'same-origin', headers: { 'x-herdr-web': '1' } })
     } catch {
-      this.cb.onOverlay('后端没在跑。到 herdr-web 目录里执行 <code>make run</code>（或 <code>./herdr-web</code>）。', '重试')
-      return
+      // 后端可能是正在重启（改完代码 make run 一下），值得再试
+      return { retry: true, msg: '后端没在跑。到 herdr-web 目录里执行 <code>make run</code>（或 <code>./herdr-web</code>）。' }
     }
     if (r.status === 401) {
       // 配对页会被 App 顶上来（api.ts 在 401 上抛了事件），这里只把话说清楚
-      this.cb.onOverlay(
-        '后端在跑，但<b>这台设备的凭据没了</b>（被撤销、或者浏览器数据被清过）。在跑 herdr-web 的机器上执行 <code>herdr-web pair</code> 重新配一次。',
-        '重试',
-      )
-      return
+      return {
+        retry: false,
+        msg: '后端在跑，但<b>这台设备的凭据没了</b>（被撤销、或者浏览器数据被清过）。在跑 herdr-web 的机器上执行 <code>herdr-web pair</code> 重新配一次。',
+      }
     }
     if (r.status === 403) {
-      this.cb.onOverlay('后端在跑、凭据也对，但请求被当成跨站拒了。地址栏里的域名要和 <code>HERDR_WEB_HOSTNAME</code> 一致。', '重试')
-      return
+      return { retry: false, msg: '后端在跑、凭据也对，但请求被当成跨站拒了。地址栏里的域名要和 <code>HERDR_WEB_HOSTNAME</code> 一致。' }
     }
-    this.cb.onOverlay('后端在跑、凭据也对，但 WebSocket 建不起来。中间有反代 / frp 的话确认它转发了 Upgrade 头。', '重试')
+    return { retry: true, msg: '后端在跑、凭据也对，但 WebSocket 建不起来。中间有反代 / frp 的话确认它转发了 Upgrade 头。' }
   }
 
   /* ------------------------------------------------------------- 尺寸 / 主题 */
@@ -711,6 +849,11 @@ export class Session {
 
   dispose() {
     this.detachTouch?.()
+    this.want = false // 卸了还重连的话，下一个 Session 建起来时会有两条连接
+    clearTimeout(this.retryTimer)
+    document.removeEventListener('visibilitychange', this.wake)
+    removeEventListener('online', this.wake)
+    removeEventListener('pageshow', this.wake)
     clearTimeout(this.paintTimer)
     clearTimeout(this.resizeTimer)
     this.thaw(true)

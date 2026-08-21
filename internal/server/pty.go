@@ -278,6 +278,11 @@ func (s *Server) handlePTY(w http.ResponseWriter, r *http.Request) {
 		case "i":
 			logInput(s.Cfg.DebugInput, "i", []byte(m.D))
 			_, _ = f.Write([]byte(m.D))
+		case "p":
+			// 前端的「你还活着吗」。手机锁屏回来时 WebSocket 常常是僵的：readyState
+			// 还是 OPEN、send 也不报错，但对面早就没了。协议层的 ping/pong 是 UA 自己
+			// 处理的，网页里读不到（也就没法拿它判断），所以在应用层补一发回音。
+			sendJSON(map[string]any{"t": "p"})
 		case "r":
 			if m.Cols > 0 && m.Rows > 0 {
 				_ = pty.Setsize(f, &pty.Winsize{Cols: uint16(min(m.Cols, 1000)), Rows: uint16(min(m.Rows, 1000))})

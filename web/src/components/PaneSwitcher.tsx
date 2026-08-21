@@ -28,6 +28,12 @@ const LS_ZOOM = 'panesZoom'
 const LS_ONLY_AGENT = 'panesOnlyAgent'
 const LS_SORT = 'panesSort'
 
+/**
+ * 「点了就全屏」这会儿开着没有。右上角那张提示卡点一下也是跳 pane，走的得是**同一个**
+ * 开关 —— 两处各存各的话，同一个动作在两个入口下行为不一样，而用户只会记得自己关过一次。
+ */
+export const paneZoomPref = () => localStorage.getItem(LS_ZOOM) !== '0'
+
 type Sort = 'priority' | 'group'
 
 const SORTS: { id: Sort; label: string; hint: string }[] = [
@@ -109,7 +115,7 @@ export function PaneSwitcher({
 }) {
   const phone = usePhone()
   const [q, setQ] = useState('')
-  const [zoom, setZoom] = useState(() => localStorage.getItem(LS_ZOOM) !== '0')
+  const [zoom, setZoom] = useState(paneZoomPref)
   const [onlyAgent, setOnlyAgent] = useState(() => localStorage.getItem(LS_ONLY_AGENT) === '1')
   const [sort, setSort] = useState<Sort>(() => {
     const v = localStorage.getItem(LS_SORT)

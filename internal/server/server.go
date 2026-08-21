@@ -10,8 +10,11 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"log"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +23,7 @@ import (
 	"github.com/zbysir/herdr-web/internal/auth"
 	"github.com/zbysir/herdr-web/internal/clip"
 	"github.com/zbysir/herdr-web/internal/config"
+	"github.com/zbysir/herdr-web/internal/files"
 	"github.com/zbysir/herdr-web/internal/herdr"
 	"github.com/zbysir/herdr-web/internal/outbox"
 	"github.com/zbysir/herdr-web/internal/selfupdate"
@@ -35,6 +39,11 @@ type Server struct {
 	Softkeys *softkeys.Store
 	Uploads  *uploads.Store
 	Web      fs.FS // 前端产物（嵌进二进制，或 -web 指向的目录）
+
+	// Files 文件浏览（看 agent 生成的图）。Sign 出 /_f/ 那种短时签名链接 ——
+	// <img src> 设不了 CSRF 头，所以图片这条路必须换一种凭据，见 internal/files/sign.go。
+	Files *files.Browser
+	Sign  *files.Signer
 
 	Passkeys *auth.Passkeys
 	// ReauthAfter：注册过 passkey 之后，一份会话在「上次生物验证」之后还能用多久。
@@ -86,12 +95,19 @@ func New(cfg *config.Config, web fs.FS, a *auth.Store, g *auth.Gate, opt Options
 		ob.Seen = opt.Agents.At
 	}
 	s := &Server{
-		Cfg:         cfg,
-		Auth:        a,
-		Gate:        g,
-		Outbox:      ob,
-		Softkeys:    &softkeys.Store{Dir: cfg.Dir},
-		Uploads:     &uploads.Store{Dir: cfg.Dir},
+		Cfg:      cfg,
+		Auth:     a,
+		Gate:     g,
+		Outbox:   ob,
+		Softkeys: &softkeys.Store{Dir: cfg.Dir},
+		Uploads:  &uploads.Store{Dir: cfg.Dir},
+		Files: &files.Browser{
+			Enabled: cfg.Files,
+			Roots:   cfg.FileRoots,
+			Home:    userHome(),
+			Tmp:     os.TempDir(),
+			Uploads: filepath.Join(cfg.Dir, "uploads"),
+		},
 		Web:         web,
 		Passkeys:    opt.Passkeys,
 		ReauthAfter: opt.ReauthAfter,
@@ -105,6 +121,15 @@ func New(cfg *config.Config, web fs.FS, a *auth.Store, g *auth.Gate, opt Options
 		sess:        map[string]*live{},
 	}
 	s.def = &live{socket: cfg.Socket, outbox: ob, agents: opt.Agents}
+	// 签名密钥在这儿生成：一个进程一把、只在内存里，重启就把所有旧链接作废。
+	// 生成不出来（拿不到系统熵）就让 Sign 留 nil —— 那时候 /_f/ 直接 404，
+	// 文件浏览退化成「列得出来但打不开」，而不是拿一把可预测的密钥继续跑。
+	if sign, err := files.NewSigner(); err == nil {
+		s.Sign = sign
+	} else {
+		log.Printf("文件浏览：%v，图片链接这条路关掉了", err)
+	}
+
 	for _, n := range opt.Hostnames {
 		if n = strings.ToLower(strings.TrimSpace(n)); n != "" {
 			s.names[n] = true
@@ -119,6 +144,10 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/pty", s.handlePTY)
 	mux.HandleFunc("/api/", s.handleAPI)
+	// /_f/ 是签名链接那条路（不带 cookie，见 filesapi.go）。前缀带下划线是**故意**的：
+	// 地址栏第一段是 herdr session 名，而 session 名的首字符只能是字母数字
+	// （config.ValidSessionName），所以 `_f` 永远不可能和某个 session 撞上。
+	mux.HandleFunc("/_f/", s.handleFileRaw)
 	mux.HandleFunc("/", s.handleRoot)
 	return s.guard(mux)
 }
@@ -213,6 +242,8 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 		s.apiClip(w, r)
 	case "herdr":
 		s.apiHerdr(w, r, seg)
+	case "files":
+		s.apiFiles(w, r, seg)
 	default:
 		fail(w, http.StatusNotFound, errf("没有这个接口"))
 	}
@@ -234,9 +265,13 @@ func (s *Server) apiState(w http.ResponseWriter, r *http.Request) {
 		"hostname":      host,
 		"secureContext": s.TLS || s.Cfg.Loopback,
 		"compose":       map[string]int{"pollMs": s.Cfg.PollMS, "pushMs": s.Cfg.PushMS, "settleMs": s.Cfg.SettleMS},
-		"session":       name, // 空 = 默认 session
-		"herdrSocket":   s.Cfg.SessionSocket(name),
-		"version":       s.versionInfo(),
+		// 提示的轮询间隔。0 = 这个部署把提示关了，前端那边就别轮询、也别画红点。
+		"notice": map[string]int{"pollMs": s.Cfg.NoticeMS},
+		// 文件浏览关掉时（HERDR_WEB_FILES=0）前端得知道，不然顶栏那个按钮点开就是一片 404
+		"files":       s.Files != nil && s.Files.Enabled && s.Sign != nil,
+		"session":     name, // 空 = 默认 session
+		"herdrSocket": s.Cfg.SessionSocket(name),
+		"version":     s.versionInfo(),
 	})
 }
 
@@ -380,6 +415,18 @@ func (s *Server) apiHerdr(w http.ResponseWriter, r *http.Request, seg []string) 
 		}
 		out, err := sess.outbox.Goto(b.Target, b.Zoom == nil || *b.Zoom)
 		respond(w, out, err)
+
+	// 提示：agent 变成「等你回答」/「跑完了」时攒下的那些（右上角那个弹窗 + 面板图标上的
+	// 红点）。`since` 是上一拍拿到的 seq，做增量 —— 不带就把环里还留着的都给你。
+	//
+	// 这一拍**不打 herdr socket**：读的是 agentwatch 内存里那个环（状态是那条长连订阅
+	// 推来的）。所以几秒问一次没什么代价，见 README「是轮询，不是推送」。
+	case seg[1] == "notices" && r.Method == http.MethodGet:
+		since, _ := strconv.ParseUint(q.Get("since"), 10, 64) // 解析不了就当 0（全给）
+		list, seq := sess.notices(since)
+		writeJSON(w, 200, map[string]any{
+			"notices": list, "seq": seq, "watching": sess.watching(),
+		})
 
 	case seg[1] == "pull" && r.Method == http.MethodGet:
 		out, err := sess.outbox.Pull(q.Get("target"), q.Get("mode"))

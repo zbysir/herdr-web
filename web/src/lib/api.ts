@@ -136,9 +136,13 @@ export interface State {
   hostname: string
   secureContext: boolean
   compose: { pollMs: number; pushMs: number; settleMs: number }
+  /** 提示（右上角弹窗 + 面板图标的红点）多久问一次。0 / 缺失 = 这个部署把提示关了 */
+  notice?: { pollMs: number }
   /** 服务端解析出来的 session 名（空 = 默认 session）。herdrSocket 是**这个 session 的**。 */
   session?: string
   herdrSocket: string
+  /** 服务端开着文件浏览没有（HERDR_WEB_FILES=0 时为 false）。关着就别画那个按钮 */
+  files?: boolean
   /** 版本信息。outdated 为真时才有 latest / how —— 后端只在有新版本时才带这两个，
       前端不用自己比版本号（比法在 Go 那边，只有一份）。 */
   version?: { current: string; latest?: string; outdated?: boolean; how?: string }
@@ -192,6 +196,126 @@ export interface ClipResult { text: string; bytes: number }
  */
 export interface GotoResult { target: string; zoomed: boolean; focusChanged: boolean; singlePane?: boolean }
 
+/* ------------------------------------------------------------------ 提示 */
+
+/**
+ * 一条提示：某个 agent 从「在跑」变成了「等你回答」或者「跑完了」。
+ *
+ * 服务端只在这两种变化上攒（`→ working` 不攒 —— 那是你自己刚投进去的回声），
+ * 而且状态稳住 2.5 秒才算数，见 internal/agentwatch/notice.go。
+ */
+export interface Notice {
+  /** 自增号。前端拿它当 `since` 做增量，也当去重的 key */
+  seq: number
+  at: number // unix 毫秒
+  /** pane_id：点一下要跳过去的地址 */
+  pane: string
+  /**
+   * terminal_id。**「同一个 agent 的旧提示换成新的」认这个，不认 pane** ——
+   * pane_id 是 herdr 里的位置编号，pane 一开一关就重新分配给别人了。
+   */
+  term: string
+  agent: string
+  /** blocked = 等你回答；idle / done = 跑完了 */
+  status: string
+  /** agent 自己写的会话标题（「图片识别」那种），可能是空的 */
+  title: string
+  /**
+   * 屏幕上抽出来的那段话。**可能是空的** —— 读屏失败、或者一屏全是装饰行。
+   * 空的时候只报状态，别硬凑一句话（编内容比空着糟得多）。
+   */
+  text: string
+}
+
+export interface NoticesResult {
+  notices: Notice[]
+  /** 服务端此刻最新的 seq。下一拍拿它当 since —— **不能从列表里推**，空列表也要推进 */
+  seq: number
+  watching: boolean
+}
+
+/* ------------------------------------------------------------------ 文件浏览 */
+
+/**
+ * Kind 是「这个东西能怎么看」，不是文件格式：
+ *   dir / image（魔数认出来的 png·jpg·gif·webp，能 inline）/ text（预览源码）
+ *   binary（只能下）/ special（设备·socket·管道，列得出来但打不开）
+ *
+ * **服务端按内容认，不按扩展名** —— 目录列表里的 kind 是按扩展名猜的（两千个文件
+ * 不可能一个个读魔数），真打开时会重新认一次，所以列表里的图标偶尔会和实际不符。
+ */
+export type FileKind = 'dir' | 'image' | 'text' | 'binary' | 'special'
+
+export interface FileEntry {
+  name: string
+  path: string
+  dir: boolean
+  size: number
+  mtime: number // unix 毫秒
+  kind: FileKind
+  link?: boolean // symlink，点进去会跳到别处
+}
+
+export interface FileListing {
+  path: string
+  /** 空 = 没有上一级可去（到 / 了，或者上一级被 HERDR_WEB_FILE_ROOTS 挡住） */
+  parent: string
+  entries: FileEntry[]
+  /** 被砍掉多少条。不为 0 时**必须显示出来** —— 不然「这儿没有那张图」是句假话 */
+  truncated: number
+  /** 有多少条点开头的被过滤了 */
+  hidden: number
+}
+
+export interface FileInfo {
+  path: string
+  name: string
+  dir: boolean
+  size: number
+  mtime: number
+  kind: FileKind
+  mime?: string
+  parent?: string
+}
+
+/**
+ * stat 一次给两样东西：这是什么 + 拿什么 URL 去渲染。
+ *
+ * url 是一条 `/_f/<票>` 短时链接，**不带 cookie 也能开**。必须这样：cookie 认证的
+ * /api 请求要求一个自定义头（CSRF 第三道防线），而 `<img src>`、「在新标签打开」、
+ * iOS「长按存到相册」全都设不了头。票绑死一个路径、十几分钟过期、密钥只在服务端内存里
+ * （重启即全废）—— 所以过期之后要用 /files/link 换一张，别把它当固定地址存起来。
+ */
+export interface FileStat { info: FileInfo; url?: string; expires?: number }
+export interface FileText { path: string; text: string; bytes: number; truncated: boolean }
+export interface FileLink { url: string; path: string; expires: number }
+export interface FileRoot { path: string; label: string }
+export interface FileRoots {
+  roots: FileRoot[]
+  /** 配了 HERDR_WEB_FILE_ROOTS：只能看那几棵树。前端据此不显示「往上走」之类的假入口 */
+  jailed: boolean
+  limits: { entries: number; text: number }
+}
+
+/**
+ * 文件接口都要带 base：**相对路径的解析基准**。
+ *
+ * 终端里点到 `./out/chart.png` 时传的是那个 pane 的 cwd（`/api/herdr/panes` 里就有）。
+ * 服务端**不猜**基准 —— 猜错了会安安静静打开另一个同名文件，屏幕上看不出异常。
+ */
+export const filesApi = {
+  roots: () => api.get<FileRoots>('/files/roots'),
+  list: (path: string, opts?: { sort?: 'mtime' | 'name'; all?: boolean }) =>
+    api.get<FileListing>(
+      `/files/list?path=${encodeURIComponent(path)}` +
+      (opts?.sort ? `&sort=${opts.sort}` : '') + (opts?.all ? '&all=1' : ''),
+    ),
+  stat: (path: string, base?: string) =>
+    api.get<FileStat>(`/files/stat?path=${encodeURIComponent(path)}${base ? `&base=${encodeURIComponent(base)}` : ''}`),
+  text: (path: string) => api.get<FileText>(`/files/text?path=${encodeURIComponent(path)}`),
+  link: (path: string) => api.post<FileLink>('/files/link', { path }),
+}
+
 export interface SoftKey {
   id?: string         // 稳定标识，软键条按这个引用（服务端存盘时补齐）
   label: string
@@ -205,7 +329,7 @@ export interface SoftKey {
    * 给读 / 写剪贴板，所以「取」（机器剪贴板 → 手机）和「粘」（手机剪贴板 → 终端）各要
    * 用户自己点一下，合不成一个「同步」。
    */
-  act?: 'kbd' | 'img' | 'panes' | 'clip' | 'paste'
+  act?: 'kbd' | 'img' | 'panes' | 'clip' | 'paste' | 'files'
 }
 export interface PresetGroup { group: string; items: SoftKey[] }
 /**

@@ -296,6 +296,22 @@ func (c *Client) PaneZoom(id, mode string) (*Zoom, error) {
 	return w.Zoom, nil
 }
 
+// ReadText 拿一屏**纯文本**（转义序列已经剥掉）。lines <= 0 = 不限。
+//
+// `source` 只有 `visible` / `recent` / `recent_unwrapped` / `detection`，而在 agent pane 上
+// **四个返回的都是整屏**（实测，见 HERDR-API.md）—— 所以提示那条路只读 `visible` 一跳，
+// 不做「先 recent_unwrapped、拿不到再退回 visible」那种两跳（herdr-sight 里是那么写的，
+// 那边没量过这一条；在这儿等于白打一次 socket）。
+func (c *Client) ReadText(paneID, source string, lines int) (string, error) {
+	p := map[string]any{"pane_id": paneID, "source": source, "format": "text", "strip_ansi": true}
+	if lines > 0 {
+		p["lines"] = lines
+	}
+	var w readWrap
+	err := c.Call("pane.read", p, &w)
+	return w.Read.Text, err
+}
+
 // ReadANSI 拿带转义序列的整屏。必须 format:"ansi" + strip_ansi:false ——
 // format:"text" 即使 strip_ansi:false 也不含 ESC。
 func (c *Client) ReadANSI(id string) (string, error) {

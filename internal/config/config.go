@@ -32,6 +32,9 @@ type Config struct {
 	PollMS   int
 	PushMS   int
 	SettleMS int
+	// NoticeMS：前端多久问一次「有没有新提示」（右上角弹窗 + 面板图标上的红点）。
+	// 0 = 关掉整套提示（前端不再轮询）。
+	NoticeMS int
 	Loopback bool
 
 	// DebugInput：把写进 PTY 的每一批字节 hex 打到日志（HERDR_WEB_DEBUG_INPUT=1）。
@@ -43,6 +46,15 @@ type Config struct {
 	// 「内网机器不该主动连外网」那类环境的硬要求，所以必须留个开关。
 	// 关掉只是不**自动**查；手动 `herdr-web update --check` 照样能查。
 	UpdateCheck bool
+
+	// Files：文件浏览开关（默认开）。关掉之后 /api/files/* 和 /_f/ 全部 404。
+	//
+	// FileRoots：配了就是**真白名单**（jail），只能看这几棵树；空 = 不设边界。
+	// 默认不设边界不是偷懒 —— 能打开这个页面的人已经有一个登录 shell，白名单挡不住
+	// 他，只会天天挡路（agent 往 /tmp、/var/folders/… 写图是常态，而这个功能要解决的
+	// 恰恰就是「图不在当前 workspace 下」）。详见 internal/files 的包注释。
+	Files     bool
+	FileRoots []string
 
 	// 连上就自动往 PTY 里敲的那一行（后面自带回车）。默认 `herdr` —— 这个项目本来
 	// 就是「浏览器里的 herdr」，开页面十有八九是要进 herdr，少敲一次是一次。
@@ -114,6 +126,29 @@ type Config struct {
 	Token       string // 旧 token 的明文；没有这个文件就是空
 }
 
+// cleanRoots 解析 HERDR_WEB_FILE_ROOTS（逗号分隔）。
+//
+// 展开 ~、转成绝对路径、Clean、去重。**扔掉转不成绝对路径的那些** —— 一个相对路径
+// 当 jail 根是没有意义的（相对谁？），而留着它会让前缀检查在某个意想不到的地方通过。
+// 这里不检查目录存不存在：配置解析不该碰磁盘，不存在的根在 files.Check 里自然不匹配。
+func cleanRoots(raw string) []string {
+	var out []string
+	for _, r := range strings.Split(raw, ",") {
+		r = strings.TrimSpace(r)
+		if r == "" {
+			continue
+		}
+		if r == "~" || strings.HasPrefix(r, "~/") {
+			r = filepath.Join(home(), strings.TrimPrefix(r, "~"))
+		}
+		if !filepath.IsAbs(r) {
+			continue
+		}
+		out = append(out, filepath.Clean(r))
+	}
+	return dedupe(out)
+}
+
 func dedupe(in []string) []string {
 	seen := map[string]bool{}
 	out := in[:0]
@@ -141,6 +176,7 @@ func newViper() *viper.Viper {
 	v.SetDefault("legacy_token", "on")
 	v.SetDefault("onconnect", "herdr") // 连上就自动敲这一行，见 Config.OnConnect
 	v.SetDefault("update_check", true)
+	v.SetDefault("files", true) // 文件浏览默认开，见 Config.Files
 
 	// 这两项的兜底值不在 HERDR_WEB_* 里：shell 跟 $SHELL 走，socket 跟 herdr 自己的
 	// $HERDR_SOCKET_PATH 走。BindEnv 按给的顺序找，前一个没有才看后一个。
@@ -169,6 +205,21 @@ func intOf(v *viper.Viper, key string, def, min int) int {
 	return n
 }
 
+// noticeMS 收一下提示的轮询间隔：0（含负数）= 关掉，否则不低于 1 秒。
+//
+// 地板放在这儿而不是 intOf 的 min 里，是因为 0 有**特殊含义**（关掉），min=1000 会把
+// 「我想关掉」悄悄变成「一秒一次」。而 1 秒的地板本身没什么代价可省 —— 提示天生比状态
+// 慢 2.5 秒（agentwatch 那边的防抖），前端问得再勤也快不过那一段。
+func noticeMS(n int) int {
+	if n <= 0 {
+		return 0
+	}
+	if n < 1000 {
+		return 1000
+	}
+	return n
+}
+
 func home() string {
 	h, err := os.UserHomeDir()
 	if err != nil {
@@ -190,6 +241,7 @@ func Load() (*Config, error) {
 		Socket:      v.GetString("socket"),
 		DebugInput:  v.GetBool("debug_input"),
 		UpdateCheck: v.GetBool("update_check"),
+		Files:       v.GetBool("files"),
 		// 500ms 是实测挑的：切 pane 到 textarea 更新的中位延迟约 500ms，
 		// 再往下调收益递减（地板是一次 sync 的 ~150-300ms）。
 		PollMS: intOf(v, "poll_ms", 500, 200),
@@ -197,6 +249,9 @@ func Load() (*Config, error) {
 		// 两次 pane.read 之间等多久。**不能是 0**：实测调成 0 时整个清空循环
 		// 会读到同一帧陈旧内容，6 轮全跑完仍然清不空（27ms 就返回了）。
 		SettleMS: intOf(v, "settle_ms", 120, 0),
+		// 4 秒一拍够了：提示本来就比状态晚 2.5 秒（防抖），而这一拍只是一个
+		// 「有没有新的」的 GET（不打 herdr socket，读的是内存里那个环）。
+		NoticeMS: noticeMS(intOf(v, "notice_ms", 4000, 0)),
 
 		OnConnect:   v.GetString("onconnect"),
 		OnConnectMS: intOf(v, "onconnect_ms", 250, 0),
@@ -227,6 +282,8 @@ func Load() (*Config, error) {
 			c.Hostnames = append(c.Hostnames, strings.ToLower(h))
 		}
 	}
+	c.FileRoots = cleanRoots(v.GetString("file_roots"))
+
 	if (c.TLSCert == "") != (c.TLSKey == "") {
 		return nil, errors.New("HERDR_WEB_TLS_CERT 和 HERDR_WEB_TLS_KEY 要么都给，要么都不给")
 	}

@@ -1,0 +1,40 @@
+  在管它。差别是三条实在的：
+
+  - 重启机器不会自己起来，崩了也不会自动重试（真服务在 launchd/systemd
+    下会按退避一直拉起来）。
+  - 日志写在这次会话的临时目录里，/private/tmp 迟早被清；正经服务是
+    ~/.herdr-web/logs/herdr-web.log，herdr-web service logs 能直接跟。
+  - 跑的是仓库里那个 ./herdr-web（代码 = v0.2.0 + 两个发版路径修复），不是你刚 npm 装的
+    0.2.0。
+
+  顺带一句：你原来那个（我接手前的 PID 28058）也不是服务，同样是 ./herdr-web、PPID 1 ——
+  大概是 make run 起的。
+
+  你的 .env 里只有 EXPOSED / TLS / TRUST_PROXY / HOSTNAME / PUBLIC_URL，没有 DNS provider
+  的 token（TLS 由 VPS 上的 Traefik 终止），所以装服务用 --env-file .env
+  就够，不会踩「凭据抄不进 plist」那个坑。
+
+  一个要先定的点：装的时候用哪个二进制，plist 里就写死那个路径。npm 那份在
+  ~/.version-fox/cache/nodejs/v-24.13.0/.../bin/，node
+  版本一换路径就没了；~/.local/bin/herdr-web 是稳定路径（现在还是 0.1.0，herdr-web update
+  一下就成 0.2.0）。
+──────────────────────────────────────────────────────────────────────────────────────────
+ ☐ 要不要装服务
+
+要把它换成开机自启的 launchd 服务吗？（这一步会重启进程，手机上要重连一次）
+
+❯ 1. 装，指向 ~/.local/bin（推荐）
+     先 herdr-web update 把 ~/.local/bin/herdr-web 升到 0.2.0，再用它 service install
+     --env-file .env。路径稳定，以后升级就是 update + service restart。
+  2. 装，指向 npm 那份
+     直接用 npm 装的 0.2.0 去 install。代价：以后换 node 版本得重新 install（plist
+     里那个路径会失效）。
+  3. 先别装
+     保持现在这个后台进程。注意：重启机器 / 它崩了都不会自己回来。
+  4. Type something.
+──────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+
+  ❯ /.local/bin/herdr-web —— 这个删掉吧。

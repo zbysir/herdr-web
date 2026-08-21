@@ -2,9 +2,18 @@ package server
 
 import (
 	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
+
+	"github.com/zbysir/herdr-web/internal/auth"
+	"github.com/zbysir/herdr-web/internal/config"
 )
 
 type safeBuf struct {
@@ -81,4 +90,49 @@ func TestAutoTypeStopsWhenDone(t *testing.T) {
 	if got := buf.String(); got != "" {
 		t.Errorf("连接都断了还敲 %q", got)
 	}
+}
+
+// 探活的回音。前端锁屏回来时就靠这一帧判断连接是不是僵的（见 web/src/term/session.ts
+// 的 probe）：**没人回它的表现是「每次解锁都白重连一次」**，屏幕上看不出异常，所以
+// 这条要端到端地验，而不是去测那个 switch 里的一行。
+func TestPTYAnswersProbe(t *testing.T) {
+	store, err := auth.New(auth.Config{Dir: t.TempDir(), TrustLoopback: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// OnConnect 留空：这个测试只关心那一帧，不想真起一个 herdr
+	s := &Server{Cfg: &config.Config{Shell: "/bin/sh"}, Auth: store}
+	srv := httptest.NewServer(http.HandlerFunc(s.handlePTY))
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+"/pty?cols=80&rows=24", nil)
+	if err != nil {
+		t.Fatalf("连不上 /pty：%v", err)
+	}
+	defer conn.Close()
+
+	// shell 的输出（二进制帧）会和控制帧混在一起，所以是「读到为止」而不是读固定几帧
+	waitFor := func(what string) {
+		t.Helper()
+		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		for {
+			typ, data, err := conn.ReadMessage()
+			if err != nil {
+				t.Fatalf("等 %s 的时候断了：%v", what, err)
+			}
+			if typ != websocket.TextMessage {
+				continue
+			}
+			var m struct{ T string }
+			if json.Unmarshal(data, &m) == nil && m.T == what {
+				return
+			}
+		}
+	}
+
+	waitFor("ready")
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"t":"p"}`)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor("p")
 }

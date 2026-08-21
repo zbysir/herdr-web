@@ -26,6 +26,9 @@
 //
 // **只有状态和上次记的不一样才算一次变化。** 补发的、重复的事件都不是变化，拿它们刷时间
 // 就是编时间。同理**状态不落盘**：重启后拿旧状态去比，会把「停机期间变的」记成「刚刚变的」。
+//
+// 这条状态流还养着**提示**（右上角那个弹窗 + 面板图标上的红点）：agent 变成「等你回答」
+// 或者「跑完了」时攒一条，带上读屏抽出来的那段话。见 notice.go / extract.go。
 package agentwatch
 
 import (
@@ -60,6 +63,14 @@ type Watcher struct {
 	at     map[string]int64  // terminal_id → 上次状态变化的 unix 毫秒
 	live   bool              // 订阅是不是连着（决定「没有时间」该怎么解释）
 	dirty  bool
+
+	// 提示那一套（见 notice.go）。pane 是最后见到的那个 pane 对象：提示要报 pane_id
+	// 和会话标题，而防抖那 2.5 秒之后事件早过去了，得留一份。
+	pane  map[string]herdr.Pane
+	pend  map[string]string // terminal_id → 等着报的状态（防抖期间又变了就覆盖）
+	busy  map[string]bool   // terminal_id → 已经有一个收集协程在等了
+	notes []Notice
+	seq   uint64
 }
 
 // New：file 是存时间的 JSON（传空字符串就只在内存里）。
@@ -67,6 +78,7 @@ func New(socket, file string) *Watcher {
 	w := &Watcher{
 		c: herdr.New(socket), file: file,
 		term: map[string]string{}, status: map[string]string{}, at: map[string]int64{},
+		pane: map[string]herdr.Pane{}, pend: map[string]string{}, busy: map[string]bool{},
 	}
 	w.load()
 	return w
@@ -174,27 +186,45 @@ func (w *Watcher) once(ctx context.Context) error {
 			if json.Unmarshal(data, &ev) != nil || ev.Pane.PaneID == "" || ev.Pane.Agent == "" {
 				return true
 			}
-			w.observe(ev.Pane)
+			w.observeLive(ev.Pane)
 			return true
 		})
 }
 
 // observe 收一个 pane 的当前样子：更新 pane → terminal 的对应关系，**状态变了才打时间**。
+// 返回「这次和上次记的不一样吗」+ 上次那个状态（提示那条路拿它判断该不该弹，见 worthNotice）。
 //
 // 第一次见到的终端只记状态不记时间：它上次变化是本进程起来之前的事，没法知道是什么时候
 // （存盘里有的话那条还留着，见 At）。空着是实话，编一个时间比空着糟得多。
-func (w *Watcher) observe(p herdr.Pane) {
+func (w *Watcher) observe(p herdr.Pane) (bool, string) {
 	if p.TerminalID == "" {
-		return
+		return false, ""
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.term[p.PaneID] = p.TerminalID
+	w.pane[p.TerminalID] = p
 	old, ok := w.status[p.TerminalID]
 	w.status[p.TerminalID] = p.AgentStatus
 	if ok && old != p.AgentStatus {
 		w.at[p.TerminalID] = time.Now().UnixMilli()
 		w.dirty = true
+		return true, old
+	}
+	return false, old
+}
+
+// observeLive 是**事件**那条路：除了打时间，值得弹的变化还挂一条提示（见 notice.go）。
+//
+// **对底那条路（once 里的循环）走的是光秃秃的 observe，不发提示**，这是故意的：herdr
+// server 停过一阵（或者一直没起，5 秒一次地重试）之后重新连上时，对底会发现一屏 pane 的
+// 状态都和停机前不一样 —— 那些变化是「这半小时里发生的」，当场弹成一片「刚刚跑完了」就是
+// 在编时间，和 at 那一列不肯给旧变化编时间是同一个道理。代价是重订阅那 800ms 窗口里真的
+// 变化会漏报一条，那个窗口短、而且下一次状态变化就补上了。
+func (w *Watcher) observeLive(p herdr.Pane) {
+	changed, old := w.observe(p)
+	if changed && worthNotice(old, p.AgentStatus) {
+		w.arm(p)
 	}
 }
 

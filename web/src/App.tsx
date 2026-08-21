@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Keyboard, Pencil, CircleHalf, Gear, AArrowDown, AArrowUp, Maximize, Minimize, Panes } from './icons'
+import { Keyboard, Pencil, CircleHalf, Gear, AArrowDown, AArrowUp, Maximize, Minimize, Panes, Files } from './icons'
 import { api, resolveBar, SESSION, UNAUTHED, type ClipResult, type SoftKey, type SoftkeysResponse, type State, type UnauthedDetail, type WhoAmI } from '@/lib/api'
 import { readClipboard, writeClipboard } from '@/lib/clipboard'
 import { Session } from '@/term/session'
 import { initialScheme, type Scheme } from '@/term/themes'
 import { useViewportHeight } from '@/hooks/useViewportHeight'
 import { useCompose } from '@/hooks/useCompose'
+import { useNotices } from '@/hooks/useNotices'
 import { usePhone } from '@/hooks/usePhone'
 import { useKeyboardUp } from '@/hooks/useKeyboardUp'
 import { Button } from '@/components/ui/button'
@@ -14,7 +15,10 @@ import { Dock } from '@/components/Dock'
 import { Softkeys } from '@/components/Softkeys'
 import { Compose } from '@/components/Compose'
 import { SettingsPanel, type SettingsTab, type TermOpts } from '@/components/SettingsPanel'
-import { PaneSwitcher } from '@/components/PaneSwitcher'
+import { PaneSwitcher, paneZoomPref } from '@/components/PaneSwitcher'
+import { Notices } from '@/components/Notices'
+import { FilesPanel } from '@/components/FilesPanel'
+import { FileViewer } from '@/components/FileViewer'
 import { Pairing } from '@/components/Pairing'
 import { CopyPrompt } from '@/components/CopyPrompt'
 import { PastePrompt } from '@/components/PastePrompt'
@@ -84,6 +88,17 @@ export default function App() {
   const [settings, setSettings] = useState(false)
   // 面板一览（跳到某个 pane 并全屏）。手机上换 pane 只有这条路走得通 —— 见 PaneSwitcher
   const [panesOpen, setPanesOpen] = useState(false)
+  /**
+   * 文件浏览。两块东西：
+   *   filesOpen  兜底的目录浏览面板（filesAt 是「打开时定位到哪儿」）
+   *   viewing    查看器（图 / 文本）。**主入口是终端里点一条路径**，那时候面板根本不开。
+   *
+   * viewing.base 是相对路径的解析基准 —— 终端里那行 `./out/chart.png` 得配上**那个
+   * pane 的 cwd** 才有意义，而 cwd 只有这一层知道（pane 列表在这儿）。
+   */
+  const [filesOpen, setFilesOpen] = useState(false)
+  const [filesAt, setFilesAt] = useState<string | undefined>(undefined)
+  const [viewing, setViewing] = useState<{ path: string; base?: string } | null>(null)
   // 记住上次看的那一页
   const [tab, setTab] = useState<SettingsTab>('term')
   const [showCompose, setShowCompose] = useState(() => lsBool('compose', true))
@@ -121,6 +136,68 @@ export default function App() {
   // 而且设备被撤销时（gate 翻回 pair）也要跟着停
   const compose = useCompose(cfg, showCompose && gate === 'ok', live, toast)
 
+  /**
+   * 提示：哪个 agent 等你回答了 / 跑完了（右上角弹一下 + ▦ 上点个红点）。
+   *
+   * 间隔是服务端下发的（`HERDR_WEB_NOTICE_MS`，0 = 这个部署关了提示）。state 还没拉回来
+   * 之前是 0，也就是不轮询 —— 差的那一两拍无所谓，而默认值写在前端就成了第二个真相源。
+   */
+  const notices = useNotices(state?.notice?.pollMs ?? 0, gate === 'ok')
+
+  /* --------------------------------------------------------- 文件 */
+
+  /**
+   * 焦点 pane 的 cwd，**放 ref 里**。
+   *
+   * 终端那层的回调是建 Session 的时候捕获的（那个 effect 只依赖 gate），闭包里的值
+   * 会永远停在建立那一刻 —— 直接用 state 的话，点相对路径解出来的永远是第一次连上时
+   * 那个 pane 的目录，而屏幕上一点异常都看不出来。
+   */
+  const cwdRef = useRef('')
+  useEffect(() => {
+    // 认**焦点** pane 而不是发件箱瞄准的那个：屏幕上那行字是焦点 pane 打出来的，
+    // 而发件箱可能被钉在别的 pane 上（框里一有草稿就锁定，见 useCompose）。
+    cwdRef.current = compose.panes.find((p) => p.focused)?.cwd ?? ''
+  }, [compose.panes])
+
+  /**
+   * 打开终端里点到的那条路径。给的是**屏幕上的原样**，可能是相对的、可能带 `~` ——
+   * 解析交给服务端（files.Resolve），基准是那个 pane 的 cwd。
+   *
+   * 不在这儿判「是不是图」：那要读文件才知道（服务端按魔数认，不认扩展名），
+   * 查看器打开之后自己 stat 一次就有了。
+   */
+  const openPath = useCallback((raw: string) => {
+    setViewing({ path: raw, base: cwdRef.current || undefined })
+  }, [])
+
+  /**
+   * 把一个路径投出去。和「传图」是**同一个模型**：herdr 的 socket 里没有文件通道，
+   * 能投的只有文本，agent 自己去读磁盘。所以传图是「路径进去」，文件浏览是「路径出来」。
+   *
+   * 带空格的路径加一层单引号 —— 这段字符串下一步可能被敲进 shell 的输入行，
+   * 不加的话 `~/My Files/a.png` 会被当成两个参数。
+   */
+  const sendPath = useCallback((p: string) => {
+    const chunk = (/[\s]/.test(p) && !p.includes("'") ? `'${p}'` : p) + ' '
+    if (showCompose) {
+      compose.append(chunk)
+      toast('路径已插入发件箱')
+    } else {
+      sess.current?.send(chunk)
+      toast('路径已敲进终端')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showCompose, toast, compose.append])
+
+  /** 开文件浏览面板。at 给了就直接定位到那个目录（查看器的「所在目录」走这条） */
+  const openFiles = useCallback((at?: string) => {
+    setFilesAt(at)
+    setFilesOpen(true)
+    if (compose.panes.length === 0) void compose.loadPanes(true) // 起点里要用 pane 的 cwd
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compose.panes.length, compose.loadPanes])
+
   /* --------------------------------------------------------- 终端生命周期 */
   //
   // 跟着 gate 走，不能只在挂载时建一次。踩过：首次配对时 gate 从 checking 翻到 pair，
@@ -137,6 +214,7 @@ export default function App() {
         onHeal: setHeals,
         onKeyboardChange: setKbdUp,
         onCopyBlocked: setPendingCopy,
+        onPath: (raw) => openPath(raw),
       },
       scheme,
       fontSize,
@@ -144,6 +222,15 @@ export default function App() {
     s.onSticky(setSticky)
     sess.current = s
     setReady(true)
+    // connect() 里记的那笔：这个标签页之前是连着的，只是页面被系统丢掉重载了
+    try {
+      if (sessionStorage.getItem('connected')) {
+        setOverlay(null)
+        s.connect()
+      }
+    } catch {
+      /* 读不到就当没连过 */
+    }
     const ro = new ResizeObserver(() => s.relayout())
     ro.observe(host.current.parentElement!)
     const onOrient = () => s.relayout()
@@ -199,9 +286,11 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.isComposing) return
       // 面板开着就先收面板。必须 stopPropagation：否则这一下会既收面板又发给终端。
-      if (settings || panesOpen) {
+      // 查看器自己在捕获阶段吃 Esc（它盖在最上面），所以这儿只管这几块面板
+      if (settings || panesOpen || filesOpen) {
         setSettings(false)
         setPanesOpen(false)
+        setFilesOpen(false)
         e.preventDefault()
         e.stopPropagation()
         return
@@ -215,7 +304,7 @@ export default function App() {
     // 挂 bubble 的话终端一聚焦就收不到事件了（「面板开着按 Esc 却发给了终端」就是这么来的）。
     addEventListener('keydown', onKey, true)
     return () => removeEventListener('keydown', onKey, true)
-  }, [settings, panesOpen])
+  }, [settings, panesOpen, filesOpen])
 
   // 布局变化（软键条 / 发件箱开合、顶栏收放）都要重排终端
   useEffect(() => { sess.current?.relayout() }, [showCompose, showKeys, peek])
@@ -359,7 +448,18 @@ export default function App() {
   }
 
   /* --------------------------------------------------------- 顶栏动作 */
-  const connect = () => { setOverlay(null); sess.current?.connect() }
+  const connect = () => {
+    setOverlay(null)
+    // 这个标签页连过一次就记下来（sessionStorage：只对这个标签页，关掉就没了）。
+    // iOS 锁屏久了 Safari 会把整个页面丢掉重载，解锁回来时如果又停在「点连接」那一屏，
+    // 等于每次解锁都得手点一次 —— 断线重连在 Session 里做了，这条管的是「页面都没了」。
+    try {
+      sessionStorage.setItem('connected', '1')
+    } catch {
+      /* 无痕模式之类的写不进去，那就退回手点 */
+    }
+    sess.current?.connect()
+  }
   const bumpFont = (d: number) => {
     const n = sess.current?.setFontSize(fontSize + d) ?? fontSize
     setFontSize(n)
@@ -431,6 +531,9 @@ export default function App() {
   const openPanes = () => {
     setPanesOpen(true)
     void compose.loadPanes(true)
+    // 面板一览就是「看这些变化」的地方，开了就算看过了：红点灭掉、右上角那几张收掉。
+    // 这条是红点唯一的灭法 —— 单独关掉一张卡片不算看过（那只是嫌它挡着）。
+    notices.markSeen()
   }
 
   /**
@@ -451,9 +554,11 @@ export default function App() {
     )
   }
 
-  const iconBtn = (title: string, on: boolean, onClick: () => void, child: React.ReactNode, cls?: string) => (
-    <Button variant="default" size="icon" on={on} title={title} className={cls} onClick={onClick} onMouseDown={(e) => e.preventDefault()}>
+  /** dot：右上角点一个红点（有没看过的提示）。ring 是顶栏底色，让它像贴在图标上的徽标 */
+  const iconBtn = (title: string, on: boolean, onClick: () => void, child: React.ReactNode, cls?: string, dot?: boolean) => (
+    <Button variant="default" size="icon" on={on} title={title} className={cn('relative', cls)} onClick={onClick} onMouseDown={(e) => e.preventDefault()}>
       {child}
+      {dot && <span data-testid="notice-dot" className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-bad ring-2 ring-bar" />}
     </Button>
   )
 
@@ -550,7 +655,22 @@ export default function App() {
         </div>
 
         <div className="flex shrink-0 items-center gap-1">
-          {iconBtn('面板一览：跳到某个 pane（顺带全屏）', panesOpen, () => (panesOpen ? setPanesOpen(false) : openPanes()), <Panes className="size-4" />)}
+          {iconBtn(
+            notices.unread
+              // 说「条」不说「几个 agent」：同一个 agent 连着变几次就是几条，
+              // 实测挂一会儿就能攒十几条，写成「10 个 agent」是假的
+              ? `面板一览：${notices.unread} 条新变化（等你回答 / 跑完了）`
+              : '面板一览：跳到某个 pane（顺带全屏）',
+            panesOpen,
+            () => (panesOpen ? setPanesOpen(false) : openPanes()),
+            <Panes className="size-4" />,
+            undefined,
+            notices.unread > 0,
+          )}
+          {/* 文件浏览。服务端关掉（HERDR_WEB_FILES=0）就不画这个按钮 —— 点开一片 404
+              比没有这个入口更糟。主入口其实是终端里那行路径可点，这个按钮是兜底。 */}
+          {state?.files !== false &&
+            iconBtn('文件：看 agent 生成的图 / 翻目录', filesOpen, () => (filesOpen ? setFilesOpen(false) : openFiles()), <Files className="size-4" />)}
           {iconBtn('语音投稿发件箱（说话打字 → 投进 agent pane）', showCompose, () => toggleCompose(!showCompose), <Pencil className="size-4" />)}
           {iconBtn('软键盘条（Ctrl / Esc / 方向键）', showKeys, () => toggleKeys(!showKeys), <Keyboard className="size-4" />)}
           {iconBtn('缩小字号', false, () => bumpFont(-1), <AArrowDown className="size-4" />, 'max-phone:hidden')}
@@ -592,6 +712,26 @@ export default function App() {
             onReload={() => void compose.loadPanes()}
           />
         )}
+        {filesOpen && (
+          <FilesPanel
+            panes={compose.panes}
+            start={filesAt}
+            onClose={() => setFilesOpen(false)}
+            onOpen={(p) => setViewing({ path: p })}
+          />
+        )}
+        {/* 查看器盖在最上面（面板也盖住）：从面板里点开一张图之后，退出来还该回到
+            那个目录，所以这里**不关**面板，只是压在它上面 */}
+        {viewing && (
+          <FileViewer
+            path={viewing.path}
+            base={viewing.base}
+            onClose={() => setViewing(null)}
+            onSend={(p) => { setViewing(null); sendPath(p) }}
+            onBrowse={(d) => { setViewing(null); openFiles(d) }}
+            toast={toast}
+          />
+        )}
         {settings && (
           <SettingsPanel
             tab={tab}
@@ -622,6 +762,15 @@ export default function App() {
             onClose={() => setPendingCopy(null)}
           />
         )}
+        {/* 提示浮在终端右上角。面板开着时先让开 —— 那几块浮层就在同一个角上，
+            叠上去会把面板的标题栏盖掉 */}
+        <Notices
+          items={notices.items}
+          hidden={panesOpen || settings || filesOpen || !!viewing}
+          onGoto={(id, seq) => { notices.dismiss(seq); void gotoPane(id, paneZoomPref()) }}
+          onDismiss={notices.dismiss}
+          onMore={openPanes}
+        />
         <Toast msg={toastMsg} />
       </main>
 
@@ -640,6 +789,8 @@ export default function App() {
               onKeyboard={() => sess.current?.toggleKeyboard()}
               onImage={() => picker.current?.click()}
               onPanes={openPanes}
+              notice={notices.unread > 0}
+              onFiles={() => openFiles()}
               onClip={() => void pullClip()}
               onPaste={() => void pastePhone()}
             />

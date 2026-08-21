@@ -37,6 +37,18 @@ type live struct {
 // 「压根没在盯」——不然空着的时间列看着像坏了。
 func (l *live) watching() bool { return l.agents != nil && l.agents.Live() }
 
+// notices 给这个 session 攒下的提示（seq 比 since 大的那些）。
+//
+// 没在盯的时候（agents 为 nil，只有测试和 -no-watch 那种拼法会出现）给**空数组而不是
+// nil**：nil 编出来是 `null`，前端 `for of` 直接抛。
+func (l *live) notices(since uint64) ([]agentwatch.Notice, uint64) {
+	if l.agents == nil {
+		return []agentwatch.Notice{}, 0
+	}
+	list, seq := l.agents.Notices(since)
+	return list, seq
+}
+
 // sessionOf 取请求里的 session 名（空 = 默认 session）。
 //
 // **名字不合法一律报错，不退回默认 session。** 静默退回等于「你要 /work，我给你

@@ -30,7 +30,7 @@ const CONFIRM_MS = 3000
  * 键挨得这么近，关 pane / 关标签这种误触一下就没了，而 herdr 那边没有撤销。
  */
 export function Softkeys({
-  bar, sticky, kbdUp, onSend, onSticky, onKeyboard, onImage, onPanes, onClip, onPaste,
+  bar, sticky, kbdUp, notice, onSend, onSticky, onKeyboard, onImage, onPanes, onFiles, onClip, onPaste,
 }: {
   /** 每行的按键（已按 id 解析好）。一到两行 */
   bar: SoftKey[][]
@@ -43,6 +43,15 @@ export function Softkeys({
   onImage: () => void
   /** act:panes 的键：开「面板一览」。手机上键盘一弹起来顶栏就收掉了，那时候只有这条路 */
   onPanes: () => void
+  /**
+   * 有没看过的提示（`act:panes` 那个键右上角点个红点）。
+   *
+   * 顶栏那个 ▦ 上已经有一个了，这儿还要一个是因为**手机上键盘一弹起来顶栏整条就收掉**
+   * （见 App 里的 barHidden）——而那正是你在跟 agent 说话、最该知道「另一个在等你」的时候。
+   */
+  notice?: boolean
+  /** act:files 的键：开文件浏览（看 agent 生成的图）。同样是键盘弹起时唯一的入口 */
+  onFiles: () => void
   /**
    * act:clip：把**跑 herdr 那台机器**的剪贴板取到手机剪贴板（herdr 的复制落在那儿）。
    * act:paste：把手机剪贴板粘进终端。
@@ -96,6 +105,7 @@ export function Softkeys({
                 // 举起来只换颜色，**不换文字**：改字会让按键变宽，手指底下的键
                 // 当场挪位置，第二下就点到隔壁去了。
                 className={cn(
+                  'relative',
                   k.wide && 'min-w-[78px]',
                   up && 'border-bad bg-bad text-white hover:border-bad hover:bg-bad',
                 )}
@@ -113,6 +123,7 @@ export function Softkeys({
                   if (k.act === 'kbd') onKeyboard()
                   else if (k.act === 'img') onImage()
                   else if (k.act === 'panes') onPanes()
+                  else if (k.act === 'files') onFiles()
                   else if (k.act === 'clip') onClip()
                   else if (k.act === 'paste') onPaste()
                   else if (k.sticky) onSticky(k.sticky)
@@ -120,6 +131,10 @@ export function Softkeys({
                 }}
               >
                 {k.label}
+                {/* ring 用面板底色，让红点看着像贴在键上的徽标而不是浮在半空 */}
+                {notice && k.act === 'panes' && (
+                  <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-bad ring-2 ring-bar" />
+                )}
               </Button>
             )
           })}

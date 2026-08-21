@@ -107,6 +107,13 @@ body {
 }
 .xterm .xterm-viewport { background: transparent !important; }
 
+/* 右上角那几张提示卡进场：往下滑一小段 + 淡入。
+   幅度故意小（6px / 180ms）—— 这东西是在终端**上面**冒出来的，动静一大就成了打扰。 */
+@keyframes notice-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: none; }
+}
+
 ::selection {
   background: color-mix(in srgb, var(--color-brand) 26%, transparent);
 }

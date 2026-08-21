@@ -1,0 +1,52 @@
+
+  1. 要在真二进制里看到图标得跑一次 make build —— internal/webui/dist/ 里现在是别人构建的产物，我没去覆盖它（rm -rf 撞上并发构建会给对方一个坏的 dist）。
+  2. 那个并发的会话正在我的按钮改动上继续调尺寸统一（把 default/tiny/icon/key 全改成写死高度 h-8/h-7）。方向没问题，但注意 Pairing.tsx 里那几个大按钮还挂着 py-2.5 —— 高度写死之后 padding
+     不再撑高，那两个按钮会从 ~40px 缩成 32px。是他们在改的文件，我没动。
+
+✻ Worked for 27m 33s
+
+※ recap: Goal was polishing herdr-web's UI to a Supabase-like look, then designing its logo; both are done and tests pass. Next: run make build so the new icon and styles land in the binary. (disable recaps in
+  /config)
+
+❯ 提交代码
+
+⏺ 先看清哪些改动是我的、哪些是那个并发会话正在改的 —— 别把别人没写完的东西一起提了。
+
+  Ran 8 shell commands
+
+⏺ 提交好了：ca3cc05 图标：herdr 的羊关在浏览器窗口里（17 个文件）。
+
+  只提了我自己那部分。 那个并发会话现在手上摊着一大片没写完的东西 —— internal/selfupdate/、internal/version/、internal/admin/、ctl、outbox、main.go、go.mod，还有 Dock.tsx（把三个把手改成等宽
+  flex，修被拖窄时第三个把手顶出框）和 ui/button.tsx（尺寸统一成写死高度 h-8）。这些我一个都没碰，留在工作区里给他们自己提。
+
+  进这次提交的：
+
+  - assets/（logo.svg / logo-light.svg / logo.png / make-logo.py）
+  - web/public/（logo.svg、logo-light.svg、apple-touch-icon.png、icon-192/512.png、manifest.webmanifest）
+  - web/src/components/Logo.tsx、web/index.html、internal/server/static.go
+  - Pairing.tsx、SettingsPanel.tsx、README.md（顺带把上一轮界面收尾里还没提的两处一起带上了：字号加减的分段控件、README 的「配色」那节）
+
+  一件要说清的：web/src/App.tsx 里我那两行（import { Logo } + 遮罩上的 <Logo size={48}>）和对方的三处改动挤在同一个 hunk 里，拆不干净，所以他们那三处跟着一起提了 ——「敲
+  herdr」按钮删掉（连上会自动敲，软键条预设里有现成的键）、遮罩上主按钮改 h-10、一句注释措辞。看着都是写完的改动，不是半成品；要是不想让它们进这条提交，说一声我 git revert 那几个 hunk 再让他们自己提。
+
+  另外 web/tsconfig.tsbuildinfo 是每次 typecheck 都会变的构建产物（仓库里居然是跟踪的），我没往里带。当前分支 voice-compose 没有配 upstream（远端只有 origin/master），所以没有推 —— 要推的话告诉我推哪儿。
+
+✻ Sautéed for 3m 15s
+
+※ recap: Goal was polishing herdr-web's UI to a Supabase-style palette and giving it a logo; both are done and committed as ca3cc05. Next action is yours: say whether to push (no upstream set on voice-compose
+  yet). (disable recaps in /config)
+
+⏺ Stopped watching Artifact: "窗口里的羊" (connection lost)
+
+⏺ 后台通知：那个对比页的实时订阅断了（连接掉了，不再重连）。只是「别人重新发布时通知我」这条链路没了，页面本身照常在：⧉ https://claude.ai/code/artifact/20ad49e2-0a93-4987-97df-285495ac5e5b
+
+  没有需要动的东西，图标那条提交（ca3cc05）也不受影响。要是后面还想让我盯这个页面的改动，说一声我重新挂一次。
+
+✻ Baked for 20s
+                                                                                                                                                                         new task? /clear to save 374.8k tokens
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ~/dev/bysir/herdr-web git:(master) Opus 5 (1M context) ctx:63%
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← 6 agents
+  ⧉  logo-review
