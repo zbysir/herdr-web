@@ -38,6 +38,12 @@ type Config struct {
 	// 排「某个键到底发出去了什么」只能靠它，猜是猜不出来的。
 	DebugInput bool
 
+	// UpdateCheck：每天去 GitHub Releases 问一次有没有新版本（默认开）。
+	// 关掉它（HERDR_WEB_UPDATE_CHECK=0）之后进程不会有任何出站请求 —— 这是
+	// 「内网机器不该主动连外网」那类环境的硬要求，所以必须留个开关。
+	// 关掉只是不**自动**查；手动 `herdr-web update --check` 照样能查。
+	UpdateCheck bool
+
 	// 连上就自动往 PTY 里敲的那一行（后面自带回车）。默认 `herdr` —— 这个项目本来
 	// 就是「浏览器里的 herdr」，开页面十有八九是要进 herdr，少敲一次是一次。
 	// 显式设成空串就不敲（`HERDR_WEB_ONCONNECT=`）。
@@ -134,6 +140,7 @@ func newViper() *viper.Viper {
 	v.SetDefault("dir", filepath.Join(home(), ".herdr-web"))
 	v.SetDefault("legacy_token", "on")
 	v.SetDefault("onconnect", "herdr") // 连上就自动敲这一行，见 Config.OnConnect
+	v.SetDefault("update_check", true)
 
 	// 这两项的兜底值不在 HERDR_WEB_* 里：shell 跟 $SHELL 走，socket 跟 herdr 自己的
 	// $HERDR_SOCKET_PATH 走。BindEnv 按给的顺序找，前一个没有才看后一个。
@@ -176,12 +183,13 @@ func DefaultSocket() string { return newViper().GetString("socket") }
 func Load() (*Config, error) {
 	v := newViper()
 	c := &Config{
-		Host:       v.GetString("host"),
-		Port:       intOf(v, "port", 7788, 1),
-		Dir:        v.GetString("dir"),
-		Shell:      v.GetString("shell"),
-		Socket:     v.GetString("socket"),
-		DebugInput: v.GetBool("debug_input"),
+		Host:        v.GetString("host"),
+		Port:        intOf(v, "port", 7788, 1),
+		Dir:         v.GetString("dir"),
+		Shell:       v.GetString("shell"),
+		Socket:      v.GetString("socket"),
+		DebugInput:  v.GetBool("debug_input"),
+		UpdateCheck: v.GetBool("update_check"),
 		// 500ms 是实测挑的：切 pane 到 textarea 更新的中位延迟约 500ms，
 		// 再往下调收益递减（地板是一次 sync 的 ~150-300ms）。
 		PollMS: intOf(v, "poll_ms", 500, 200),

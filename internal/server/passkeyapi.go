@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	"git.huglight.cn/bysir/herdr-web/internal/auth"
+	"github.com/zbysir/herdr-web/internal/auth"
 )
 
 // passkey 的四个口。

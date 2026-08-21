@@ -14,12 +14,13 @@ import (
 	"strings"
 	"time"
 
-	"git.huglight.cn/bysir/herdr-web/internal/auth"
-	"git.huglight.cn/bysir/herdr-web/internal/config"
-	"git.huglight.cn/bysir/herdr-web/internal/herdr"
-	"git.huglight.cn/bysir/herdr-web/internal/outbox"
-	"git.huglight.cn/bysir/herdr-web/internal/softkeys"
-	"git.huglight.cn/bysir/herdr-web/internal/uploads"
+	"github.com/zbysir/herdr-web/internal/auth"
+	"github.com/zbysir/herdr-web/internal/config"
+	"github.com/zbysir/herdr-web/internal/herdr"
+	"github.com/zbysir/herdr-web/internal/outbox"
+	"github.com/zbysir/herdr-web/internal/selfupdate"
+	"github.com/zbysir/herdr-web/internal/softkeys"
+	"github.com/zbysir/herdr-web/internal/uploads"
 )
 
 type Server struct {
@@ -39,6 +40,12 @@ type Server struct {
 
 	TLS   bool            // 浏览器眼里是不是 https（决定 cookie 的 Secure）
 	names map[string]bool // Host 头里允许出现的域名，见 guard.go
+
+	// Version / Updates 给设置面板显示「当前版本 / 有没有新的」。
+	// 为什么也给网页端而不只给管理页：网页里就有一个终端，看到提示的人正好能就地
+	// 敲 herdr-web update —— 而管理页只有坐在机器前的人能开。
+	Version string
+	Updates *selfupdate.Checker
 }
 
 // Options 是 main 那边算出来的东西：证书里有哪些域名、浏览器看到的是不是 https。
@@ -48,6 +55,8 @@ type Options struct {
 	Passkeys     *auth.Passkeys
 	ReauthAfter  time.Duration
 	RPID         string
+	Version      string
+	Updates      *selfupdate.Checker
 }
 
 func New(cfg *config.Config, web fs.FS, a *auth.Store, g *auth.Gate, opt Options) *Server {
@@ -64,6 +73,8 @@ func New(cfg *config.Config, web fs.FS, a *auth.Store, g *auth.Gate, opt Options
 		ReauthAfter: opt.ReauthAfter,
 		RPID:        opt.RPID,
 		TLS:         opt.BrowserHTTPS,
+		Version:     opt.Version,
+		Updates:     opt.Updates,
 		names:       map[string]bool{"localhost": true},
 	}
 	for _, n := range opt.Hostnames {
@@ -187,7 +198,30 @@ func (s *Server) apiState(w http.ResponseWriter, r *http.Request) {
 		"secureContext": s.TLS || s.Cfg.Loopback,
 		"compose":       map[string]int{"pollMs": s.Cfg.PollMS, "pushMs": s.Cfg.PushMS, "settleMs": s.Cfg.SettleMS},
 		"herdrSocket":   s.Cfg.Socket,
+		"version":       s.versionInfo(),
 	})
+}
+
+// versionInfo 只读查更新的缓存，不在这个请求里发出站请求 —— 面板是随手点开的，
+// 不该因为 GitHub 慢而转圈。
+func (s *Server) versionInfo() map[string]any {
+	out := map[string]any{"current": s.Version}
+	if s.Updates == nil {
+		return out
+	}
+	st := s.Updates.State()
+	if !selfupdate.Newer(strings.TrimPrefix(s.Version, "v"), st.Latest) {
+		return out
+	}
+	out["latest"] = st.Latest
+	out["outdated"] = true
+	out["how"] = "herdr-web update"
+	if inst, err := selfupdate.Detect(); err == nil {
+		if c := inst.Command(); c != "" {
+			out["how"] = c
+		}
+	}
+	return out
 }
 
 func baseName(p string) string {
@@ -254,6 +288,21 @@ func (s *Server) apiHerdr(w http.ResponseWriter, r *http.Request, seg []string) 
 			return
 		}
 		writeJSON(w, 200, map[string]any{"panes": list, "socket": s.Cfg.Socket})
+
+	// 跳到某个 pane：切焦点 + 全屏，一次调用（herdr 的 pane.zoom 按 pane_id 寻址，
+	// 跨 workspace / tab 也一起切过去）。手机上「面板一览」点一行走的就是这个口 ——
+	// 按键那条通道只能表达相对导航，说不出「让 w5:p3 全屏」。
+	case seg[1] == "goto" && r.Method == http.MethodPost:
+		var b struct {
+			Target string
+			Zoom   *bool // 省略 = 要全屏
+		}
+		if err := readJSON(r, &b); err != nil {
+			fail(w, 400, err)
+			return
+		}
+		out, err := s.Outbox.Goto(b.Target, b.Zoom == nil || *b.Zoom)
+		respond(w, out, err)
 
 	case seg[1] == "pull" && r.Method == http.MethodGet:
 		out, err := s.Outbox.Pull(q.Get("target"), q.Get("mode"))

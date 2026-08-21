@@ -1,0 +1,73 @@
+# goreleaser 配置。本地干跑一遍：make release-dry
+#
+# 只出 darwin / linux。Windows 不发是有原因的：终端要 PTY（creack/pty 在 windows 上
+# 是个返回 ErrUnsupported 的空壳），herdr 自己也走 unix socket —— 编得出来也是开页面
+# 就报错。Windows 用户走 WSL，那边就是 linux 版。
+version: 2
+
+project_name: herdr-web
+
+before:
+  hooks:
+    - go mod tidy
+    # 前端产物要先在 internal/webui/dist 里就位，go:embed 才有东西可嵌。
+    # 复用 Makefile 的 web 目标，别在这儿抄一遍 npm 命令（抄了就会漂）。
+    - make web
+
+builds:
+  - id: herdr-web
+    main: ./cmd/herdr-web
+    binary: herdr-web
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X github.com/zbysir/herdr-web/internal/version.Version={{ .Version }}
+      - -X github.com/zbysir/herdr-web/internal/version.Commit={{ .FullCommit }}
+      - -X github.com/zbysir/herdr-web/internal/version.Date={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}" # 可复现构建：同一个 commit 出同样的二进制
+
+archives:
+  - id: default
+    ids: [herdr-web]
+    formats: [tar.gz]
+    # 这个名字被三处依赖：internal/selfupdate.AssetName（自更新下载）、
+    # scripts/npm-build.mjs（打 npm 包）、install.sh。改这里就要一起改。
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  # selfupdate 和 install.sh 都靠它校验下载，名字别改
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  github:
+    owner: zbysir
+    name: herdr-web
+  draft: false
+  prerelease: auto
+  footer: |
+    ## 安装
+
+    ```sh
+    npm install -g @bysir/herdr-web            # 跨端，只下当前平台的二进制
+    curl -fsSL https://raw.githubusercontent.com/zbysir/herdr-web/master/install.sh | sh
+    ```
+
+    装成开机自启的常驻服务：`herdr-web service install`（macOS launchd / Linux systemd）。
+    升级：`herdr-web update`。

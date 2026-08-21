@@ -1,9 +1,10 @@
-module git.huglight.cn/bysir/herdr-web
+module github.com/zbysir/herdr-web
 
 go 1.25.0
 
 require (
 	github.com/creack/pty v1.1.24
+	github.com/go-acme/lego/v4 v4.35.2
 	github.com/go-webauthn/webauthn v0.17.4
 	github.com/gorilla/websocket v1.5.3
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
@@ -38,7 +39,6 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.2 // indirect
 	github.com/go-acme/alidns-20150109/v4 v4.7.0 // indirect
-	github.com/go-acme/lego/v4 v4.35.2 // indirect
 	github.com/go-acme/tencentclouddnspod v1.3.24 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect

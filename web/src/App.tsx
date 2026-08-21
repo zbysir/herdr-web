@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Keyboard, Pencil, CircleHalf, Gear, AArrowDown, AArrowUp, Maximize, Minimize } from './icons'
+import { Keyboard, Pencil, CircleHalf, Gear, AArrowDown, AArrowUp, Maximize, Minimize, Panes } from './icons'
 import { api, resolveBar, UNAUTHED, type SoftKey, type SoftkeysResponse, type State, type UnauthedDetail, type WhoAmI } from '@/lib/api'
 import { Session } from '@/term/session'
 import { initialScheme, type Scheme } from '@/term/themes'
@@ -13,6 +13,7 @@ import { Dock } from '@/components/Dock'
 import { Softkeys } from '@/components/Softkeys'
 import { Compose } from '@/components/Compose'
 import { SettingsPanel, type SettingsTab, type TermOpts } from '@/components/SettingsPanel'
+import { PaneSwitcher } from '@/components/PaneSwitcher'
 import { Pairing } from '@/components/Pairing'
 import { Logo } from '@/components/Logo'
 import { cn } from '@/lib/utils'
@@ -74,6 +75,8 @@ export default function App() {
   })
 
   const [settings, setSettings] = useState(false)
+  // 面板一览（跳到某个 pane 并全屏）。手机上换 pane 只有这条路走得通 —— 见 PaneSwitcher
+  const [panesOpen, setPanesOpen] = useState(false)
   // 记住上次看的那一页
   const [tab, setTab] = useState<SettingsTab>('term')
   const [showCompose, setShowCompose] = useState(() => lsBool('compose', true))
@@ -181,8 +184,9 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.isComposing) return
       // 面板开着就先收面板。必须 stopPropagation：否则这一下会既收面板又发给终端。
-      if (settings) {
+      if (settings || panesOpen) {
         setSettings(false)
+        setPanesOpen(false)
         e.preventDefault()
         e.stopPropagation()
         return
@@ -196,7 +200,7 @@ export default function App() {
     // 挂 bubble 的话终端一聚焦就收不到事件了（「面板开着按 Esc 却发给了终端」就是这么来的）。
     addEventListener('keydown', onKey, true)
     return () => removeEventListener('keydown', onKey, true)
-  }, [settings])
+  }, [settings, panesOpen])
 
   // 布局变化（软键条 / 发件箱开合、顶栏收放）都要重排终端
   useEffect(() => { sess.current?.relayout() }, [showCompose, showKeys, peek])
@@ -357,6 +361,33 @@ export default function App() {
     localStorage.setItem('softkeys', v ? '1' : '0')
   }
 
+  /**
+   * 开「面板一览」。顺手刷一次列表 —— agent 状态和 pane 的增删随时在变，
+   * 而这个面板多半是隔了好一会儿才再打开一次。
+   */
+  const openPanes = () => {
+    setPanesOpen(true)
+    void compose.loadPanes(true)
+  }
+
+  /**
+   * 跳到某个 pane。
+   *
+   * 跳完不 focus 终端：手机上那一下会把系统键盘顶出来，而刚跳过去多半是要**看**，
+   * 不是要打字。宽屏上没这个代价，顺手聚上，接着敲就行。
+   */
+  const gotoPane = async (id: string, zoom: boolean) => {
+    setPanesOpen(false)
+    const r = await compose.jump(id, zoom)
+    if (!r) return
+    if (!phone) sess.current?.focus()
+    toast(
+      r.singlePane
+        ? `已跳到 ${r.target}（这个 tab 只有一个 pane）`
+        : `已跳到 ${r.target}${r.zoomed ? ' · 全屏' : ' · 已退出全屏'}`,
+    )
+  }
+
   const iconBtn = (title: string, on: boolean, onClick: () => void, child: React.ReactNode, cls?: string) => (
     <Button variant="default" size="icon" on={on} title={title} className={cls} onClick={onClick} onMouseDown={(e) => e.preventDefault()}>
       {child}
@@ -445,6 +476,7 @@ export default function App() {
         </div>
 
         <div className="flex shrink-0 items-center gap-1">
+          {iconBtn('面板一览：跳到某个 pane（顺带全屏）', panesOpen, () => (panesOpen ? setPanesOpen(false) : openPanes()), <Panes className="size-4" />)}
           {iconBtn('语音投稿发件箱（说话打字 → 投进 agent pane）', showCompose, () => toggleCompose(!showCompose), <Pencil className="size-4" />)}
           {iconBtn('软键盘条（Ctrl / Esc / 方向键）', showKeys, () => toggleKeys(!showKeys), <Keyboard className="size-4" />)}
           {iconBtn('缩小字号', false, () => bumpFont(-1), <AArrowDown className="size-4" />, 'max-phone:hidden')}
@@ -476,6 +508,14 @@ export default function App() {
               </Button>
             </div>
           </div>
+        )}
+        {panesOpen && (
+          <PaneSwitcher
+            panes={compose.panes}
+            onClose={() => setPanesOpen(false)}
+            onGoto={(id, zoom) => void gotoPane(id, zoom)}
+            onReload={() => void compose.loadPanes()}
+          />
         )}
         {settings && (
           <SettingsPanel
@@ -511,6 +551,7 @@ export default function App() {
               onSticky={(w) => sess.current?.toggleSticky(w)}
               onKeyboard={() => sess.current?.toggleKeyboard()}
               onImage={() => picker.current?.click()}
+              onPanes={openPanes}
             />
           ) : null}
         >

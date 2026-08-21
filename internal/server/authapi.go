@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"net/url"
 
-	"git.huglight.cn/bysir/herdr-web/internal/auth"
+	"github.com/zbysir/herdr-web/internal/auth"
 )
 
 // handleRoot 在静态资源前面截两种「URL 里带着秘密」的进入方式，换成 cookie 之后

@@ -9,8 +9,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"git.huglight.cn/bysir/herdr-web/internal/composer"
-	"git.huglight.cn/bysir/herdr-web/internal/herdr"
+	"github.com/zbysir/herdr-web/internal/composer"
+	"github.com/zbysir/herdr-web/internal/herdr"
 )
 
 // Follow 是「投给我此刻在 herdr 里激活的那个 pane」的哨兵值。默认走这条：
@@ -168,6 +168,47 @@ func (o *Outbox) ListTargets() ([]Target, error) {
 		})
 	}
 	return out, nil
+}
+
+// GotoResult 是「跳到某个 pane」的结果。
+//
+// Zoomed 是 tab 级的放大状态（见 herdr.Zoom）；SinglePane 是「这个 tab 只有一个 pane，
+// 没什么可放大的」—— 前端要把它和「放大失败」分开说，不然用户会以为按钮没生效。
+type GotoResult struct {
+	Target       string `json:"target"`
+	Zoomed       bool   `json:"zoomed"`
+	FocusChanged bool   `json:"focusChanged"`
+	SinglePane   bool   `json:"singlePane,omitempty"`
+}
+
+// Goto 跳到某个 pane：切焦点（跨 workspace / tab 也一次到位）并按 zoom 开关放大。
+//
+// 这是给手机用的。手机上未放大的多 pane 布局根本读不了，而软键条只能发按键、按键只能
+// 表达相对导航（下一个 tab、往右一格），要走到另一个 workspace 里的某个 pane 得盲敲
+// 一串 —— 中间每一步的屏幕正好都是那个读不了的状态。socket 这层按 pane_id 寻址，所以
+// 「跳过去 + 全屏」是一次调用，界面上就是点一下。
+//
+// 不接受 Follow：「跳到我此刻激活的那个 pane」没有意义。
+func (o *Outbox) Goto(target string, zoom bool) (*GotoResult, error) {
+	if target == "" || target == Follow {
+		return nil, fmt.Errorf("要跳到哪个 pane：target 得是具体的 pane_id")
+	}
+	mode := "off"
+	if zoom {
+		mode = "on"
+	}
+	z, err := o.C.PaneZoom(target, mode)
+	if err != nil {
+		return nil, err
+	}
+	// 用 focused_pane_id 而不是自己传进去的 id：herdr 说了才算数（pane 刚好在这一刻
+	// 被关掉之类的情况下，两者会不一样）。
+	return &GotoResult{
+		Target:       z.FocusedPaneID,
+		Zoomed:       z.Zoomed,
+		FocusChanged: z.FocusChanged,
+		SinglePane:   z.Reason == "single_pane",
+	}, nil
 }
 
 func orElse(v, def string) string {

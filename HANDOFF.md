@@ -24,7 +24,8 @@ Node 全量重写成 **Go 后端 + React 前端，单二进制**（`make build` 
 
 HTTP 口（都要 `?token=`）：`GET /api/state`、`GET|PUT|DELETE /api/softkeys`、
 `GET /api/herdr/panes`、`GET /api/herdr/sync`、`GET /api/herdr/pull`、
-`POST /api/herdr/say`、`POST /api/herdr/draft`、`POST /api/herdr/upload`（裸字节）。
+`POST /api/herdr/say`、`POST /api/herdr/draft`、`POST /api/herdr/goto`、
+`POST /api/herdr/upload`（裸字节）。
 `target` 省略或传 `__focused` = 投给此刻在 herdr 里激活的那个 pane。
 
 **移植是怎么保证没走样的**：`composer` 和旧 JS 版共用同一批真机抓屏，输出逐字节一致；
@@ -117,6 +118,10 @@ send_text "abc" → send_text "def"   结果：abcdef
 | `pane.current` 给「此刻激活的 pane」 | 返回和 `pane.get` 同形状的 `pane` 对象，用来做「跟随焦点」 |
 | **`agent.prompt` 端到端通了** | 先塞两行残留，再投一段，pane 上收到的就是新文本本身，没有残留前缀 |
 | **多行输入在活 pane 上验过了** | 两家都用 `shift+enter` 换行；抽出来的多行原文一字不差（含以 `>` 开头的续行） |
+| **`pane.zoom` 带 `pane_id` 一次跨 workspace + tab + pane** | 对另一个 workspace 里的 pane 发 `mode:"on"`，回 `focus_changed:true`，`pane.current` / `workspace.list` 都跟着切过去了 —— **不用**先 `workspace.focus` 再 `tab.focus`。「面板一览」点一行就是这一个调用 |
+| **zoom 是 tab 级的开关，放大的永远是当前焦点 pane** | `pane.layout` 和 `layout.export` 里只有 tab 级的 `zoomed` + `focused_pane_id`，**没有** per-pane 的 zoom 字段；而且 `layout.panes[].rect` 给的是未放大的分屏几何（放大时两个 pane 都还是 120×58），所以「谁被放大了」只能由焦点推。同 tab 内换 pane 会回 `zoom_changed:false` + `reason:"already_zoomed"` 而 `focus_changed:true` —— **那不是失败**，放大的对象跟着焦点换了，不需要 off 再 on |
+| **单 pane 的 tab 回 `zoomed:false` + `reason:"single_pane"`** | 那个 pane 本来就占满整个 tab，焦点已经切过去了。别当失败报错 —— 前端要单独说一句，不然用户以为按钮没生效 |
+| `mode` 默认是 `toggle` | 所以「跳到某个 pane 并铺满」必须显式传 `"on"`，不能省。软键条上绑的 zoom 键走的是默认 toggle，那条路只能二选一 |
 | **`agent_status` 不能用来判断「正开着对话框」** | 实测一个正在显示选择器的 Claude Code pane，`agent_status` 是 `idle`；另一次同样的对话框又报 `blocked`。两个方向都不可靠 |
 | **API 里没有图片通道，但 agent 能读磁盘上的图** | 给一张 320×200 左红右蓝中间绿带的 PNG 的**绝对路径**，claude 和 codex 都描述对了（codex 会打一行 `Viewed Image`）。所以传图＝落盘 + 把路径当文本投出去，见 `internal/uploads/` |
 

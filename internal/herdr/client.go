@@ -157,6 +157,49 @@ func (c *Client) PaneList() ([]Pane, error) {
 	return l.Panes, err
 }
 
+// Zoom 是 pane.zoom 的结果。
+//
+// `zoomed` 是**整个 tab 的**状态，不是某个 pane 的：herdr 放大的永远是「当前焦点
+// pane」，快照里根本没有「哪个 pane 被放大了」这种字段（`pane.layout` /
+// `layout.export` 里只有 tab 级的 zoomed + focused_pane_id，实测确认）。所以同一个
+// tab 里换焦点时 `zoom_changed` 是 false、`reason` 是 already_zoomed —— **那不是失败**，
+// 放大的对象已经跟着焦点换过去了。
+type Zoom struct {
+	PaneID        string `json:"pane_id"`
+	FocusedPaneID string `json:"focused_pane_id"`
+	Zoomed        bool   `json:"zoomed"`
+	ZoomChanged   bool   `json:"zoom_changed"`
+	FocusChanged  bool   `json:"focus_changed"`
+	Reason        string `json:"reason"`
+}
+
+type zoomWrap struct {
+	Zoom *Zoom `json:"zoom"`
+}
+
+// PaneZoom 跳到某个 pane，并按 mode 开 / 关放大（"on" | "off" | "toggle"）。
+//
+// **一次调用就能跨 workspace + tab + pane**：实测对另一个 workspace 里的 pane 发
+// mode:"on"，焦点连着 workspace 和 tab 一起切过去（focus_changed=true），不用先
+// workspace.focus 再 tab.focus。这条是这个功能的全部理由 —— 软键条发的是按键，而
+// 按键只能表达「下一个 tab」「往右切一格」这种**相对**动作，「让 w5:p3 全屏」说不出来；
+// socket 这层是按 pane_id 寻址的。
+//
+// 两个不是错误的返回：
+//   - tab 里只有一个 pane 时给 zoomed=false + reason=single_pane（那个 pane 本来就占满
+//     整个 tab，焦点已经切过去了）；
+//   - 同 tab 内换 pane 时给 zoom_changed=false + reason=already_zoomed（见 Zoom 注释）。
+func (c *Client) PaneZoom(id, mode string) (*Zoom, error) {
+	var w zoomWrap
+	if err := c.Call("pane.zoom", map[string]any{"pane_id": id, "mode": mode}, &w); err != nil {
+		return nil, err
+	}
+	if w.Zoom == nil {
+		return nil, fmt.Errorf("pane.zoom 没返回结果")
+	}
+	return w.Zoom, nil
+}
+
 // ReadANSI 拿带转义序列的整屏。必须 format:"ansi" + strip_ansi:false ——
 // format:"text" 即使 strip_ansi:false 也不含 ESC。
 func (c *Client) ReadANSI(id string) (string, error) {

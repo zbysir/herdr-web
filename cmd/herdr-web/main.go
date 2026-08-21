@@ -30,19 +30,23 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"git.huglight.cn/bysir/herdr-web/internal/acme"
-	"git.huglight.cn/bysir/herdr-web/internal/admin"
-	"git.huglight.cn/bysir/herdr-web/internal/auth"
-	"git.huglight.cn/bysir/herdr-web/internal/config"
-	"git.huglight.cn/bysir/herdr-web/internal/ctl"
-	"git.huglight.cn/bysir/herdr-web/internal/qr"
-	"git.huglight.cn/bysir/herdr-web/internal/runlock"
-	"git.huglight.cn/bysir/herdr-web/internal/server"
-	"git.huglight.cn/bysir/herdr-web/internal/tlsgen"
-	"git.huglight.cn/bysir/herdr-web/internal/webui"
+	"github.com/zbysir/herdr-web/internal/acme"
+	"github.com/zbysir/herdr-web/internal/admin"
+	"github.com/zbysir/herdr-web/internal/auth"
+	"github.com/zbysir/herdr-web/internal/config"
+	"github.com/zbysir/herdr-web/internal/ctl"
+	"github.com/zbysir/herdr-web/internal/qr"
+	"github.com/zbysir/herdr-web/internal/runlock"
+	"github.com/zbysir/herdr-web/internal/selfupdate"
+	"github.com/zbysir/herdr-web/internal/server"
+	"github.com/zbysir/herdr-web/internal/tlsgen"
+	"github.com/zbysir/herdr-web/internal/version"
+	"github.com/zbysir/herdr-web/internal/webui"
 )
 
 func main() {
+	// 没有 ldflags 注入时（go install pkg@v1.2.3）从 build info 里兜一个版本号
+	version.FromBuildInfo()
 	if err := rootCmd().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "  ✗ "+err.Error())
 		os.Exit(1)
@@ -62,9 +66,11 @@ func rootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE:          func(*cobra.Command, []string) error { return serve(webDir) },
+		Version:       version.Version,
 	}
 	root.Flags().StringVarP(&webDir, "web", "w", "", "从这个目录伺候前端（开发用；留空则用嵌进二进制的那份）")
-	root.AddCommand(pairCmd(), devicesCmd(), revokeCmd(), unlockCmd())
+	root.AddCommand(pairCmd(), devicesCmd(), revokeCmd(), unlockCmd(),
+		versionCmd(), updateCmd(), serviceCmd())
 	return root
 }
 
@@ -191,6 +197,10 @@ func serve(webDir string) error {
 		}
 	}()
 
+	// 后台盯新版本。放在这里而不是更早：前面那些检查可能直接 return，没必要为一个
+	// 已经要退出的进程去发请求。
+	updates := startUpdateWatch(cfg)
+
 	names := append([]string{}, cfg.Hostnames...)
 	if cert != nil {
 		names = append(names, cert.DNSNames...)
@@ -200,6 +210,8 @@ func serve(webDir string) error {
 		Passkeys:    passkeys,
 		ReauthAfter: time.Duration(cfg.ReauthHours) * time.Hour,
 		RPID:        cfg.PasskeyRPID(),
+		Version:     version.Version,
+		Updates:     updates,
 	})
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
@@ -239,6 +251,7 @@ func serve(webDir string) error {
 			Cfg: cfg, Store: store, Passkeys: passkeys, Gate: gate, ACME: acmeMgr,
 			CertFile: certFile, SelfSigned: cert != nil && cert.SelfSigned,
 			PairURL: func(code string) string { return pairURL(cfg, code) },
+			Version: version.Version, Updates: updates,
 		})
 		go func() {
 			if err := http.Serve(adminLn, h); err != nil {
@@ -247,7 +260,7 @@ func serve(webDir string) error {
 		}()
 	}
 
-	banner(cfg, store, passkeys, cert, web == nil, adminAddr)
+	banner(cfg, store, passkeys, cert, web == nil, adminAddr, updates)
 	defer store.Flush() // 把攒着的 LastSeen 落盘
 	return http.Serve(ln, srv.Handler())
 }
@@ -507,9 +520,9 @@ func certIPs(cfg *config.Config) []net.IP {
 	return ips
 }
 
-func banner(cfg *config.Config, store *auth.Store, passkeys *auth.Passkeys, cert *tlsgen.Result, noWeb bool, adminAddr string) {
+func banner(cfg *config.Config, store *auth.Store, passkeys *auth.Passkeys, cert *tlsgen.Result, noWeb bool, adminAddr string, updates *selfupdate.Checker) {
 	fmt.Println()
-	fmt.Println("  herdr-web 已启动")
+	fmt.Println("  herdr-web " + version.Version + " 已启动")
 	fmt.Println("  " + base(cfg, "127.0.0.1") + "/")
 
 	var nics []nic
@@ -602,6 +615,11 @@ func banner(cfg *config.Config, store *auth.Store, passkeys *auth.Passkeys, cert
 	}
 	if !cfg.BrowserHTTPS() && !cfg.Loopback {
 		fmt.Println("  ⚠️  明文 http：抓包就能拿到 cookie 和整个终端画面。")
+	}
+	// 有新版本就在这儿说一句。用缓存，不在启动路径上发请求 —— 网络慢的时候
+	// 那会变成「启动卡住十秒」，而这条提示不值那个代价。
+	if st, ok := updates.Available(); ok {
+		fmt.Println("  ⬆️  " + updateNotice(st))
 	}
 	fmt.Println()
 }

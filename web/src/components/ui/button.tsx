@@ -34,16 +34,24 @@ const buttonVariants = cva(
           // 按下去那一瞬间给绿：触屏上没有 hover，这是唯一的「点到了」的反馈
           'active:translate-y-px active:border-brand/45 active:bg-brand/15 active:text-brand',
       },
+      /*
+        尺寸只有**一套**：高度写死 h-8（32px）、左右内边距 8px，图标按钮就是 32×32 的
+        正方。以前是按 py 撑高的，文字和图标的行高不一样（19.5 vs 16），于是「连接」
+        33.5px、⚙ 30px、软键条的键 35px —— 一排里三种高度，看着就是没对齐。写死高度
+        之后，文字按钮、图标按钮、软键都在同一条基线上。
+
+        tiny 是面板里那些次要按钮（保存 / 载入预设 / 删掉），矮一档（28px）。
+      */
       size: {
-        default: 'px-3 py-1.5 text-[13px]',
-        tiny: 'px-2.5 py-1.5 text-xs',
-        icon: 'px-2 py-1.5 min-w-8 text-[13px]',
+        default: 'h-8 px-2 text-[13px]',
+        tiny: 'h-7 px-2 text-xs',
+        icon: 'h-8 w-8 text-[13px]',
         /**
-         * 软键条的键。手机竖屏（< 440px）上字号和内边距各小一号：那一档软键条是
-         * **一行横滑**的，键矮一点等于终端多一行，而横向省下来的那点宽度直接换成
-         * 「一屏里能看见几个键」。35px 高 → 28px，仍在能点准的范围里。
+         * 软键条的键：同样 32px 高、8px 边距，只是多一个 min-w（在 variant.key 里）
+         * 给单字符的键垫出个能点准的宽度。手机竖屏（< 440px）矮一档、字号小一号 ——
+         * 那一档是**一行横滑**的，键矮一点等于终端多一行。
          */
-        key: 'px-3 py-2.5 text-[13px] leading-none max-phone:px-2 max-phone:py-[7px] max-phone:text-[11.5px]',
+        key: 'h-8 px-2 text-[13px] leading-none max-phone:h-7 max-phone:px-1.5 max-phone:text-[11.5px]',
       },
       on: { true: '', false: '' },
     },

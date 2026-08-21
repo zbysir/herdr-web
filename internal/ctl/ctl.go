@@ -17,7 +17,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"git.huglight.cn/bysir/herdr-web/internal/auth"
+	"github.com/zbysir/herdr-web/internal/auth"
 )
 
 type Request struct {

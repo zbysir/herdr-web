@@ -1,0 +1,37 @@
+{
+  "name": "@bysir/herdr-web",
+  "version": "0.0.1-next",
+  "description": "浏览器里的 herdr 终端 + 语音投稿。一个 Go 二进制，前端嵌在里面。",
+  "license": "MIT",
+  "homepage": "https://github.com/zbysir/herdr-web#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zbysir/herdr-web.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zbysir/herdr-web/issues"
+  },
+  "keywords": [
+    "herdr",
+    "terminal",
+    "web-terminal",
+    "coding-agent",
+    "claude-code"
+  ],
+  "bin": {
+    "herdr-web": "bin/herdr-web.js"
+  },
+  "files": [
+    "bin/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "@bysir/herdr-web-darwin-arm64": "0.0.1-next",
+    "@bysir/herdr-web-darwin-x64": "0.0.1-next",
+    "@bysir/herdr-web-linux-arm64": "0.0.1-next",
+    "@bysir/herdr-web-linux-x64": "0.0.1-next"
+  }
+}

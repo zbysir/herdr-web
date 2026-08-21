@@ -22,3 +22,9 @@ token
 # reference/ 里的 Python 原型
 __pycache__/
 *.pyc
+
+# 发版产物（goreleaser）
+/dist/
+# npm 包：根包（那个 JS 壳）是入库要维护的，平台子包和拷进去的 README 都是生成的
+/npm/herdr-web-*/
+/npm/herdr-web/README.md

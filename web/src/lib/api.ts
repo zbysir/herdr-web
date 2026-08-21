@@ -109,6 +109,9 @@ export interface State {
   secureContext: boolean
   compose: { pollMs: number; pushMs: number; settleMs: number }
   herdrSocket: string
+  /** 版本信息。outdated 为真时才有 latest / how —— 后端只在有新版本时才带这两个，
+      前端不用自己比版本号（比法在 Go 那边，只有一份）。 */
+  version?: { current: string; latest?: string; outdated?: boolean; how?: string }
 }
 
 export interface Pane {
@@ -139,6 +142,15 @@ export interface SayResult extends PaneInfo { chars: number; lines: number; clea
 export interface DraftResult extends PaneInfo { pushed?: number; skipped?: 'not-agent' | 'busy' | 'no-box' }
 export interface UploadResult { path: string; name: string; bytes: number; kind: string; dir: string }
 
+/**
+ * 「跳到某个 pane」的结果。
+ *
+ * zoomed 是**整个 tab** 的放大状态，不是这个 pane 的（herdr 放大的永远是当前焦点
+ * pane）；singlePane 是「这个 tab 只有一个 pane，没什么可放大的」—— 跟「放大失败」
+ * 不是一回事，得分开说，不然用户以为按钮没生效。
+ */
+export interface GotoResult { target: string; zoomed: boolean; focusChanged: boolean; singlePane?: boolean }
+
 export interface SoftKey {
   id?: string         // 稳定标识，软键条按这个引用（服务端存盘时补齐）
   label: string
@@ -147,7 +159,7 @@ export interface SoftKey {
   send?: string    // 解析出来的字节（前端照发）
   spec?: string    // 用户写的按键谱（编辑器回显）
   sticky?: 'ctrl' | 'alt'
-  act?: 'kbd' | 'img' // 网页端自己处理，不发字节
+  act?: 'kbd' | 'img' | 'panes' // 网页端自己处理，不发字节
 }
 export interface PresetGroup { group: string; items: SoftKey[] }
 /**

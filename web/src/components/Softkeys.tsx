@@ -30,7 +30,7 @@ const CONFIRM_MS = 3000
  * 键挨得这么近，关 pane / 关标签这种误触一下就没了，而 herdr 那边没有撤销。
  */
 export function Softkeys({
-  bar, sticky, kbdUp, onSend, onSticky, onKeyboard, onImage,
+  bar, sticky, kbdUp, onSend, onSticky, onKeyboard, onImage, onPanes,
 }: {
   /** 每行的按键（已按 id 解析好）。一到两行 */
   bar: SoftKey[][]
@@ -41,6 +41,8 @@ export function Softkeys({
   onKeyboard: () => void
   /** act:img 的键：弹相机 / 相册（路径去哪儿由 App 决定） */
   onImage: () => void
+  /** act:panes 的键：开「面板一览」。手机上键盘一弹起来顶栏就收掉了，那时候只有这条路 */
+  onPanes: () => void
 }) {
   const phone = usePhone()
 
@@ -101,6 +103,7 @@ export function Softkeys({
                   disarm()   // 点别的键 = 把举着的那个放下，但这一下照样算数
                   if (k.act === 'kbd') onKeyboard()
                   else if (k.act === 'img') onImage()
+                  else if (k.act === 'panes') onPanes()
                   else if (k.sticky) onSticky(k.sticky)
                   else if (k.send) onSend(k.send)
                 }}

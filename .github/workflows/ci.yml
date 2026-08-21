@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # typecheck 要 node_modules，而 make test 不负责装（那是 make web 干的）。
+      # 少这一步的表现是 CI 报「tsc: command not found」。
+      - run: npm --prefix web ci
+
+      # make test = go test ./... + 前端 typecheck
+      - run: make test
+
+      # 装脚本和 npm 壳都是 release 路径上的东西，坏了要在这儿就发现，
+      # 而不是等到发版当天
+      - run: sh -n install.sh
+      - run: node --check npm/herdr-web/bin/herdr-web.js
+      - run: node --check scripts/npm-build.mjs
+      - run: node --check scripts/npm-publish.mjs
+
+      # 交叉编译过一遍：发版是在 CI 上交叉编的，本机能编不代表都能编
+      - name: 交叉编译检查
+        run: |
+          for t in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            echo "→ $t"
+            GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -o /dev/null ./cmd/herdr-web
+          done

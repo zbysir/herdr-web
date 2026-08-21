@@ -5,7 +5,7 @@
 // 之后，对齐文本就等于草稿本身，于是草稿看起来「没改过」→ 解锁目标 → 下一拍把用户
 // 正在写的东西直接覆盖掉。所以 own 单独负责所有权，synced 只负责发现远端变化。
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, FOLLOW, type DraftResult, type Pane, type PresetGroup, type SayResult, type SyncResult, type UploadResult } from '@/lib/api'
+import { api, FOLLOW, type DraftResult, type GotoResult, type Pane, type PresetGroup, type SayResult, type SyncResult, type UploadResult } from '@/lib/api'
 
 const HIST_KEY = 'composeHist'
 const HIST_MAX = 30
@@ -82,6 +82,29 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
       if (!quiet) toast('连不上 herdr：' + (e as Error).message)
     }
   }, [say2, toast])
+
+  /**
+   * 跳到某个 pane：切焦点 +（可选）放大铺满。「面板一览」点一行走的就是这儿。
+   *
+   * 放在这个 hook 里，是因为 pane 列表和「上一次解析到的 pane」都在这儿 —— 跳完必须把
+   * resolved 清掉，逼下一拍当成「切了 pane」处理，立刻把新 pane 输入框里的东西拉进来。
+   * 不清的话轮询会觉得什么都没变，框里还挂着上一个 pane 的内容。
+   *
+   * 投稿目标不用动：默认那条「跟随 herdr 当前 pane」自己就跟过去了。本地有草稿时目标
+   * 仍然锁在原来那个 pane 上 —— 那是对的，为 A 写的话不该因为你去 B 看了一眼就投给 B。
+   */
+  const jump = useCallback(async (id: string, zoom: boolean) => {
+    try {
+      const r = await api.post<GotoResult>('/herdr/goto', { target: id, zoom })
+      resolved.current = ''
+      void loadPanes(true)   // focused 标记变了
+      return r
+    } catch (e) {
+      say2('跳转失败：' + (e as Error).message, true)
+      toast('跳转失败：' + (e as Error).message)
+      return null
+    }
+  }, [loadPanes, say2, toast])
 
   const loadSoftkeyPresets = useCallback(async () => {
     try {
@@ -295,7 +318,7 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
   return {
     text, setText: onChangeText, panes, presets, sel, selectTarget,
     info, bad, busy, aimed,
-    loadPanes, loadSoftkeyPresets, tick, pull, submit, recall, attach, upload, append,
+    loadPanes, loadSoftkeyPresets, tick, pull, submit, recall, attach, upload, append, jump,
   }
 }
 

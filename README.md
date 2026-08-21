@@ -8,11 +8,35 @@
 
 > **语音投稿**（平板手写笔说话打字 → 投进 agent pane）是这个项目的主功能，见下面「发件箱」。设计取舍、herdr socket API 的已验证语义和踩过的坑在 [HANDOFF.md](HANDOFF.md)。
 
+## 装
+
 ```bash
-make build      # 构建前端 → 拷进 internal/webui/dist → go build，出一个 ./herdr-web
-./herdr-web     # 只听 127.0.0.1
+npm install -g @bysir/herdr-web       # 有 node 的话最省事，升级也交给它
+herdr-web                             # 只听 127.0.0.1
+```
+
+没有 node（服务器上常见）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zbysir/herdr-web/master/install.sh | sh
+```
+
+装到 `~/.local/bin`，改地方用 `HERDR_WEB_INSTALL_DIR=`。装脚本**强制校验 sha256**，没有 `sha256sum`/`shasum` 就直接拒绝装 —— 这东西后面挂着一个登录 shell。
+
+其它几条路：
+
+```bash
+make build && ./herdr-web             # 从源码（前端 → 拷进 internal/webui/dist → go build）
 HERDR_WEB_HOST=0.0.0.0 ./herdr-web    # 听局域网，顺便在终端画个二维码给手机扫
 ```
+
+`go install github.com/zbysir/herdr-web/cmd/herdr-web@latest` 也能装，但**装出来的没有前端** ——
+前端产物是 `make build` 生成后 embed 进去的，不入版本库，所以 `go install` 拿不到。那样装出来的
+只能配 `--web <目录>` 指一份自己构建的前端，或者干脆只用命令行子命令。要能开页面就走上面那三条。
+
+**Windows 没有原生版**，在 WSL 里装。不是懒：浏览器里那个终端需要一个真 PTY（Go 那边用 `creack/pty`，windows 上是个 `return nil, ErrUnsupported` 的空壳），herdr 自己也走 unix socket。WSL 里就是 linux 版，功能完整；浏览器那端本来就跨平台，Windows 上开 `http://localhost:7788/` 照样用。npm 包在 win32 上会直接打出这段提示而不是装一个跑不起来的东西。
+
+装成开机自启的常驻服务：[守护进程](#守护进程)。升级：[更新](#更新)。
 
 **配置只有环境变量这一个来源**（没有配置文件，命令行也只有一个 `--web`）：全部清单、怎么设、几套常见配法在下面的[配置](#配置)。子命令 `herdr-web --help`。
 
@@ -100,6 +124,39 @@ herdr 有 `events.subscribe` 推送通道，但 agent 一 working 就是刷屏�
 - **agent pane 上认不出输入框时也不投**（屏幕上正开着分页器 / 编辑器 / 某个全屏控件）。这时候「拉回」也不会往框里塞东西 —— 认不出就是认不出，不会退回屏幕最后一行。shell pane 天生读不到输入行，那边不受影响，投稿照常。
 - socket 在**跑 herdr server 的那台机器**上。现在只连本机（或 `HERDR_WEB_SOCKET` 指到的路径）。
 
+## 面板一览（手机上换 pane 的那条路）
+
+顶栏的 ▦（或者软键条上配一个 `act:panes`）打开一张 pane 列表：按 workspace 分组，一行一个
+pane，**点一下就跳过去并铺满全屏**。列表上方能筛（tab 名 / 标题 / 路径 / pane id）、能只看
+跑着 agent 的、能关掉「全屏」（那时候点一行是「切焦点 + 退出放大」）。
+
+**为什么需要它。** 软键条发的是**按键**，而按键只能表达**相对**导航：下一个 tab、往右切一格。
+「让 `w5:p3` 全屏」这句话用按键说不出来，只能拆成一串相对动作走过去 —— 而中间每一步的屏幕，
+正好都是「未放大的多 pane 布局」那个在手机上根本读不了的状态。本机实测的规模是 48 个 pane /
+38 个 tab / 4 个 workspace，一趟是 workspace → tab → pane → zoom 四段盲走。
+
+herdr 的 socket 这层是**按 pane_id 寻址**的：`pane.zoom` 带上 `pane_id` 就能一次跨
+workspace + tab + pane（焦点连着 workspace 和 tab 一起切过去，不用先 `workspace.focus`
+再 `tab.focus`，实测确认）。所以界面上就是点一行。
+
+**它是索引，不是第二个界面。** 点完之后看的还是同一个 herdr 终端 —— 网页接的是整个 TUI，
+herdr 那边一切焦点，画面自己就跟过来了；键盘那套操作一个字都没变，Mac 上照旧敲键盘。这条是
+刻意的：手机端「只接管一个 pane + 做一套图形界面管面板」的做法能做得更花，代价是**两套使用
+习惯**和第二个真相源。所以这个面板只做「去哪儿」，不做增删改。
+
+几个细节：
+
+- **pane id 在手机上也照样显示**。一个 tab 里分了两个 pane 时，两行的 tab 标签和 cwd
+  一模一样（实拍见过），id 是唯一分得开的东西。
+- 第二行给的是 **agent 自己写的会话标题**（Claude Code 那个「图片识别」之类），没有才退回
+  cwd —— shell pane 的标题只是 `user@host:path`，不如路径。
+- **跳完不自动聚焦终端**（手机上那一下会把系统键盘顶出来，而刚跳过去多半是要看）；宽屏上顺手聚上。
+- 投稿目标不用管：默认那条「跟随 herdr 当前 pane」自己就跟过去了。本地有草稿时目标仍然锁在
+  原来那个 pane 上 —— 为 A 写的话不该因为你去 B 看了一眼就投给 B。
+- 「全屏」开关记在本地（`localStorage`）。手机上默认开：多 pane 平铺读不了，去了不放大等于没去。
+- `zoomed` 是**整个 tab** 的状态，不是某个 pane 的（herdr 放大的永远是当前焦点 pane）。
+  所以「这个 tab 只有一个 pane」会回 `zoomed:false`，那不是失败，界面上单独说一句。
+
 ## 设置面板
 
 顶栏最右的 ⚙ 是全部设置，分三页：**终端**（字号 / 明暗、kitty 协议 / Option 当 Meta / 选中即复制 / 同步输出，加一行后端环境）、**软键条**（下面那节）、**设备**（谁配过对、登出、踢人）。
@@ -137,7 +194,8 @@ herdr 有 `events.subscribe` 推送通道，但 agent 一 working 就是刷屏�
 - 预设分 8 组（前缀 / 标签 / Pane / 工作区 / 终端按键 / 文本 / Claude 命令 / 网页端动作），「载入预设」一下全进「我的按键」。herdr 那几组抄的是 `herdr --default-config` 的 `[keys]` 默认值，改过 keybinding 的人自己改；「Claude 命令」是 `/new` `/clear` `/compact` `/usage` `/context` `/model` `/resume` `/cost`，都带回车，一下点完。
 - 每个键有个**「两下」**勾选框：勾上的键要点两次才真发出去 —— 第一下只是举起来（键变红，文字不变，免得按键变宽把手指底下的键挪走），3 秒不点、或者点了别的键就放下。软键条上键挨得近，关 pane / 关标签这种误触没法撤销。预设里 `关 pane` `关标签` `关工作区` `断开` `/clear` 默认就带。
 - `Ctrl` / `Alt` 是**粘滞**的：点一下亮起，再敲一个字母就发出对应组合键，然后自动灭掉。手机虚拟键盘的 keydown 不可靠，所以这层是在数据流上做的，不依赖按键事件。写法是 `sticky:ctrl` / `sticky:alt`。
-- `act:` 是**网页端自己处理**的动作，不发任何字节：`act:kbd` 呼出 / 收起系统键盘，`act:img` 传图（弹相机 / 相册，路径按「发件箱开没开」决定去草稿还是直接敲进终端）。服务端只认白名单里这两个，写错了保存时就报错，不会下发一个点了没反应的键。
+- `act:` 是**网页端自己处理**的动作，不发任何字节：`act:kbd` 呼出 / 收起系统键盘，`act:img` 传图（弹相机 / 相册，路径按「发件箱开没开」决定去草稿还是直接敲进终端），`act:panes` 开「面板一览」（上面那节）。服务端只认白名单里这三个，写错了保存时就报错，不会下发一个点了没反应的键。
+  `act:panes` 放在软键条上是有讲究的：手机上键盘一弹起来顶栏整段就收掉了，那时候顶栏那个入口点不到，而软键条正好在拇指底下。
 - 按键谱在**服务端**解析成字节再下发，前端只管照发；写错了保存时会告诉你是第几个按键、哪里不认。回包里 `send` 是**解析好的字节**、`spec` 是你写的谱 —— 编辑器回传时两个字段都在，服务端**认 `spec`**。拿 `send` 当谱重解一次的话，Tab 的 `"\t"` 去掉空白就是空串，报「按键谱是空的」而用户什么都没改（踩过）。
 
 ## 手机
@@ -168,6 +226,10 @@ xterm.js 的触屏支持基本只有「点一下聚焦隐藏 textarea」，剩�
 **为什么连「没有鼠标上报」的时候也要吃掉**：不吃的话浏览器会补发兼容鼠标事件，xterm 当成「按下 + 拖选」——手指一滑变成选中文字、终端一动不动（还没 attach herdr、或者 pane 里跑着不收鼠标的程序时必现）。触屏上想滚屏远比想选字常见，所以这里选滚屏。代价：触屏不再能拖选（要复制用桌面鼠标，或者 herdr 自己的 COPY 模式），点一下也不再由浏览器顺手聚焦 textarea，改成自己在 `touchend` 里 focus。
 
 **手势时长用事件自带的时间戳**（`e.timeStamp`），不是处理函数里的 `Date.now()`。终端忙着重绘时定时器和事件派发都会被推后，实测一次 60ms 的点击在处理函数里量出来是 994ms，于是被「超过 500ms 算长按，什么都不做」挡掉 —— 表现就是「输出一多点哪儿都没反应」。事件时间戳是事件产生时打的，不受处理延迟影响。
+
+**换 pane 不靠盲敲**：顶栏 ▦ 或软键条上的 `act:panes` 开「面板一览」，点一行直接跳过去并铺满
+（见上面那节）。按键那条通道只能表达「下一个 tab」这种相对导航，而中间每一步的屏幕正好都是
+手机上读不了的那个平铺状态。
 
 连上时也不自动抢焦点（触屏设备），否则一连上键盘就顶出来。要打字：双击终端，或点软键条最左边的 ⌨。键盘状态跟着 textarea 的 focus/blur 走，所以用户自己收起键盘时按钮高亮也会跟着灭。
 
@@ -259,6 +321,9 @@ internal/
                       authapi.go 是配对和设备管理的口
   webui/              embed 前端产物（dist 由 make build 拷进来）
   qr/                 启动时在终端画二维码
+  version/            版本号的唯一出处（goreleaser 用 ldflags 注进来）
+  selfupdate/         查 GitHub Releases + 缓存 + 下载校验 + 原地换二进制
+  service/            装成 launchd / systemd 常驻服务（plist / unit 生成 + 环境快照）
 assets/               图标（herdr 的羊关在浏览器窗口里）。**别手改 svg**，
                       改 assets/make-logo.py 再跑一遍 —— 羊的剪影是从 herdr 复用的
                       一条 1800+ 字符描图路径，而同一份图形要出圆角版 / 方角版 / 三种 png
@@ -271,11 +336,29 @@ web/                  Vite + React + TS + Tailwind v4 + shadcn 风格组件
                       SettingsPanel.tsx 是设置面板，软键条编辑器和设备管理是它的两页
                       QrScan.tsx 是配对页里的扫码器（BarcodeDetector + 后摄）
 reference/            最早的 Python 原型，HANDOFF 里那些「已验证」都是拿它验的
+npm/herdr-web/        npm 根包 @bysir/herdr-web：一个 JS 壳，按平台找二进制
+scripts/npm-*.mjs     把 goreleaser 产物摊成 npm 包 / 按顺序发布
+install.sh            没有 node 时的装法（下载 + 强制校验 sha256）
+.goreleaser.yaml      交叉编译 + archive + checksums（只出 darwin / linux）
+.github/workflows/    ci.yml 每次推都跑；release.yml 打 tag 就发 GitHub + npm
 ```
 
-命令行是 [cobra](https://github.com/spf13/cobra)（`cmd/herdr-web/main.go`）：根命令起服务，`pair` / `devices` / `revoke` / `unlock` 是子命令，`--help` 和补全脚本白送。**标志只有一个** `-w, --web`（开发时指前端目录），别的配置一律环境变量 —— 同一个设置两个入口就得规定谁盖谁，不值当。
+命令行是 [cobra](https://github.com/spf13/cobra)（`cmd/herdr-web/main.go`）：根命令起服务，`pair` / `devices` / `revoke` / `unlock` / `version` / `update` / `service` 是子命令，`--help` 和补全脚本白送。**标志只有一个** `-w, --web`（开发时指前端目录），别的配置一律环境变量 —— 同一个设置两个入口就得规定谁盖谁，不值当。
 
 `make test` 跑 Go 测试 + 前端 typecheck。`make dev` 前端热更新（后端另开一个 `go run ./cmd/herdr-web`，vite 把 `/api` 和 `/pty` 转过去）。
+
+### 发版
+
+```bash
+make release-dry        # 本地把整条链跑一遍：交叉编译 → archive → npm 包 → npm publish --dry-run
+make release V=v0.1.0   # 打 tag 并推上去，剩下的 GitHub Actions 干
+```
+
+推上 tag 之后 `release.yml` 会：`make test` → goreleaser（交叉编译 4 个平台、出 archive 和 `checksums.txt`、建 GitHub Release）→ 把 archive 摊成 npm 包 → **先发 4 个平台子包、最后发根包**。顺序反了会有一段时间 `npm install` 装出一个没有二进制的壳。
+
+需要一个仓库 secret：`NPM_TOKEN`（Automation 类型的 token，这样 2FA 不会挡住 CI）。
+
+三处名字必须对得上，改一个就要改另外两个：`.goreleaser.yaml` 的 `name_template`、`internal/selfupdate.AssetName`（自更新下载）、`scripts/npm-build.mjs`。对不上的表现是 `herdr-web update` 下载 404。
 
 **为什么终端那层不是 React 组件**：它要直接摸 xterm 的 parser、逐字节收 WebSocket、按 rAF 补重绘 —— 套上 React 的渲染周期只会碍事。React 那边只拿一个 ref 挂载它，再订阅几个状态回调。
 
@@ -387,6 +470,7 @@ export HERDR_WEB_TLS=auto
 | `HERDR_WEB_TRUST_LOOPBACK` | 关 | `=1` 让来自 127.0.0.1 的请求免配对。**套 frp / 反代时千万别开** —— 那时候公网请求的源地址就是 127.0.0.1，等于谁都是「本机」。开着时还额外要求 `Host` 也是 loopback 字面量 |
 | `HERDR_WEB_TRUST_PROXY` | 关 | `=1` 才读 `X-Forwarded-For`。没有可信前置时开着，攻击者自带一个头就能伪造源 IP、把按 IP 的限速绕干净 |
 | `HERDR_WEB_INSECURE` | 关 | `=1` 允许「暴露出去但没有 TLS」。除了临时调试没有正当用途 |
+| `HERDR_WEB_UPDATE_CHECK` | 开 | `=0` 关掉自动查更新。关掉之后这个进程**不会有任何出站请求** —— 内网机器不该主动连外网那类环境的硬要求。只是不自动查，手动 `herdr-web update --check` 照样能查 |
 
 ### 排查
 
@@ -424,6 +508,75 @@ HERDR_WEB_TLS_KEY=/etc/ssl/herdr/privkey.pem ./herdr-web
 # 5. 不想一连上就进 herdr（留在 shell 里）
 HERDR_WEB_ONCONNECT= ./herdr-web
 ```
+
+## 守护进程
+
+装成 user 级常驻服务，开机自启：
+
+```bash
+herdr-web service install     # macOS → launchd LaunchAgent；Linux → systemd user unit
+herdr-web service status      # 装没装、跑没跑、PID、日志在哪
+herdr-web service logs        # tail -f 日志
+herdr-web service restart     # 换过二进制之后要这一步
+herdr-web service uninstall   # 停掉并删掉（数据和日志不动）
+```
+
+**配置是装的那一刻从当前 shell 抄进去的。** 所以顺序是「先把环境配对，再 install」；改了配置要重新 `install`（幂等，就是覆盖 + 重启）。想从文件读：
+
+```bash
+herdr-web service install --env-file .env
+```
+
+抄进去的是所有 `HERDR_WEB_*`，加上 `PATH` / `SHELL` / `HOME` / `USER` / `LOGNAME` / `LANG` / `LC_ALL` / `TERM` / `HERDR_SOCKET_PATH`。`install` 会把这份清单全打出来 —— 以后「这台机器上服务到底在用哪套配置」只能靠 plist / unit 回答，装的时候看一眼最省事。
+
+**抄 `PATH` 是必须的，这是装成服务后最常见的故障**：launchd 给的默认 `PATH` 只有 `/usr/bin:/bin:/usr/sbin:/sbin`，于是 `HERDR_WEB_ONCONNECT=herdr` 变成 `herdr: command not found`，而页面上只看到一个空 shell，完全看不出为什么。
+
+为什么是 user 级不是系统级：这个进程会开一个**你的** shell。跑成 root 的系统服务意味着浏览器里那个终端是 root 的，权限一步到位放到最大，而且 `~/.herdr-web`、`~/.config/herdr/herdr.sock` 这些路径全指到别人家去了。
+
+两个平台各自的坑：
+
+| | 文件 | 注意 |
+|---|---|---|
+| macOS | `~/Library/LaunchAgents/io.github.zbysir.herdr-web.plist` | LaunchAgent 是**登录时**起，不是开机时起。开了自动登录的机器上二者等价；没开的话得登录一次。真要「无人登录也起」只能用 `/Library/LaunchDaemons` 里的系统级 daemon，但那样 shell 就是 root 的，这个项目不做。 |
+| Linux | `~/.config/systemd/user/herdr-web.service` | `install` 会顺手 `loginctl enable-linger`。**不开 linger 的话，你 ssh 退出登录之后服务会被停掉** —— 对一台要随时能连进去的机器来说那等于没常驻。失败会提示你手动 `sudo loginctl enable-linger $USER`。 |
+
+日志两个平台都在 `~/.herdr-web/logs/herdr-web.log`（故意统一，文档和 `service logs` 只有一套说法）。Linux 上 `journalctl --user -u herdr-web` 一样能看。
+
+`service status` 显示「装了但没在跑」就是**起来就崩**，原因只在日志里 —— launchd 和 systemd 都会按几秒的退避一直重试，不看日志会以为它在跑。
+
+Windows / 没有 systemd 的 Linux（容器、WSL1）会明确告诉你用不了以及该怎么办，不会装一个跑不起来的东西。WSL2 里加 `[boot] systemd=true` 到 `/etc/wsl.conf` 然后 `wsl --shutdown` 重开就能用。
+
+## 更新
+
+```bash
+herdr-web update            # 查 + 升
+herdr-web update --check    # 只查，不动
+herdr-web update --restart  # 升完顺手重启服务
+herdr-web version           # 当前版本 + 当初是怎么装的
+```
+
+**怎么升取决于当初怎么装的**，`update` 自己判断（看可执行文件路径，symlink 会先解开）：
+
+| 装法 | 升级动作 |
+|---|---|
+| npm | 调 `npm install -g @bysir/herdr-web@latest` |
+| homebrew | 调 `brew upgrade herdr-web` |
+| `go install` | 调 `go install …@latest` |
+| release archive / install.sh | **本程序自己来**：下载 → 校验 sha256 → 同目录写临时文件 → `rename` 原子替换 |
+
+包管理器装的不自己动文件，是因为去改 `node_modules` / `Cellar` 里的东西，下次那个包管理器一升级就盖回去了，白忙一场。
+
+自己换的那条路有三个点是刻意的：**先校验再落地**（`checksums.txt` 对不上就整个放弃）、**临时文件必须同目录**（跨目录 `rename` 会 EXDEV）、**不删旧的**（unix 上 rename 覆盖一个正在运行的可执行文件是允许的，老 inode 还被进程持着，所以当前进程能安全跑到自己退出）。
+
+**换完文件不等于换了正在跑的那个进程。** 重启才生效，而重启会掐掉所有正在用的终端会话 —— 所以这一步默认不做，`--restart` 才做。
+
+新版本提示出现在三个地方：
+
+- **启动横幅**最后一行（用缓存，不在启动路径上发请求 —— 网络慢的时候那会变成「启动卡十秒」）；
+- **管理页**最上面横一条，带当前版本、该敲哪条命令、更新说明链接；
+- 服务在跑的时候，后台每天查一次，发现新版本往**日志**里写一行（同一个版本只提一次，不会天天刷）。
+
+查更新走 GitHub Releases 的匿名接口，结果缓存在 `~/.herdr-web/update.json`（落盘的，所以频繁重启不会变成每次都查；查失败也记时间戳，网络不通的机器不会每次启动都撞一次超时）。`HERDR_WEB_UPDATE_CHECK=0` 彻底关掉自动查 —— 关掉之后这个进程不会有任何出站请求。本地构建（`version` 显示 `dev`）不查也不提示。
 
 ## 安全
 

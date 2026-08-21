@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # 建 release
+  id-token: write # npm provenance
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # goreleaser 要全部历史来生成 changelog
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # 钉住 npm 版本：npm@latest（12.0.0，2026-07-08 发的）的
+      # `npm publish --provenance` 是坏的（Cannot find module 'sigstore'）。
+      # 11.18.0 是已知能用的最后一版。
+      - run: npm install -g npm@11.18.0
+
+      # 同 ci.yml：typecheck 要 node_modules。goreleaser 的 before hook 里那次
+      # make web 是在这之后才跑的，指望不上。
+      - run: npm --prefix web ci
+
+      - run: make test
+
+      # goreleaser 的 before hook 会跑 make web 把前端 embed 进去
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 打 npm 包
+        run: node scripts/npm-build.mjs "${GITHUB_REF_NAME#v}"
+
+      # 平台子包先发、根包最后发（脚本里排了序）。反了会有一段时间
+      # npm install 装出一个没有二进制的壳。
+      - name: 发 npm
+        run: node scripts/npm-publish.mjs
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -5,8 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"git.huglight.cn/bysir/herdr-web/internal/auth"
-	"git.huglight.cn/bysir/herdr-web/internal/config"
+	"github.com/zbysir/herdr-web/internal/auth"
+	"github.com/zbysir/herdr-web/internal/config"
 )
 
 func testHandler(t *testing.T) http.Handler {

@@ -227,17 +227,23 @@ export function Dock({
         {keys && (
           <>
             {/* 键区上边缘三个把手，都是**两轴**的：上下改键区高度，左右按抓的位置改横向。
-                离屏幕边留够 EDGE_SAFE（px-8 + 外面那层内边距），不然安卓侧滑先把手势吃掉 */}
+                外面那层已经留了 EDGE_SAFE 的内边距（安卓侧滑区），这里不用再让。
+
+                三份**等宽**（flex-1）平分整条边，把手是各自居中、能缩的一小条（max-w）。
+                以前是 `justify-between px-8` + 定宽把手：面板被拖窄到 240px 左右时，这一
+                行的 min-content 比面板还宽，第三个把手直接顶到面板外面去 —— 看着就是三条
+                歪歪扭扭、右边那条还出了框（截图实拍）。等宽三份怎么缩都不会溢出，顺带把
+                中间那两道缝也变成可拖的（以前缝里点了没反应）。 */}
             {!phone && (
               <div
                 data-testid="dock-grip"
-                className="flex shrink-0 items-center justify-between px-8 pt-1 select-none"
+                className="flex shrink-0 items-center pt-1 select-none"
               >
                 {(['l', 'm', 'r'] as const).map((zone) => (
                   <span
                     key={zone}
                     data-testid={`dock-grip-${zone}`}
-                    className="group flex h-5 cursor-move touch-none items-center px-3"
+                    className="group flex h-5 flex-1 cursor-move touch-none items-center justify-center px-2"
                     title={
                       zone === 'm'
                         ? '拖我：上下改软键条高度（最多半屏），左右整条平移。双击复位'
@@ -248,8 +254,8 @@ export function Dock({
                   >
                     <span
                       className={cn(
-                        'h-1.5 rounded-full bg-line-hi transition-colors group-hover:bg-faint group-active:bg-brand',
-                        zone === 'm' ? 'w-16' : 'w-10',
+                        'h-1.5 w-full rounded-full bg-line-hi transition-colors group-hover:bg-faint group-active:bg-brand',
+                        zone === 'm' ? 'max-w-16' : 'max-w-10',
                       )}
                     />
                   </span>

@@ -151,7 +151,29 @@ function TermSection({
           <dd className="m-0 truncate text-muted">{state.user}@{state.hostname} · {state.shell}</dd>
           <dt className="text-faint">socket</dt>
           <dd className="m-0 truncate font-mono text-muted">{state.herdrSocket}</dd>
+          {state.version && (
+            <>
+              <dt className="text-faint">版本</dt>
+              <dd className="m-0 truncate text-muted">{state.version.current}</dd>
+            </>
+          )}
         </dl>
+      )}
+
+      {/* 有新版本就显式提一句，并把命令给全。这里看到提示的人手边就有一个终端，
+          能就地敲 —— 所以这条提示是可执行的，不是「回机器前再说」。
+          升级要重启服务，而重启会掐掉这个页面自己的终端会话，这点必须写出来。
+          用「淡绿底 + 绿边 + 绿字」（brand/12 + brand/40）而不是 brand-bg 那套实心填充：
+          实心是留给一屏一个的主操作的，这只是条提示。 */}
+      {state?.version?.outdated && (
+        <p className="mt-2 rounded-md border border-brand/40 bg-brand/12 px-2.5 py-2 text-xs/relaxed text-muted
+                      [&_code]:rounded [&_code]:border [&_code]:border-brand/40 [&_code]:px-1 [&_code]:py-px
+                      [&_code]:font-mono [&_code]:text-[11px] [&_code]:text-brand">
+          有新版本 <code>{state.version.latest}</code>。在终端里敲 <code>{state.version.how}</code> 就能升。
+          <br />
+          升完<strong className="font-medium text-fg">要重启服务才生效</strong>
+          （<code>herdr-web service restart</code>），而重启会断开所有终端会话 —— 包括这个页面里的。
+        </p>
       )}
     </div>
   )

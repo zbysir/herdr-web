@@ -115,11 +115,16 @@ func Presets() []PresetGroup {
 			{Label: "/resume", Send: "text:/resume enter"},
 			{Label: "/cost", Send: "text:/cost enter"},
 		}},
-		// 这两个不发字节，是网页端自己处理的动作 —— 传图要弹相机 / 相册，
-		// 键盘要动隐藏 textarea 的焦点，终端那边都无从代劳。
+		// 这几个不发字节，是网页端自己处理的动作 —— 传图要弹相机 / 相册，键盘要动隐藏
+		// textarea 的焦点，终端那边都无从代劳。「面板一览」也一样：按键只能表达「下一个
+		// tab」这种相对导航，说不出「让 w5:p3 全屏」，那条路只有 socket 走得通。
+		//
+		// 「面板一览」放在软键条上是有讲究的：手机上键盘一弹起来顶栏整段就收掉了（那时候
+		// 那个入口点不到），而软键条正好在拇指底下。
 		{Group: "网页端动作", Items: []Key{
 			{Label: "🖼 传图", Wide: true, Act: "img"},
 			{Label: "⌨ 键盘", Act: "kbd"},
+			{Label: "▦ 面板", Wide: true, Act: "panes"},
 		}},
 	}
 }

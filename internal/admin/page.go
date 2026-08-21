@@ -41,6 +41,7 @@ button.d{color:var(--bad)}
 button:disabled{opacity:.45;cursor:default}
 .btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
 .ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}.muted{color:var(--muted)}
+.accent{color:var(--accent)}
 ul{list-style:none;margin:0;padding:0}
 li{display:flex;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid rgba(51,56,67,.6)}
 li:last-child{border-bottom:0}
@@ -138,6 +139,32 @@ function listSection(title, items, render, empty){
       : '')+'</section>'
 }
 
+// 有新版本就在最上面横一条。放最上面是因为这是**唯一**会主动出现的待办 ——
+// 其余几块（证书、设备）都是你自己来查的时候才看。
+function versionSection(){
+  const v = S.version || {}
+  if(!v.outdated) return ''
+  return '<section style="border-color:var(--accent)">'+
+    '<h2 class=accent>⬆️ 有新版本 '+esc(v.latest)+'</h2>'+
+    '<div class=row><div class=k>当前</div><div class=v>'+esc(v.current||'?')+'</div></div>'+
+    '<div class=row><div class=k>怎么升</div><div class=v><code>'+esc(v.how||'herdr-web update')+'</code></div></div>'+
+    (v.url?'<div class=row><div class=k>更新说明</div><div class=v><a href="'+esc(v.url)+'" target=_blank rel=noreferrer>'+esc(v.url)+'</a></div></div>':'')+
+    '<div class="msg muted">升完要重启才生效（<code>herdr-web service restart</code>），'+
+    '重启会掐掉所有正在用的终端会话。</div>'+
+  '</section>'
+}
+
+// 「当前配置」里那一行版本。没查到 / 查失败都要说清楚，空白会让人以为是自己看漏了。
+function versionRow(){
+  const v = S.version || {}
+  let s = v.current || '?'
+  if(v.outdated) s += '  →  ' + v.latest + ' 可用'
+  else if(v.latest) s += '（已是最新）'
+  else if(v.err) s += '（查更新失败：' + v.err + '）'
+  else s += '（没查更新）'
+  return s
+}
+
 function render(){
   const c = S.cfg
   const warn = []
@@ -145,6 +172,7 @@ function render(){
   if(S.locked) warn.push('<span class=bad>限速熔断中：新设备配不进来</span> <button data-act=unlock>解开</button>')
 
   document.getElementById('app').innerHTML =
+    versionSection() +
     certSection() +
     dnsSection() +
     listSection('已配对的设备', S.devices, d =>
@@ -156,7 +184,7 @@ function render(){
       '<button class=d data-act=delpk data-id="'+esc(p.id)+'">删除</button></li>',
       '还没有。在网页端（不是这里）的设置 → 设备里添加 —— 注册要在你平时用的那个浏览器上做。') +
     '<section><h2>当前配置</h2>'+
-      [['域名',(c.hostnames||[]).join(' ')||'—'],['访问地址',c.publicURL||'—'],
+      [['版本',versionRow()],['域名',(c.hostnames||[]).join(' ')||'—'],['访问地址',c.publicURL||'—'],
        ['TLS 档位',c.tlsMode],['passkey 域名',c.rpid||'不可用（要用域名访问）'],
        ['重验间隔',c.reauthHours?c.reauthHours+' 小时':'关'],
        ['凭据有效期',c.ttlDays?c.ttlDays+' 天（滑动）':'永不过期'],

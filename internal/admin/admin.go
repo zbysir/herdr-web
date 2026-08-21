@@ -24,9 +24,10 @@ import (
 	"strings"
 	"time"
 
-	"git.huglight.cn/bysir/herdr-web/internal/acme"
-	"git.huglight.cn/bysir/herdr-web/internal/auth"
-	"git.huglight.cn/bysir/herdr-web/internal/config"
+	"github.com/zbysir/herdr-web/internal/acme"
+	"github.com/zbysir/herdr-web/internal/auth"
+	"github.com/zbysir/herdr-web/internal/config"
+	"github.com/zbysir/herdr-web/internal/selfupdate"
 )
 
 type Deps struct {
@@ -40,6 +41,10 @@ type Deps struct {
 	CertFile   string
 	SelfSigned bool
 	PairURL    func(code string) string
+	// Version 是当前跑的版本号，Updates 是查更新的缓存（可能是 nil）。
+	// 管理页要回答「该不该升级」，这两个都得有。
+	Version string
+	Updates *selfupdate.Checker
 }
 
 // Header 是写接口要求的自定义头。跨站请求设不了它（会触发 preflight，而我们不答
@@ -122,6 +127,7 @@ type certInfo struct {
 
 func (d Deps) state(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{
+		"version":  d.versionInfo(),
 		"cert":     d.certInfo(),
 		"devices":  d.Store.Devices(),
 		"passkeys": d.Passkeys.List(),
@@ -144,6 +150,35 @@ func (d Deps) state(w http.ResponseWriter, r *http.Request) {
 		out["lastAttempt"] = d.ACME.Last()
 	}
 	writeJSON(w, 200, out)
+}
+
+// versionInfo 回答「当前什么版本、有没有新的、怎么升」。
+//
+// 只读缓存，不在这个请求里去问 GitHub：管理页是修东西的地方，它必须在断网时也能开。
+func (d Deps) versionInfo() map[string]any {
+	out := map[string]any{"current": d.Version}
+	if d.Updates == nil {
+		return out
+	}
+	st := d.Updates.State()
+	out["latest"] = st.Latest
+	out["url"] = st.URL
+	out["outdated"] = selfupdate.Newer(strings.TrimPrefix(d.Version, "v"), st.Latest)
+	if !st.CheckedAt.IsZero() {
+		out["checkedAt"] = st.CheckedAt
+	}
+	if st.Err != "" {
+		out["err"] = st.Err
+	}
+	// 升级命令取决于当初怎么装的，前端自己猜不出来
+	if inst, err := selfupdate.Detect(); err == nil {
+		if c := inst.Command(); c != "" {
+			out["how"] = c
+		} else {
+			out["how"] = "herdr-web update"
+		}
+	}
+	return out
 }
 
 func (d Deps) certInfo() certInfo {
