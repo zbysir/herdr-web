@@ -160,7 +160,7 @@ herdr 那边一切焦点，画面自己就跟过来了；键盘那套操作一�
 | 排序 | 规则 |
 |---|---|
 | **优先级**（默认）| 按「还需不需要你」分档：**等你回答 > 跑完了 > 在跑 / 闲着 > 认不出**，同一档里按最近动过排 |
-| **herdr 顺序** | workspace / tab / pane 的原顺序，按 workspace 分组 —— 和你在 herdr 里看到的一样 |
+| **分组** | 按 workspace 分组，组里是 tab / pane 的原顺序 —— 和你在 herdr 里看到的一样 |
 
 状态点的颜色：**红 = 等你，黄 = 在跑**（和 herdr 自己 agents 栏那个黄点一致），闲着 / 跑完了
 是灰点。「在跑」不能用绿 —— 绿在这套界面里已经是「当前 / 打开着」的意思，一行里同时出现绿点和
@@ -404,9 +404,36 @@ make release V=v0.1.0   # 打 tag 并推上去，剩下的 GitHub Actions 干
 
 推上 tag 之后 `release.yml` 会：`make test` → goreleaser（交叉编译 4 个平台、出 archive 和 `checksums.txt`、建 GitHub Release）→ 把 archive 摊成 npm 包 → **先发 4 个平台子包、最后发根包**。顺序反了会有一段时间 `npm install` 装出一个没有二进制的壳。
 
-需要一个仓库 secret：`NPM_TOKEN`（Automation 类型的 token，这样 2FA 不会挡住 CI）。
+**Release 建好了但 npm 那步挂了**（发过一次，见下）用同一个 workflow 补发，不重新编译：
+
+```bash
+gh workflow run release.yml -f tag=v0.1.0
+```
+
+它会去下已经发出去的那批 archive 再打包，所以补发的二进制和 Release 里的**逐字节相同**。
+
+**发布 workflow 只能有一个，别再拆出去。** npm 的 Trusted Publisher（OIDC）一个包只能绑一个
+workflow 文件名，绑的就是 `release.yml`；再开一个会发包的 workflow，从它发就对不上 OIDC。
+
+需要一个仓库 secret：`NPM_TOKEN`（**Automation** 类型 —— 另外两档在开了 2FA 的账号上发包会要交互式
+验证码，CI 里没人输）。配了 Trusted Publisher 之后可以去掉它，但**先发一版确认 OIDC 真的生效**再删。
+
+Trusted Publisher 是**按包**配的，5 个包（根包 + 4 个平台子包）每个都要配一遍，都填 `release.yml`、
+Environment name **留空**（我们的 workflow 没声明 environment，填了任何值 OIDC 都会对不上）。
+少配一个的表现是下次发版在「发 npm」那步中途失败。
 
 三处名字必须对得上，改一个就要改另外两个：`.goreleaser.yaml` 的 `name_template`、`internal/selfupdate.AssetName`（自更新下载）、`scripts/npm-build.mjs`。对不上的表现是 `herdr-web update` 下载 404。
+
+发版路上踩过、已经修掉的三个（都是**静默**失败）：
+
+- `web/tsconfig.tsbuildinfo` 曾经入库。它是 `tsc -b` 的增量缓存，`make test` 每跑一次就改写它，
+  紧接着 goreleaser 判定 `git is in a dirty state` 直接拒绝发版。构建缓存一律不入库。
+- `make web` 里那句 `rm -rf $(WEBDIST)` 会删掉入库的 `internal/webui/dist/.gitkeep`。那个文件是
+  承重的：空目录上 `go:embed all:dist` 报 `cannot embed directory dist: contains no embeddable
+  files`，新 clone 连 `go build` 都过不了。所以 `web` 和 `clean` 两个目标都会把它写回来。
+- 首发之后有几分钟，npm 的 packument 读路径还没物化（`version` 端点和 search 都查得到，packument
+  却 404）。这时候 `npm i` 拿到 404 会**静默跳过** optional 依赖，装出一个没有二进制的壳。
+  等几分钟重装就好，壳里那段报错会提示重装。
 
 **为什么终端那层不是 React 组件**：它要直接摸 xterm 的 parser、逐字节收 WebSocket、按 rAF 补重绘 —— 套上 React 的渲染周期只会碍事。React 那边只拿一个 ref 挂载它，再订阅几个状态回调。
 

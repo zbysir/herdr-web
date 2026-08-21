@@ -1,22 +1,46 @@
+# 唯一一个会发 npm 的 workflow。
+#
+# **不能拆成两个**：npm 的 Trusted Publisher（OIDC）一个包只能绑一个 workflow 文件名，
+# 绑的就是这个 release.yml。原来那个单独的 npm-publish.yml 一旦发包，OIDC 就对不上。
+#
+# 两条路：
+#   1. 推 tag        —— 完整发布：跑测试 → goreleaser 交叉编译 + 建 GitHub Release → 发 npm
+#   2. 手动 dispatch —— 只补发 npm（Release 已经建好了、只是 npm 那步挂了）。
+#                       不重新编译，直接下已经发出去的那批 archive 打包，省掉一次构建，
+#                       也保证补发的二进制和 Release 里的**逐字节相同**。
 name: Release
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "只补发 npm（GitHub Release 必须已经存在），比如 v0.1.0"
+        required: true
+        type: string
 
 permissions:
-  contents: write # 建 release
-  id-token: write # npm provenance
+  contents: write # goreleaser 建 release（补发那条路只用到读）
+  id-token: write # npm provenance / Trusted Publisher 的 OIDC
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      # 两条路的版本号来源不同，在这儿收口成一个变量，后面的步骤就不用各写一遍条件。
+      # push 事件里 inputs.tag 是空串，GitHub 表达式里空串是 falsy，所以退到 ref_name。
+      TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v7
         with:
+          # 补发时 checkout 指定的 tag；tag push 时这里是空串 = 用触发的那个 ref
+          ref: ${{ inputs.tag }}
           fetch-depth: 0 # goreleaser 要全部历史来生成 changelog
 
+      # 补发那条路不编译，所以不装 Go
       - uses: actions/setup-go@v7
+        if: github.event_name == 'push'
         with:
           go-version-file: go.mod
           cache: true
@@ -33,14 +57,19 @@ jobs:
       # 11.18.0 是已知能用的最后一版。
       - run: npm install -g npm@11.18.0
 
-      # 同 ci.yml：typecheck 要 node_modules。goreleaser 的 before hook 里那次
-      # make web 是在这之后才跑的，指望不上。
-      - run: npm --prefix web ci
+      # 补发的是已经发布过的 tag，那次推 tag 时测试就跑过了，这儿不重复跑。
+      # typecheck 要 node_modules，而 make test 不负责装（那是 make web 干的），
+      # goreleaser 的 before hook 里那次 make web 也是在这之后才跑，指望不上。
+      - name: 测试
+        if: github.event_name == 'push'
+        run: |
+          npm --prefix web ci
+          make test
 
-      - run: make test
-
-      # goreleaser 的 before hook 会跑 make web 把前端 embed 进去
-      - uses: goreleaser/goreleaser-action@v7
+      # before hook 会跑 make web 把前端 embed 进去
+      - name: goreleaser（交叉编译 + 建 GitHub Release）
+        if: github.event_name == 'push'
+        uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: latest
@@ -48,8 +77,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: 下 Release 里的 archive（补发路径）
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist
+          gh release download "$TAG" --dir dist --pattern "herdr-web_${TAG#v}_*"
+
       - name: 打 npm 包
-        run: node scripts/npm-build.mjs "${GITHUB_REF_NAME#v}"
+        run: node scripts/npm-build.mjs "${TAG#v}"
 
       # 平台子包先发、根包最后发（脚本里排了序）。反了会有一段时间
       # npm install 装出一个没有二进制的壳。
