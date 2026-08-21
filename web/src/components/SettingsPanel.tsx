@@ -30,7 +30,7 @@ const TABS: { id: SettingsTab; label: string }[] = [
 ]
 
 export function SettingsPanel({
-  tab, onTab, onClose, opts, setOpt, heals, onSaved, toast, state,
+  tab, onTab, onClose, opts, setOpt, dot, onDot, heals, onSaved, toast, state,
   fontSize, onFont, scheme, onScheme,
 }: {
   tab: SettingsTab
@@ -38,6 +38,9 @@ export function SettingsPanel({
   onClose: () => void
   opts: TermOpts
   setOpt: (k: keyof TermOpts, v: boolean) => void
+  /** 面板图标上那个红点画不画（有人不喜欢那个点）。存在本地，一台设备一份 */
+  dot: boolean
+  onDot: (v: boolean) => void
   heals: number
   onSaved: (lib: SoftKey[], bar: string[][]) => void
   toast: (m: string) => void
@@ -81,7 +84,7 @@ export function SettingsPanel({
 
       {tab === 'term' && (
         <TermSection
-          opts={opts} setOpt={setOpt} heals={heals} state={state}
+          opts={opts} setOpt={setOpt} dot={dot} onDot={onDot} heals={heals} state={state}
           fontSize={fontSize} onFont={onFont} scheme={scheme} onScheme={onScheme}
         />
       )}
@@ -92,10 +95,12 @@ export function SettingsPanel({
 }
 
 function TermSection({
-  opts, setOpt, heals, state, fontSize, onFont, scheme, onScheme,
+  opts, setOpt, dot, onDot, heals, state, fontSize, onFont, scheme, onScheme,
 }: {
   opts: TermOpts
   setOpt: (k: keyof TermOpts, v: boolean) => void
+  dot: boolean
+  onDot: (v: boolean) => void
   heals: number
   state?: State | null
   fontSize: number
@@ -136,6 +141,19 @@ function TermSection({
           COPY 模式，见 README 的「手机上怎么复制」。 */}
       {row('copyOnSelect', '选中即复制（鼠标选中时；触屏上没有选区）')}
       {row('sync2026', '同步输出 DEC 2026（防画面撕裂；留一块空白画不上来时关它）')}
+
+      {/* 提示那一条**不属于**「终端」，但设置面板只有三页（终端 / 软键条 / 设备），
+          为一个开关单开一页不值当。用一条分隔线隔开，别混进上面那串终端行为里去。 */}
+      <label className="mt-2 flex cursor-pointer items-start gap-2.5 rounded-md border-t border-line pt-3 transition-colors hover:text-fg">
+        <span className="pt-px"><Checkbox checked={dot} onCheckedChange={(v) => onDot(!!v)} /></span>
+        <span className="text-[13px]/relaxed">
+          面板图标上的红点（有 agent 在等你回答 / 刚跑完时点一个）
+          <span className="mt-0.5 block text-xs text-faint">
+            关掉只是不画那个点，右上角的提示卡照常出；整套提示要关是服务端那侧的
+            <code className="mx-1 rounded border border-line bg-ctl px-1 py-px font-mono text-[11px]">HERDR_WEB_NOTICE_MS=0</code>
+          </span>
+        </span>
+      </label>
 
       {heals > 0 && (
         <p className="text-xs/relaxed text-muted">

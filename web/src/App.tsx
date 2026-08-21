@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Keyboard, Pencil, CircleHalf, Gear, AArrowDown, AArrowUp, Maximize, Minimize, Panes, Files } from './icons'
-import { api, resolveBar, SESSION, UNAUTHED, type ClipResult, type SoftKey, type SoftkeysResponse, type State, type UnauthedDetail, type WhoAmI } from '@/lib/api'
+import { api, filesApi, resolveBar, SESSION, UNAUTHED, type ClipResult, type FileStat, type SoftKey, type SoftkeysResponse, type State, type UnauthedDetail, type WhoAmI } from '@/lib/api'
 import { readClipboard, writeClipboard } from '@/lib/clipboard'
 import { Session } from '@/term/session'
 import { initialScheme, type Scheme } from '@/term/themes'
@@ -93,12 +93,13 @@ export default function App() {
    *   filesOpen  兜底的目录浏览面板（filesAt 是「打开时定位到哪儿」）
    *   viewing    查看器（图 / 文本）。**主入口是终端里点一条路径**，那时候面板根本不开。
    *
-   * viewing.base 是相对路径的解析基准 —— 终端里那行 `./out/chart.png` 得配上**那个
-   * pane 的 cwd** 才有意义，而 cwd 只有这一层知道（pane 列表在这儿）。
+   * viewing 存的是**已经 stat 过的结果**，不是一条待解析的路径：是文件还是目录得在
+   * 开弹窗之前就知道（见 openPath），不然点一个目录会先摊一句「这是个目录」再让人
+   * 多点一下 —— 点路径的人要的就是「打开它」。
    */
   const [filesOpen, setFilesOpen] = useState(false)
   const [filesAt, setFilesAt] = useState<string | undefined>(undefined)
-  const [viewing, setViewing] = useState<{ path: string; base?: string } | null>(null)
+  const [viewing, setViewing] = useState<FileStat | null>(null)
   // 记住上次看的那一页
   const [tab, setTab] = useState<SettingsTab>('term')
   const [showCompose, setShowCompose] = useState(() => lsBool('compose', true))
@@ -106,6 +107,13 @@ export default function App() {
     lsBool('softkeys', matchMedia('(pointer: coarse)').matches),
   )
   const [live, setLive] = useState(() => lsBool('composeLive', false))
+  /**
+   * 面板图标上那个红点画不画。**只管红点，不管弹窗** —— 有人嫌那个点一直挂在那儿扎眼，
+   * 而提示卡是自己会走的，两件事分开。整套提示要关在服务端（`HERDR_WEB_NOTICE_MS=0`）。
+   *
+   * 存在本地：这是「这台设备上看着舒服不舒服」的偏好，不是部署的策略。
+   */
+  const [noticeDot, setNoticeDot] = useState(() => lsBool('noticeDot', true))
   // 软键条每行的按键（已按 id 解析好）。几行、哪个键在哪一行都是服务端存的配置，
   // 编辑器存完把整份配置回传过来
   const [bar, setBar] = useState<SoftKey[][]>([])
@@ -160,16 +168,6 @@ export default function App() {
     cwdRef.current = compose.panes.find((p) => p.focused)?.cwd ?? ''
   }, [compose.panes])
 
-  /**
-   * 打开终端里点到的那条路径。给的是**屏幕上的原样**，可能是相对的、可能带 `~` ——
-   * 解析交给服务端（files.Resolve），基准是那个 pane 的 cwd。
-   *
-   * 不在这儿判「是不是图」：那要读文件才知道（服务端按魔数认，不认扩展名），
-   * 查看器打开之后自己 stat 一次就有了。
-   */
-  const openPath = useCallback((raw: string) => {
-    setViewing({ path: raw, base: cwdRef.current || undefined })
-  }, [])
 
   /**
    * 把一个路径投出去。和「传图」是**同一个模型**：herdr 的 socket 里没有文件通道，
@@ -190,13 +188,44 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showCompose, toast, compose.append])
 
-  /** 开文件浏览面板。at 给了就直接定位到那个目录（查看器的「所在目录」走这条） */
+  /**
+   * 开文件浏览面板。at 给了就直接定位到那个目录（点到一个目录、查看器的「所在目录」
+   * 都走这条）。
+   *
+   * 每次都刷一遍 pane 列表：起点列表里最靠前的就是各 pane 的 cwd，而 pane 的增删和
+   * 切目录随时在发生，这个面板又多半是隔了好一会儿才再打开一次（和 openPanes 一个道理）。
+   */
   const openFiles = useCallback((at?: string) => {
     setFilesAt(at)
     setFilesOpen(true)
-    if (compose.panes.length === 0) void compose.loadPanes(true) // 起点里要用 pane 的 cwd
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compose.panes.length, compose.loadPanes])
+    void compose.loadPanes(true)
+  }, [compose.loadPanes])
+
+  /**
+   * 打开一条路径 —— 终端里点的、面板里点的，都走这儿。
+   *
+   * 给的是**屏幕上的原样**（可能是相对的、可能带 `~`），解析交给服务端
+   * （files.Resolve），基准是那个 pane 的 cwd。
+   *
+   * **先 stat 再决定开哪个**：是目录就直接进文件浏览。以前是把路径丢给查看器、让它
+   * 自己 stat 完再摊一句「这是个目录」+ 一个按钮 —— 点路径的人要的就是「打开它」，
+   * 是文件还是目录该由我们看出来，不该让人多点一下。
+   *
+   * 顺带也不用在这儿判「是不是图」：那得读文件才知道（服务端按魔数认，不认扩展名），
+   * stat 的响应里已经带上了。
+   *
+   * 失败只出一条 toast，不弹壳：这条路最常见的失败就是终端里那行路径被折断 / 被 `…`
+   * 截断了，那时候摊一个空弹窗还得再关一次。
+   */
+  const openPath = useCallback(async (raw: string) => {
+    try {
+      const s = await filesApi.stat(raw, cwdRef.current || undefined)
+      if (s.info.dir) openFiles(s.info.path)
+      else setViewing(s)
+    } catch (e) {
+      toast((e as Error).message)
+    }
+  }, [openFiles, toast])
 
   /* --------------------------------------------------------- 终端生命周期 */
   //
@@ -214,7 +243,7 @@ export default function App() {
         onHeal: setHeals,
         onKeyboardChange: setKbdUp,
         onCopyBlocked: setPendingCopy,
-        onPath: (raw) => openPath(raw),
+        onPath: (raw) => void openPath(raw),
       },
       scheme,
       fontSize,
@@ -286,7 +315,18 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.isComposing) return
       // 面板开着就先收面板。必须 stopPropagation：否则这一下会既收面板又发给终端。
-      // 查看器自己在捕获阶段吃 Esc（它盖在最上面），所以这儿只管这几块面板
+      // 查看器盖在最上面，**必须第一个判**。
+      //
+      // 以前它自己挂了一个捕获阶段的监听，结果要按两下：同一个 target 上的捕获监听
+      // 按注册顺序跑，而这一条是挂载时就注册的、永远在前面 —— 从文件浏览面板里点开一张
+      // 图时，第一下 Esc 被下面那块（filesOpen）吃掉了，第二下才轮到图。所有浮层的
+      // Esc 都收在这儿按「谁在上面谁先关」排，比每层各挂一个监听靠顺序碰运气可靠。
+      if (viewing) {
+        setViewing(null)
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
       if (settings || panesOpen || filesOpen) {
         setSettings(false)
         setPanesOpen(false)
@@ -304,7 +344,7 @@ export default function App() {
     // 挂 bubble 的话终端一聚焦就收不到事件了（「面板开着按 Esc 却发给了终端」就是这么来的）。
     addEventListener('keydown', onKey, true)
     return () => removeEventListener('keydown', onKey, true)
-  }, [settings, panesOpen, filesOpen])
+  }, [settings, panesOpen, filesOpen, viewing])
 
   // 布局变化（软键条 / 发件箱开合、顶栏收放）都要重排终端
   useEffect(() => { sess.current?.relayout() }, [showCompose, showKeys, peek])
@@ -665,7 +705,7 @@ export default function App() {
             () => (panesOpen ? setPanesOpen(false) : openPanes()),
             <Panes className="size-4" />,
             undefined,
-            notices.unread > 0,
+            noticeDot && notices.unread > 0,
           )}
           {/* 文件浏览。服务端关掉（HERDR_WEB_FILES=0）就不画这个按钮 —— 点开一片 404
               比没有这个入口更糟。主入口其实是终端里那行路径可点，这个按钮是兜底。 */}
@@ -717,15 +757,14 @@ export default function App() {
             panes={compose.panes}
             start={filesAt}
             onClose={() => setFilesOpen(false)}
-            onOpen={(p) => setViewing({ path: p })}
+            onOpen={(p) => void openPath(p)}
           />
         )}
         {/* 查看器盖在最上面（面板也盖住）：从面板里点开一张图之后，退出来还该回到
             那个目录，所以这里**不关**面板，只是压在它上面 */}
         {viewing && (
           <FileViewer
-            path={viewing.path}
-            base={viewing.base}
+            stat={viewing}
             onClose={() => setViewing(null)}
             onSend={(p) => { setViewing(null); sendPath(p) }}
             onBrowse={(d) => { setViewing(null); openFiles(d) }}
@@ -739,6 +778,8 @@ export default function App() {
             onClose={() => setSettings(false)}
             opts={opts}
             setOpt={(k, v) => setOpts((o) => ({ ...o, [k]: v }))}
+            dot={noticeDot}
+            onDot={(v) => { setNoticeDot(v); localStorage.setItem('noticeDot', v ? '1' : '0') }}
             heals={heals}
             onSaved={(lib, b) => setBar(resolveBar(lib, b))}
             toast={toast}
@@ -789,7 +830,7 @@ export default function App() {
               onKeyboard={() => sess.current?.toggleKeyboard()}
               onImage={() => picker.current?.click()}
               onPanes={openPanes}
-              notice={notices.unread > 0}
+              notice={noticeDot && notices.unread > 0}
               onFiles={() => openFiles()}
               onClip={() => void pullClip()}
               onPaste={() => void pastePhone()}

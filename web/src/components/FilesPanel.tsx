@@ -137,15 +137,13 @@ export function FilesPanel({
 
   const go = (p: string) => { setQ(''); setDir(p) }
 
+  // 是文件还是目录不用在这儿猜：onOpen 那条路（App 的 openPath）会先 stat 一次 ——
+  // 目录就自己绕回这个面板并定位过去，文件就开查看器。
   const openJump = () => {
     const p = jump.trim()
     if (!p) return
     setJump('')
-    // 不知道是文件还是目录 —— 先当目录试，不是目录就交给查看器（它会 stat 出真相）
-    void filesApi.list(p, { sort, all }).then(
-      (l) => { setList(l); setDir(l.path); localStorage.setItem(LS_DIR, l.path); pushRecent(l.path) },
-      () => onOpen(p),
-    )
+    onOpen(p)
   }
 
   const flip = (k: 'sort' | 'all') => {
