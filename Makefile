@@ -88,13 +88,29 @@ release-dry:
 	 echo "→ 打 npm 包：$$V"; \
 	 node scripts/npm-build.mjs "$$V"
 	node scripts/npm-publish.mjs --dry-run
+# 干跑必须**把工作区还回去**：npm-build.mjs 会把版本号写进入库的
+# npm/herdr-web/package.json（干跑时是 `0.1.1-next` 这种快照号）。不还回去有两个后果，
+# 都很烦：紧接着 `make release` 会说「工作区不干净」（而你什么都没改），或者那个 -next
+# 版本号被顺手提交进去。CI 里没有 .git 的话这一句静默跳过，正合适。
+	@git checkout -- npm/herdr-web/package.json 2>/dev/null || true
+	@echo "→ 干跑完了，工作区已还原（npm/herdr-web/package.json）"
 
 ## release —— 打 tag 并推上去，剩下的 GitHub Actions 干（见 .github/workflows/release.yml）
+# tag 要推到**装着 release.yml 的那个远端**，也就是 GitHub。
+#
+# **不能写死 origin**：这个仓库的 origin 指向自建 git（git.huglight.cn），GitHub 是另一个
+# 叫 github 的远端。推错了的表现最难查 —— tag 打上去了、命令也成功了，Actions 那边一直
+# 没动静，而「没动静」和「还在排队」长得一模一样。所以这里按 push URL 里的 github.com 认，
+# 认不出来就直接拒绝发版，不猜。要覆盖：make release V=... RELEASE_REMOTE=xxx
+RELEASE_REMOTE ?= $(shell git remote -v | awk '/github\.com.*\(push\)/{print $$1; exit}')
+
 release:
 	@test -n "$(V)" || { echo "用法：make release V=v0.1.0"; exit 1; }
-	@git diff --quiet || { echo "工作区不干净，先提交"; exit 1; }
+	@test -n "$(RELEASE_REMOTE)" || { echo "找不到指向 github.com 的远端（release.yml 在那儿）。用 RELEASE_REMOTE= 指一个"; exit 1; }
+	@git diff --quiet HEAD || { echo "工作区不干净，先提交"; exit 1; }
+	@echo "→ 远端：$(RELEASE_REMOTE)  $$(git remote get-url $(RELEASE_REMOTE))"
 	git tag -a "$(V)" -m "$(V)"
-	git push origin "$(V)"
+	git push "$(RELEASE_REMOTE)" "$(V)"
 	@echo "→ 推上去了。进度：https://github.com/zbysir/herdr-web/actions"
 
 clean:
