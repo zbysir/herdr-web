@@ -4,6 +4,9 @@
 # 前端依赖和构建产物
 web/node_modules/
 web/dist/
+# tsc -b 的增量编译缓存。**绝不能入库**：make test 每跑一次就改写它，于是
+# goreleaser 判定「git is in a dirty state」直接拒绝发版（实测在 v0.1.0 上挂过一次）。
+web/tsconfig.tsbuildinfo
 # 嵌进二进制的那份由 make build 生成，只留占位
 internal/webui/dist/*
 !internal/webui/dist/.gitkeep
