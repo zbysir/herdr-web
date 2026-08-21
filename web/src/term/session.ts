@@ -15,7 +15,30 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
-import { TOKEN } from '@/lib/api'
+import { ptyURL } from '@/lib/api'
+
+/**
+ * 打开终端里的链接（OSC 8 和自动识别出来的 URL）。
+ *
+ * 终端上显示什么是**跑在里面的程序完全说了算**的，而 agent 天天读不可信内容 ——
+ * 所以点开之前先看 scheme，只放 http / https / mailto。现代浏览器基本会拦
+ * `javascript:` 和 `data:` 的顶层导航，但那是它们的好心，不是我们的防线。
+ */
+const SAFE_SCHEMES = ['http:', 'https:', 'mailto:']
+
+function openLink(uri: string) {
+  let u: URL
+  try {
+    u = new URL(uri, location.href)
+  } catch {
+    return
+  }
+  if (!SAFE_SCHEMES.includes(u.protocol)) {
+    console.warn('[herdr-web] 拒绝打开这个 scheme 的链接：', uri)
+    return
+  }
+  window.open(u.href, '_blank', 'noopener,noreferrer')
+}
 import { THEMES, type Scheme } from './themes'
 import { attachTouch } from './touch'
 
@@ -23,7 +46,6 @@ export interface Cap { key: string; label: string; ok: boolean }
 
 export interface SessionCallbacks {
   onStatus: (text: string, cls: 'on' | 'err' | '') => void
-  onCaps: (caps: Cap[]) => void
   onOverlay: (msg: string | null, btn?: string) => void
   onHeal: (n: number) => void
   onKeyboardChange: (up: boolean) => void
@@ -92,11 +114,11 @@ export class Session {
       scrollback: 2000,
       drawBoldTextInBrightColors: false,
       theme: THEMES[scheme],
-      linkHandler: { activate: (_e, uri) => window.open(uri, '_blank', 'noopener') },
+      linkHandler: { activate: (_e, uri) => openLink(uri) },
     })
 
     this.term.loadAddon(this.fit)
-    this.term.loadAddon(new WebLinksAddon((_e, uri) => window.open(uri, '_blank', 'noopener')))
+    this.term.loadAddon(new WebLinksAddon((_e, uri) => openLink(uri)))
     this.term.loadAddon(new Unicode11Addon())
     this.term.unicode.activeVersion = '11'
     this.term.loadAddon(new ClipboardAddon()) // OSC 52
@@ -133,7 +155,6 @@ export class Session {
       this.kbdEl()?.addEventListener(ev, () => this.cb.onKeyboardChange(this.keyboardUp()))
     }
     this.fit.fit()
-    ;(window as unknown as Record<string, unknown>).__sess = this // TEMP-VERIFY
   }
 
   /* ------------------------------------------------------------- 补协议 */
@@ -206,7 +227,6 @@ export class Session {
   private noteCap(key: string, label: string, ok: boolean) {
     if (this.caps.has(key)) return
     this.caps.set(key, { key, label, ok })
-    this.cb.onCaps([...this.caps.values()])
   }
 
   private sendScheme() {
@@ -446,7 +466,6 @@ export class Session {
     this.sticky = { ctrl: false, alt: false }
     this.stickyListener?.({ ...this.sticky })
     this.caps.clear()
-    this.cb.onCaps([])
     this.paintHeals = 0
     this.cb.onHeal(0)
   }
@@ -457,13 +476,7 @@ export class Session {
     this.exited = false
     this.cb.onOverlay(null)
     this.cb.onStatus('连接中…', '')
-    const q = new URLSearchParams({
-      token: TOKEN,
-      cols: String(this.term.cols),
-      rows: String(this.term.rows),
-    })
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    const ws = new WebSocket(`${proto}://${location.host}/pty?${q}`)
+    const ws = new WebSocket(ptyURL(this.term.cols, this.term.rows))
     ws.binaryType = 'arraybuffer'
     this.ws = ws
 
@@ -507,19 +520,24 @@ export class Session {
   private async diagnose() {
     let r: Response
     try {
-      r = await fetch(`/api/state?token=${encodeURIComponent(TOKEN)}`)
+      r = await fetch('/api/state', { credentials: 'same-origin', headers: { 'x-herdr-web': '1' } })
     } catch {
       this.cb.onOverlay('后端没在跑。到 herdr-web 目录里执行 <code>make run</code>（或 <code>./herdr-web</code>）。', '重试')
       return
     }
     if (r.status === 401) {
+      // 配对页会被 App 顶上来（api.ts 在 401 上抛了事件），这里只把话说清楚
       this.cb.onOverlay(
-        '后端在跑，但地址栏里的 <b>token 不对</b>。<br>换成 server 启动时打印的那个链接 —— token 存在 <code>~/.herdr-web/token</code>，重启也不会变。',
+        '后端在跑，但<b>这台设备的凭据没了</b>（被撤销、或者浏览器数据被清过）。在跑 herdr-web 的机器上执行 <code>herdr-web pair</code> 重新配一次。',
         '重试',
       )
       return
     }
-    this.cb.onOverlay('后端在跑、token 也对，但 WebSocket 建不起来。中间有反代的话确认它转发了 Upgrade 头。', '重试')
+    if (r.status === 403) {
+      this.cb.onOverlay('后端在跑、凭据也对，但请求被当成跨站拒了。地址栏里的域名要和 <code>HERDR_WEB_HOSTNAME</code> 一致。', '重试')
+      return
+    }
+    this.cb.onOverlay('后端在跑、凭据也对，但 WebSocket 建不起来。中间有反代 / frp 的话确认它转发了 Upgrade 头。', '重试')
   }
 
   /* ------------------------------------------------------------- 尺寸 / 主题 */

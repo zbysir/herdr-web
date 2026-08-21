@@ -17,6 +17,8 @@ Node 全量重写成 **Go 后端 + React 前端，单二进制**（`make build` 
 | `internal/softkeys/` | 软键条配置 + 按键谱解析；`data.go` 是从旧 JS 版生成的 |
 | `internal/uploads/` | 图片落盘（按魔数认类型），返回给 agent 读的绝对路径 |
 | `internal/server/` | HTTP 路由 + PTY/WebSocket + 静态资源 |
+| `internal/config/` | 配置全收在这儿：viper + `HERDR_WEB_*`，**只认环境变量**，不读配置文件 |
+| `cmd/herdr-web/` | cobra：根命令起服务，`pair` / `devices` / `revoke` / `unlock` 是子命令 |
 | `web/src/term/` | xterm.js 胶水：补协议、触屏手势、重绘看门狗（命令式，不套 React） |
 | `web/src/hooks/useCompose.ts` | 发件箱状态机（所有权 / 目标锁定 / 自动拉回 / 双向推送） |
 

@@ -1,96 +1,48 @@
 import { useEffect, useRef, useState } from 'react'
-import { Settings } from 'lucide-react'
 import { Button } from './ui/button'
 import type { SoftKey } from '@/lib/api'
+import { usePhone } from '@/hooks/usePhone'
 import { cn } from '@/lib/utils'
 
-const H_KEY = 'softkeysH'
-const INSET_KEY = 'softkeysInset'
-/** 横向再窄也要留下这么多，不然缩成一条缝就抓不回来了 */
-const MIN_BAR = 200
-/**
- * 把手离**屏幕**边至少这么远。
- *
- * 安卓的手势导航把屏幕左右各约 24dp 划给了「侧滑返回 / 前进」，那一条是系统先吃，
- * 网页连 touchstart 都收不到 —— 把手正好贴在那儿就等于拖不动（实测就是这样）。
- * 所以把手离屏幕边不足 28px 时往里让，让到 28px 为止；软键条自己已经缩进来的话
- * 就不用让了（它的边本来就离屏幕边够远）。
- */
-const EDGE_SAFE = 28
-/** 没拖过的时候：自动高度，最多两排 —— 一眼能看出「会换行」，又不吃掉半个屏幕 */
-const DEF_MAX = 96
-const MIN_H = 38
 /**
  * 二次确认的键「举起来」之后多久自动放下（ms）。
  * 太短来不及看第二眼，太长就会忘了自己举过 —— 回头随手一点反而正好点实。
  */
 const CONFIRM_MS = 3000
 
-/** 上限半屏。再高就没终端可看了，而软键条本来是终端的配角 */
-const capH = () => Math.round((window.visualViewport?.height ?? window.innerHeight) / 2)
-
-/** null = 还没拖过（自动高度）；数字 = 用户拖出来的高度 */
-const readH = (): number | null => {
-  const v = Number(localStorage.getItem(H_KEY))
-  return v > 0 ? v : null
-}
-
-/** 左右两边各让出多少（px）。0/0 = 通屏，和以前一样 */
-interface Inset { l: number; r: number }
-
-const readInset = (): Inset => {
-  try {
-    const v = JSON.parse(localStorage.getItem(INSET_KEY) || 'null') as Inset | null
-    if (v && typeof v.l === 'number' && typeof v.r === 'number') {
-      return { l: Math.max(0, v.l), r: Math.max(0, v.r) }
-    }
-  } catch { /* 存坏了就当通屏 */ }
-  return { l: 0, r: 0 }
-}
-
-const fitInset = (i: Inset): Inset => {
-  const room = Math.max(0, window.innerWidth - MIN_BAR)
-  const l = Math.min(i.l, room)
-  return { l, r: Math.min(i.r, room - l) }
-}
-
 /**
- * 软键条。按键由 /api/softkeys 下发（存服务端，手机 / 平板 / 电脑共用一份），
- * 点最右边的 ⚙ 在网页上改。
+ * 软键条：**只出键本身**，外壳（边框 / 宽度 / 高度 / 把手）归底部面板管（见 Dock）。
+ *
+ * 按键最多分**两行**（`rows` 是设置，每个键的 `row` 说它在第几行），**每行各自横向滚动**
+ * —— 手机上一行只放得下四五个键，而「最常用那几个」和「次常用那几个」各占一行、各滑各的，
+ * 比十几个键排成一条长龙好找：手指知道自己在哪一行，滑动也不会把另一行带跑。
+ *
+ * `off` 的键只在键库里（编辑器下面那片），这儿直接跳过。
+ *
+ * 按键由 /api/softkeys 下发（存服务端，手机 / 平板 / 电脑共用一份），在设置 →「软键条」
+ * 页改。以前这一条右下角还挂着一个直通那一页的 ⚙，去掉了 —— 顶栏已经有一个设置入口，
+ * 而这个位置每换一次朝向都跟键抢地方。
  *
  * 手机没有 Ctrl 键，herdr 的 ctrl+b 前缀全靠这条。
- *
- * 按键**换行**排，不再挤成一条横向滚动的长龙 —— 平板上横滚找键太费劲。上边缘那三个
- * 把手是**两轴**的：上下拖改高度（最高半屏，放不下的部分上下滚），左右拖改横向 ——
- * 左边那个动左边界、右边那个动右边界、中间那个整条平移（宽度不变）。
- *
- * 拖过之后是**定高**（拖多高就是多高，哪怕键没排满），没拖过是自动高度封顶两排 ——
- * 一开始不留空白，而一旦用户明确要求「更高」，就别自作聪明缩回去。双击那条边复位。
- *
- * 左右两条边也能拖，**横向改宽度**：平板上输入法（还有它那一圈工具条）常常压住半边
- * 屏幕，把软键条横向缩到剩下的空地上，比整条通屏挤在键盘底下有用。两边各存一个
- * 留白（0/0 就是通屏），双击边复位。
  *
  * 打了 `confirm` 的键要点**两下**：第一下只是举起来（变红），第二下才真发出去。
  * 键挨得这么近，关 pane / 关标签这种误触一下就没了，而 herdr 那边没有撤销。
  */
 export function Softkeys({
-  keys, sticky, kbdUp, onSend, onSticky, onKeyboard, onEdit, onLayout,
+  keys, rows, sticky, kbdUp, onSend, onSticky, onKeyboard, onImage,
 }: {
   keys: SoftKey[]
+  /** 软键条几行（服务端存的设置，1 或 2） */
+  rows: 1 | 2
   sticky: { ctrl: boolean; alt: boolean }
   kbdUp: boolean
   onSend: (bytes: string) => void
   onSticky: (which: 'ctrl' | 'alt') => void
   onKeyboard: () => void
-  onEdit: () => void
-  /** 高度变了要重排终端（软键条占的地方是从终端那儿借的） */
-  onLayout: () => void
+  /** act:img 的键：弹相机 / 相册（路径去哪儿由 App 决定） */
+  onImage: () => void
 }) {
-  const [h, setH] = useState(readH)
-  const [inset, setInset] = useState(readInset)
-  const rows = useRef<HTMLDivElement>(null)
-  useEffect(() => { onLayout() }, [h, inset, onLayout])
+  const phone = usePhone()
 
   // 举着的那个键（下标）。同一个键再点一下才真发，点别的键 / 等超时都算放下。
   const [armed, setArmed] = useState<number | null>(null)
@@ -105,159 +57,25 @@ export function Softkeys({
   // 可能已经是别的键了，接着点就点错了东西。
   useEffect(disarm, [keys])
 
-  // 转屏 / 换窗口大小之后可能横向留白已经超出屏幕了，收一下
-  useEffect(() => {
-    const fix = () => setInset((i) => {
-      const f = fitInset(i)
-      return f.l === i.l && f.r === i.r ? i : f
-    })
-    fix()
-    addEventListener('resize', fix)
-    addEventListener('orientationchange', fix)
-    return () => {
-      removeEventListener('resize', fix)
-      removeEventListener('orientationchange', fix)
-    }
-  }, [])
-
-  const resetH = () => {
-    setH(null)
-    localStorage.removeItem(H_KEY)
-  }
-
-  const resetInset = () => {
-    setInset({ l: 0, r: 0 })
-    localStorage.removeItem(INSET_KEY)
-  }
-
-  const putH = (v: number) => {
-    setH(v)
-    localStorage.setItem(H_KEY, String(v))
-  }
-
-  const putInset = (v: Inset) => {
-    setInset(v)
-    localStorage.setItem(INSET_KEY, JSON.stringify(v))
-  }
-
-  /**
-   * 拖把手。axes 说这个把手管哪几个方向、zone 说横向那一下算谁的：
-   * l 动左边界、r 动右边界、m 整条平移（宽度不变）。
-   *
-   * 每个方向都有 3px 的死区：只想横着拖的时候不该顺手把高度锁成定高
-   * （反之亦然）—— 手指很难走出一条直线。
-   */
-  const startEdge = (
-    e: React.PointerEvent,
-    zone: 'l' | 'm' | 'r',
-    axes: 'x' | 'xy',
-  ) => {
-    const el = rows.current
-    if (!el) return
-    const h0 = el.getBoundingClientRect().height // 从**当前实际高度**起步，手感才连续
-    const from = inset
-    const x0 = e.clientX
-    const y0 = e.clientY
-    const target = e.currentTarget as HTMLElement
-    try { target.setPointerCapture(e.pointerId) } catch { /* 没这个指针就不捕获 */ }
-    e.preventDefault()
-    const move = (ev: PointerEvent) => {
-      const dx = ev.clientX - x0
-      const dy = ev.clientY - y0
-      if (axes === 'xy' && Math.abs(dy) > 3) {
-        putH(Math.round(Math.min(Math.max(h0 - dy, MIN_H), capH())))
-      }
-      if (Math.abs(dx) > 3) {
-        if (zone === 'l') putInset(fitInset({ l: Math.max(0, Math.round(from.l + dx)), r: from.r }))
-        else if (zone === 'r') putInset(fitInset({ l: from.l, r: Math.max(0, Math.round(from.r - dx)) }))
-        else {
-          // 整条平移：宽度不变，撞到屏幕边就停
-          const shift = Math.round(Math.max(-from.l, Math.min(dx, from.r)))
-          putInset({ l: from.l + shift, r: from.r - shift })
-        }
-      }
-    }
-    const stop = () => {
-      target.removeEventListener('pointermove', move)
-      target.removeEventListener('pointerup', stop)
-      target.removeEventListener('pointercancel', stop)
-    }
-    target.addEventListener('pointermove', move)
-    target.addEventListener('pointerup', stop)
-    target.addEventListener('pointercancel', stop)
-  }
-
-  const resetAll = () => {
-    resetH()
-    resetInset()
-  }
-
-  // 把手离屏幕边不够 28px 就往里让（安卓侧滑区），键那一排跟着让出同样的内边距，
-  // 免得键钻到把手底下去
-  const offL = Math.max(0, EDGE_SAFE - inset.l)
-  const offR = Math.max(0, EDGE_SAFE - inset.r)
+  // 分行时**带着原下标**：armed 记的是 keys 里的位置，跨行也得对得上
+  const lanes = ([1, 2] as const)
+    .slice(0, rows)
+    .map((r) => keys.map((k, i) => [k, i] as const).filter(([k]) => !k.off && (k.row ?? 1) === r))
 
   return (
-    <nav
-      data-testid="softkeys"
-      className={cn(
-        'relative flex shrink-0 flex-col gap-1 border-t border-line bg-bar px-4 pt-1 pb-[7px] select-none',
-        (inset.l || inset.r) && 'rounded-t-[10px] border-x', // 缩过之后看着像一块，而不是断了一截的横条
-      )}
-      style={{
-        marginLeft: inset.l,
-        marginRight: inset.r,
-        paddingBottom: 'calc(7px + env(safe-area-inset-bottom))',
-      }}
-    >
-      {/* 左右两条边：横向改宽度（把软键条从输入法压住的那半边挪开）。
-          位置不写死在边上 —— 离屏幕边不足 EDGE_SAFE 就往里让，躲开安卓侧滑区 */}
-      {(['l', 'r'] as const).map((side) => (
-        <span
-          key={side}
-          data-testid={`softkeys-side-${side}`}
-          className="absolute inset-y-0 flex w-6 cursor-ew-resize touch-none items-center justify-center"
-          style={side === 'l' ? { left: offL } : { right: offR }}
-          title="左右拖：软键条这一边收到哪儿（横向改宽度）。双击复位"
-          onPointerDown={(e) => startEdge(e, side, 'x')}
-          onDoubleClick={resetAll}
-        >
-          <span className="h-8 w-1 rounded-full bg-fg/25" />
-        </span>
-      ))}
-      {/* 上边缘三个把手，都是**两轴**的：上下改高度，左右按抓的位置改横向。
-          离屏幕边留够 EDGE_SAFE（px-8 + 各自的内边距），不然安卓侧滑先把手势吃掉 */}
-      <div data-testid="softkeys-grip" className="-mt-1 flex shrink-0 items-center justify-between px-8 pt-1">
-        {(['l', 'm', 'r'] as const).map((zone) => (
-          <span
-            key={zone}
-            data-testid={`softkeys-grip-${zone}`}
-            className="group flex h-5 cursor-move touch-none items-center px-3"
-            title={
-              zone === 'm'
-                ? '拖我：上下改高度（最多半屏），左右整条平移。双击复位'
-                : `拖我：上下改高度（最多半屏），左右改${zone === 'l' ? '左' : '右'}边界。双击复位`
-            }
-            onPointerDown={(e) => startEdge(e, zone, 'xy')}
-            onDoubleClick={resetAll}
-          >
-            <span
-              className={cn(
-                'h-1.5 rounded-full bg-fg/25 group-active:bg-accent',
-                zone === 'm' ? 'w-16' : 'w-10',
-              )}
-            />
-          </span>
-        ))}
-      </div>
-      <div className="flex gap-1.5" style={{ paddingLeft: offL, paddingRight: offR }}>
-        {/* 按键换行排，放不下就上下滚；⚙ 固定在右边不跟着滚走 */}
+    <>
+      {lanes.map((row, ri) => row.length > 0 && (
         <div
-          ref={rows}
-          className="flex min-w-0 flex-1 flex-wrap content-start gap-1.5 overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-          style={h ? { height: h } : { maxHeight: DEF_MAX }}
+          key={ri}
+          data-testid={`softkeys-row-${ri + 1}`}
+          className={cn(
+            'flex min-w-0 gap-1.5 overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
+            // 手机：一行不换行、自己横滑（滚动条不出，会盖住键）
+            // 宽屏：照旧换行排，放不下的部分由外面那层上下滚
+            phone ? 'shrink-0 flex-nowrap overflow-x-auto' : 'flex-wrap content-start',
+          )}
         >
-          {keys.map((k, i) => {
+          {row.map(([k, i]) => {
             const on = k.sticky ? sticky[k.sticky] : k.act === 'kbd' ? kbdUp : false
             const up = armed === i   // 举起来了，等第二下
             return (
@@ -285,6 +103,7 @@ export function Softkeys({
                   }
                   disarm()   // 点别的键 = 把举着的那个放下，但这一下照样算数
                   if (k.act === 'kbd') onKeyboard()
+                  else if (k.act === 'img') onImage()
                   else if (k.sticky) onSticky(k.sticky)
                   else if (k.send) onSend(k.send)
                 }}
@@ -294,10 +113,7 @@ export function Softkeys({
             )
           })}
         </div>
-        <Button data-testid="softkeys-edit" variant="key" size="key" className="self-start" title="配置软键条" onClick={() => { disarm(); onEdit() }} onMouseDown={(e) => e.preventDefault()}>
-          <Settings className="size-4" />
-        </Button>
-      </div>
-    </nav>
+      ))}
+    </>
   )
 }

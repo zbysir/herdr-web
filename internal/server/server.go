@@ -1,10 +1,10 @@
 // Package server 是 HTTP + WebSocket 层。
 //
-// 接口都在 /api 下，统一用 ?token= 认证（和 JS 版一致，前端不用改协议）。
+// 认证：cookie 里的设备凭据（internal/auth），配对走一次性码。`?token=` 只剩兼容用途。
+// 每个请求还要过 guard.go 那一层（Host 白名单、跨站检查、安全响应头）。
 package server
 
 import (
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
@@ -12,7 +12,9 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
+	"git.huglight.cn/bysir/herdr-web/internal/auth"
 	"git.huglight.cn/bysir/herdr-web/internal/config"
 	"git.huglight.cn/bysir/herdr-web/internal/herdr"
 	"git.huglight.cn/bysir/herdr-web/internal/outbox"
@@ -22,35 +24,101 @@ import (
 
 type Server struct {
 	Cfg      *config.Config
+	Auth     *auth.Store
+	Gate     *auth.Gate
 	Outbox   *outbox.Outbox
 	Softkeys *softkeys.Store
 	Uploads  *uploads.Store
 	Web      fs.FS // 前端产物（嵌进二进制，或 -web 指向的目录）
+
+	Passkeys *auth.Passkeys
+	// ReauthAfter：注册过 passkey 之后，一份会话在「上次生物验证」之后还能用多久。
+	// 0 = 不要求重验。
+	ReauthAfter time.Duration
+	RPID        string
+
+	TLS   bool            // 浏览器眼里是不是 https（决定 cookie 的 Secure）
+	names map[string]bool // Host 头里允许出现的域名，见 guard.go
 }
 
-func New(cfg *config.Config, web fs.FS) *Server {
+// Options 是 main 那边算出来的东西：证书里有哪些域名、浏览器看到的是不是 https。
+type Options struct {
+	BrowserHTTPS bool
+	Hostnames    []string
+	Passkeys     *auth.Passkeys
+	ReauthAfter  time.Duration
+	RPID         string
+}
+
+func New(cfg *config.Config, web fs.FS, a *auth.Store, g *auth.Gate, opt Options) *Server {
 	c := herdr.New(cfg.Socket)
-	return &Server{
-		Cfg:      cfg,
-		Outbox:   &outbox.Outbox{C: c, SettleMS: cfg.SettleMS},
-		Softkeys: &softkeys.Store{Dir: cfg.Dir},
-		Uploads:  &uploads.Store{Dir: cfg.Dir},
-		Web:      web,
+	s := &Server{
+		Cfg:         cfg,
+		Auth:        a,
+		Gate:        g,
+		Outbox:      &outbox.Outbox{C: c, SettleMS: cfg.SettleMS},
+		Softkeys:    &softkeys.Store{Dir: cfg.Dir},
+		Uploads:     &uploads.Store{Dir: cfg.Dir},
+		Web:         web,
+		Passkeys:    opt.Passkeys,
+		ReauthAfter: opt.ReauthAfter,
+		RPID:        opt.RPID,
+		TLS:         opt.BrowserHTTPS,
+		names:       map[string]bool{"localhost": true},
 	}
+	for _, n := range opt.Hostnames {
+		if n = strings.ToLower(strings.TrimSpace(n)); n != "" {
+			s.names[n] = true
+		}
+	}
+	return s
 }
 
 func errf(msg string) error { return errors.New(msg) }
-
-func (s *Server) tokenOK(given string) bool {
-	return subtle.ConstantTimeCompare([]byte(given), []byte(s.Cfg.Token)) == 1
-}
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/pty", s.handlePTY)
 	mux.HandleFunc("/api/", s.handleAPI)
-	mux.HandleFunc("/", s.handleStatic)
-	return mux
+	mux.HandleFunc("/", s.handleRoot)
+	return s.guard(mux)
+}
+
+// gateCheck 拦在每一次「猜得到的凭据」前面（配对码、旧 token）。
+// 返回 false 表示已经把响应写出去了，调用方直接 return。
+func (s *Server) gateCheck(w http.ResponseWriter, r *http.Request) bool {
+	if s.Gate == nil {
+		return true
+	}
+	if s.Gate.Locked() {
+		fail(w, http.StatusTooManyRequests,
+			errf("失败次数太多，已暂停接受新设备配对。到跑 herdr-web 的机器上执行 `herdr-web unlock`"))
+		return false
+	}
+	delay, blocked, retry := s.Gate.Check(s.Auth.ClientIP(r))
+	if blocked {
+		w.Header().Set("retry-after", itoa(int(retry.Seconds())+1))
+		fail(w, http.StatusTooManyRequests, errf("试得太多了，等 "+retry.Truncate(time.Second).String()+" 再来"))
+		return false
+	}
+	if delay > 0 {
+		time.Sleep(delay) // 拖慢在线猜解；不占别的请求
+	}
+	return true
+}
+
+func itoa(n int) string {
+	if n <= 0 {
+		return "0"
+	}
+	var b [20]byte
+	i := len(b)
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(b[i:])
 }
 
 /* ------------------------------------------------------------------ helpers */
@@ -83,13 +151,17 @@ func readJSON(r *http.Request, out any) error {
 /* ------------------------------------------------------------------ API */
 
 func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
-	if !s.tokenOK(r.URL.Query().Get("token")) {
-		fail(w, http.StatusUnauthorized, errf("token 不对"))
-		return
-	}
 	seg := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api"), "/"), "/")
 	if len(seg) == 0 || seg[0] == "" {
 		fail(w, http.StatusNotFound, errf("没有这个接口"))
+		return
+	}
+	// /api/auth/* 是唯一一组不要求已认证的口（配对页自己得能用）
+	if seg[0] == "auth" {
+		s.apiAuth(w, r, seg)
+		return
+	}
+	if s.requireAuth(w, r) == nil {
 		return
 	}
 
@@ -112,7 +184,7 @@ func (s *Server) apiState(w http.ResponseWriter, r *http.Request) {
 		"shell":         baseName(s.Cfg.Shell),
 		"user":          user,
 		"hostname":      host,
-		"secureContext": s.Cfg.Loopback,
+		"secureContext": s.TLS || s.Cfg.Loopback,
 		"compose":       map[string]int{"pollMs": s.Cfg.PollMS, "pushMs": s.Cfg.PushMS, "settleMs": s.Cfg.SettleMS},
 		"herdrSocket":   s.Cfg.Socket,
 	})
@@ -126,30 +198,38 @@ func baseName(p string) string {
 }
 
 func (s *Server) apiSoftkeys(w http.ResponseWriter, r *http.Request) {
+	// rows / lib / bar 一起进出一个请求：行数变了往往就是为了把某几个键挪到第二行，
+	// 分几次存的话中间那一下必然是个自相矛盾的状态（两行的引用 + 一行的设置）
+	out := func(c softkeys.Config) {
+		writeJSON(w, 200, map[string]any{"lib": c.Lib, "bar": c.Bar, "rows": c.Rows,
+			"max": softkeys.MaxKeys, "maxBar": softkeys.MaxBar})
+	}
 	switch r.Method {
 	case http.MethodGet:
+		c := s.Softkeys.Load()
 		writeJSON(w, 200, map[string]any{
-			"keys": s.Softkeys.Load(), "max": softkeys.MaxKeys, "presets": softkeys.Presets(),
+			"lib": c.Lib, "bar": c.Bar, "rows": c.Rows,
+			"max": softkeys.MaxKeys, "maxBar": softkeys.MaxBar, "presets": softkeys.Presets(),
 		})
 	case http.MethodPut:
-		var body struct{ Keys []softkeys.Key }
+		var body softkeys.Config
 		if err := readJSON(r, &body); err != nil {
 			fail(w, 400, err)
 			return
 		}
-		out, err := s.Softkeys.Save(body.Keys)
+		c, err := s.Softkeys.Save(body)
 		if err != nil {
 			fail(w, 400, err)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"keys": out})
+		out(c)
 	case http.MethodDelete:
-		out, err := s.Softkeys.Save(softkeys.Defaults())
+		c, err := s.Softkeys.Save(softkeys.DefaultConfig())
 		if err != nil {
 			fail(w, 400, err)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"keys": out})
+		out(c)
 	default:
 		fail(w, 405, errf("方法不对"))
 	}

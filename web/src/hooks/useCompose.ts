@@ -5,7 +5,7 @@
 // 之后，对齐文本就等于草稿本身，于是草稿看起来「没改过」→ 解锁目标 → 下一拍把用户
 // 正在写的东西直接覆盖掉。所以 own 单独负责所有权，synced 只负责发现远端变化。
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, FOLLOW, type DraftResult, type Pane, type PresetGroup, type SayResult, type SyncResult } from '@/lib/api'
+import { api, FOLLOW, type DraftResult, type Pane, type PresetGroup, type SayResult, type SyncResult, type UploadResult } from '@/lib/api'
 
 const HIST_KEY = 'composeHist'
 const HIST_MAX = 30
@@ -242,21 +242,25 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
     own.current = !!v
   }, [])
 
-  /** 传图：落盘到 herdr 那台机器，把绝对路径插进提示词。 */
-  const attach = useCallback(async (files: FileList | File[], insertAt: () => number) => {
+  /**
+   * 传图：落盘到 herdr 那台机器，返回绝对路径（API 里没有图片通道，agent 是**去读磁盘**
+   * 上那个文件的，所以「传图」＝落盘 + 把路径当文本给出去）。
+   *
+   * 只负责上传，路径交给调用方处置 —— 发件箱开着就插进草稿，没开就直接打进终端。
+   */
+  const upload = useCallback(async (files: FileList | File[], onPath?: (r: UploadResult) => void) => {
     const imgs = [...files].filter((f) => f.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|heic)$/i.test(f.name))
-    if (!imgs.length) return
+    const out: UploadResult[] = []
+    if (!imgs.length) return out
     setBusy(true)
     try {
       for (let i = 0; i < imgs.length; i++) {
         say2(`上传第 ${i + 1}/${imgs.length} 张…`)
         const blob = await normalizeImage(imgs[i])
         const r = await api.upload(blob)
-        const at = insertAt()
-        const before = textRef.current.slice(0, at)
-        const chunk = (before && !/\s$/.test(before) ? ' ' : '') + r.path + ' '
-        onChangeText(before + chunk + textRef.current.slice(at))
-        say2(`已插入 ${r.name}（${(r.bytes / 1024).toFixed(0)} KB）· 路径已在框里，agent 会去读这个文件`)
+        out.push(r)
+        onPath?.(r)
+        say2(`已插入 ${r.name}（${(r.bytes / 1024).toFixed(0)} KB）· 路径已给出去，agent 会去读这个文件`)
       }
     } catch (e) {
       say2('传图失败：' + (e as Error).message, true)
@@ -264,7 +268,23 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
     } finally {
       setBusy(false)
     }
-  }, [onChangeText, say2, toast])
+    return out
+  }, [say2, toast])
+
+  /** 发件箱里的传图：把路径插在光标处 */
+  const attach = useCallback((files: FileList | File[], insertAt: () => number) =>
+    upload(files, (r) => {
+      const at = insertAt()
+      const before = textRef.current.slice(0, at)
+      const chunk = (before && !/\s$/.test(before) ? ' ' : '') + r.path + ' '
+      onChangeText(before + chunk + textRef.current.slice(at))
+    }), [upload, onChangeText])
+
+  /** 往草稿末尾接一段（顶栏传图 / 全页粘贴用，那两处没有光标可言） */
+  const append = useCallback((chunk: string) => {
+    const cur = textRef.current
+    onChangeText(cur + (cur && !/\s$/.test(cur) ? ' ' : '') + chunk)
+  }, [onChangeText])
 
   const selectTarget = useCallback((v: string) => {
     setSel(v)
@@ -275,7 +295,7 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
   return {
     text, setText: onChangeText, panes, presets, sel, selectTarget,
     info, bad, busy, aimed,
-    loadPanes, loadSoftkeyPresets, tick, pull, submit, recall, attach,
+    loadPanes, loadSoftkeyPresets, tick, pull, submit, recall, attach, upload, append,
   }
 }
 

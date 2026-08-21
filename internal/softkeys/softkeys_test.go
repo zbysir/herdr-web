@@ -123,6 +123,26 @@ func TestResolveValidation(t *testing.T) {
 }
 
 // 出厂配置的字节必须和最早写死在 index.html 里的一致
+// act 是「网页端自己处理」的动作，只认白名单 —— 打错了要当场报错，
+// 而不是下发一个点了没反应的键
+func TestActWhitelist(t *testing.T) {
+	for _, act := range []string{"kbd", "img"} {
+		got, err := Resolve([]Key{{Label: "x", Act: act}})
+		if err != nil {
+			t.Fatalf("act:%s 应当被接受: %v", act, err)
+		}
+		if got[0].Act != act {
+			t.Errorf("act:%s 被改成了 %q", act, got[0].Act)
+		}
+		if got[0].Send != "" {
+			t.Errorf("act:%s 不该带任何字节，得到 %q", act, got[0].Send)
+		}
+	}
+	if _, err := Resolve([]Key{{Label: "x", Act: "nope"}}); err == nil {
+		t.Error("不认识的 act 应当报错")
+	}
+}
+
 func TestDefaultsBytes(t *testing.T) {
 	out, err := Resolve(Defaults())
 	if err != nil {
@@ -276,21 +296,29 @@ func TestStoreRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	s := &Store{Dir: dir}
 
-	// 没有文件时退回出厂配置
-	if got, want := len(s.Load()), len(Defaults()); got != want {
+	// 没有文件时退回出厂配置：键全在库里，也全摆在第一行
+	if got, want := len(s.Load().Lib), len(Defaults()); got != want {
 		t.Errorf("空目录应当退回出厂 %d 条，得到 %d", want, got)
 	}
+	if c := s.Load(); c.Rows != 1 || len(c.Bar) != 1 || len(c.Bar[0]) != len(Defaults()) {
+		t.Errorf("出厂应当是一行、键全在条上: rows=%d bar=%v", c.Rows, c.Bar)
+	}
 
-	saved, err := s.Save([]Key{
+	cfg, err := s.Save(Config{Lib: []Key{
 		{Label: "放大", Send: "ctrl+b z"},
 		{Label: "Ctrl", Sticky: "ctrl"},
 		{Label: "关 pane", Send: "ctrl+b x", Confirm: true},
-	})
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
+	saved := cfg.Lib
 	if saved[0].Send != "\x02z" {
 		t.Errorf("保存后返回的字节 = %q", saved[0].Send)
+	}
+	// ID 是存盘时补的，前端不用管
+	if saved[0].ID == "" || saved[0].ID == saved[1].ID {
+		t.Errorf("ID 没补上 / 撞了: %+v", saved)
 	}
 	// 落盘只存用户写的按键谱，不存解析结果
 	raw, _ := os.ReadFile(filepath.Join(dir, "softkeys.json"))
@@ -300,7 +328,7 @@ func TestStoreRoundTrip(t *testing.T) {
 	if !saved[2].Confirm {
 		t.Error("保存后返回的 confirm 丢了")
 	}
-	back := s.Load()
+	back := s.Load().Lib
 	if len(back) != 3 || back[0].Send != "\x02z" || back[0].Spec != "ctrl+b z" || back[1].Sticky != "ctrl" {
 		t.Errorf("读回来不对: %+v", back)
 	}
@@ -309,9 +337,68 @@ func TestStoreRoundTrip(t *testing.T) {
 		t.Errorf("confirm 没落盘 / 没读回来:\n%s\n%+v", raw, back[2])
 	}
 
+	/* ---------------------------------------------------- 条上的引用 */
+
+	// 同一个键**能在两行里各放一个**：条上存的是引用，不是定义
+	two, err := s.Save(Config{Rows: 2, Lib: []Key{
+		{ID: "a", Label: "⌨", Act: "kbd"},
+		{ID: "b", Label: "Esc", Send: "esc"},
+	}, Bar: [][]string{{"a", "b"}, {"b"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(two.Bar) != 2 || len(two.Bar[0]) != 2 || len(two.Bar[1]) != 1 || two.Bar[1][0] != "b" {
+		t.Errorf("重复引用没存住: %v", two.Bar)
+	}
+	if c := s.Load(); len(c.Bar) != 2 || c.Bar[1][0] != "b" || len(c.Lib) != 2 {
+		t.Errorf("引用读回来不对: %+v", c)
+	}
+
+	// 引用了不存在的键要报错，不能静默丢（丢了就是「保存完少了个键」）
+	if _, err := s.Save(Config{Rows: 1, Lib: []Key{{ID: "a", Label: "x", Send: "esc"}}, Bar: [][]string{{"nope"}}}); err == nil {
+		t.Error("引用不存在的 ID 应当被拒")
+	}
+	if _, err := s.Save(Config{Rows: 3, Lib: []Key{{Label: "x", Send: "esc"}}}); err == nil {
+		t.Error("rows=3 应当被拒")
+	}
+	// rows=1 时第二行的引用要接到第一行末尾，不能留着「存着但不显示」
+	one, err := s.Save(Config{Rows: 1, Lib: []Key{
+		{ID: "a", Label: "a", Send: "esc"},
+		{ID: "b", Label: "b", Send: "tab"},
+	}, Bar: [][]string{{"a"}, {"b"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(one.Bar) != 1 || len(one.Bar[0]) != 2 || one.Bar[0][1] != "b" {
+		t.Errorf("rows=1 时第二行应当接到第一行末尾: %v", one.Bar)
+	}
+	// 库里留着、条上没引用 = 「我的按键」里有但没上条，完全合法
+	off, err := s.Save(Config{Rows: 1, Lib: []Key{
+		{ID: "a", Label: "上条的", Send: "esc"},
+		{ID: "b", Label: "没上条", Send: "tab"},
+	}, Bar: [][]string{{"a"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(off.Lib) != 2 || len(off.Bar[0]) != 1 {
+		t.Errorf("没上条的键应当留在库里: %+v", off)
+	}
+
+	// 老文件（row / off 长在按键上、没有 bar）要能迁过来
+	oldFile := `{"keys":[{"label":"⌨","act":"kbd"},{"label":"Esc","send":"esc","row":2},{"label":"库里","send":"tab","off":true}],"rows":2}`
+	_ = os.WriteFile(s.path(), []byte(oldFile), 0o600)
+	mig := s.Load()
+	if len(mig.Lib) != 3 || len(mig.Bar) != 2 || len(mig.Bar[0]) != 1 || len(mig.Bar[1]) != 1 {
+		t.Errorf("老文件没迁对: %+v", mig)
+	}
+	if mig.Bar[1][0] != mig.Lib[1].ID {
+		t.Errorf("老文件的第二行没指到 Esc: %+v", mig)
+	}
+
 	// 非法配置不该落盘
+	_, _ = s.Save(Config{Rows: 1, Lib: []Key{{Label: "ok", Send: "esc"}}})
 	before, _ := os.ReadFile(s.path())
-	if _, err := s.Save([]Key{{Label: "x", Send: "乱写"}}); err == nil {
+	if _, err := s.Save(Config{Lib: []Key{{Label: "x", Send: "乱写"}}}); err == nil {
 		t.Error("非法按键谱应当被拒")
 	}
 	after, _ := os.ReadFile(s.path())
@@ -321,7 +408,7 @@ func TestStoreRoundTrip(t *testing.T) {
 
 	// 存坏了要退回出厂而不是崩
 	_ = os.WriteFile(s.path(), []byte("{ 这不是 json"), 0o600)
-	if got, want := len(s.Load()), len(Defaults()); got != want {
+	if got, want := len(s.Load().Lib), len(Defaults()); got != want {
 		t.Errorf("坏文件应当退回出厂 %d 条，得到 %d", want, got)
 	}
 }

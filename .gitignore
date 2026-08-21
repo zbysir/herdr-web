@@ -13,6 +13,9 @@ internal/webui/dist/*
 .herdr-web/
 token
 
+# 本机的部署配置（域名、证书路径这些），.env.example 是入库的模板
+.env
+
 .DS_Store
 *.log
 

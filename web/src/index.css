@@ -13,6 +13,10 @@
   --color-bad: #e06c75;
   --radius-card: 10px;
 
+  /* 手机竖屏这一档。低于这个宽度：底部面板不给拖（把手自己就占地方），软键条一行横滑、
+     键小一号，顶栏收成一行。和 hooks/usePhone.ts 里的 PHONE_MAX 是同一个数。 */
+  --breakpoint-phone: 440px;
+
   /* ⌨ ⌃ ⇧ ↵ 这类字形在纯等宽字体里经常是缺的（会显示成小方块），
      所以在等宽栈后面挂上系统的符号字体兜底。 */
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,

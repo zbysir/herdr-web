@@ -115,5 +115,11 @@ func Presets() []PresetGroup {
 			{Label: "/resume", Send: "text:/resume enter"},
 			{Label: "/cost", Send: "text:/cost enter"},
 		}},
+		// 这两个不发字节，是网页端自己处理的动作 —— 传图要弹相机 / 相册，
+		// 键盘要动隐藏 textarea 的焦点，终端那边都无从代劳。
+		{Group: "网页端动作", Items: []Key{
+			{Label: "🖼 传图", Wide: true, Act: "img"},
+			{Label: "⌨ 键盘", Act: "kbd"},
+		}},
 	}
 }
