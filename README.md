@@ -686,6 +686,10 @@ herdr-web service install --env-file .env
 
 抄进去的是所有 `HERDR_WEB_*`，加上 `PATH` / `SHELL` / `HOME` / `USER` / `LOGNAME` / `LANG` / `LC_ALL` / `TERM` / `HERDR_SOCKET_PATH`。`install` 会把这份清单全打出来 —— 以后「这台机器上服务到底在用哪套配置」只能靠 plist / unit 回答，装的时候看一眼最省事。
 
+**签证书那条路（C / D 档）必须用 `--env-file`。** DNS provider 的凭据（`CLOUDFLARE_DNS_API_TOKEN`、`ALICLOUD_ACCESS_KEY` 这些）既不带 `HERDR_WEB_` 前缀、也不在上面那张白名单里，所以**从 shell 抄不进去**：你在 `.zshrc` 里 export 得再对，装出来的服务照样签不出证书，而且要等到第一次签发才炸。`--env-file` 里的 key 是**整份**进去的（还盖过当前环境），这是唯一能把 token 交给服务的路。文件只在 `install` 那一刻读，之后不再碰。
+
+plist / unit 是 **0600** 的 —— 里面就是这份环境变量的明文。
+
 **抄 `PATH` 是必须的，这是装成服务后最常见的故障**：launchd 给的默认 `PATH` 只有 `/usr/bin:/bin:/usr/sbin:/sbin`，于是 `HERDR_WEB_ONCONNECT=herdr` 变成 `herdr: command not found`，而页面上只看到一个空 shell，完全看不出为什么。
 
 为什么是 user 级不是系统级：这个进程会开一个**你的** shell。跑成 root 的系统服务意味着浏览器里那个终端是 root 的，权限一步到位放到最大，而且 `~/.herdr-web`、`~/.config/herdr/herdr.sock` 这些路径全指到别人家去了。

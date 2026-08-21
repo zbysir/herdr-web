@@ -127,6 +127,27 @@ HERDR_WEB_TOKEN=ab#cd
 	}
 }
 
+// unit / plist 里存着 install 那一刻抄进来的全部环境变量，走 ACME 那条路上就包括
+// DNS provider 的 token。0644 等于把它摊给这台机器上的每个用户看。
+func TestUnitFileIsPrivate(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "herdr-web.service")
+	// 先按老权限造一个，模拟从旧版本升上来 —— WriteFile 的 mode 只在新建时生效，
+	// 少了那次 Chmod 的话这里就还是 644
+	if err := os.WriteFile(p, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeUnit(p, "new"); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := fi.Mode().Perm(); mode != 0o600 {
+		t.Errorf("unit 权限是 %04o，want 0600 —— 里面有 DNS token", mode)
+	}
+}
+
 // Windows 上给一条能用的路（去 WSL），不是一句「不支持」。
 func TestUnsupportedGivesReason(t *testing.T) {
 	m := &Manager{Kind: None, Why: "x"}

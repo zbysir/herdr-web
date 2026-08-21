@@ -123,7 +123,7 @@ func (m *Manager) Install(say func(string)) error {
 	case Systemd:
 		body = m.unit()
 	}
-	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+	if err := writeUnit(p, body); err != nil {
 		return err
 	}
 	say("写了 " + p)
@@ -159,6 +159,22 @@ func (m *Manager) Install(say func(string)) error {
 		}
 	}
 	return nil
+}
+
+// writeUnit 把 plist / unit 落盘。
+//
+// **0600**：这份文件里存着 install 那一刻抄进来的全部环境变量 —— 走 ACME 的话，
+// DNS provider 的 token（`--env-file` 里的 key 是整份进来的）就明文躺在里面。
+// 这台机器上跑着读不可信内容的 agent，磁盘上别的地方都没留能直接用的明文，
+// 这儿也不该是个例外。
+//
+// 补一次 Chmod 是因为 WriteFile 的 mode **只在新建时生效**：覆盖装的时候管不到
+// 已经存在的那个文件，而上一版写的是 0644 —— 升上来的机器只能靠这一下收窄。
+func writeUnit(p, body string) error {
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(p, 0o600)
 }
 
 // Uninstall 停掉并删掉文件。没装过也算成功。
