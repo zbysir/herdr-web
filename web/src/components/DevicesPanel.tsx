@@ -122,23 +122,27 @@ export function DevicesPanel({
 
   const body = (
     <>
-      {err && <p className="mb-2 text-[12.5px] text-bad">{err}</p>}
+      {err && <p className="mb-2 text-xs text-bad">{err}</p>}
 
       <ul className="list-none p-0">
         {devs.length === 0 && <li className="text-muted">还没有设备。下面「加一台设备」出一个配对码。</li>}
         {devs.map((d) => (
-          <li key={d.id} className="flex items-center gap-2 border-b border-line/60 py-2 last:border-0">
+          <li key={d.id} className="flex items-center gap-2 border-b border-line py-2.5 last:border-0">
             <div className="min-w-0 flex-1">
               <div className="truncate">
                 {d.label}
-                {d.id === me && <span className="ml-1.5 text-[11px] text-accent">这台</span>}
+                {d.id === me && (
+                  <span className="ml-2 rounded border border-brand/40 bg-brand/12 px-1.5 py-px text-[11px] text-brand">
+                    这台
+                  </span>
+                )}
               </div>
-              <div className="text-[11.5px] text-muted">
+              <div className="text-xs text-muted">
                 {ago(d.lastSeen)} · {d.lastIp || '—'} · {expiry(d.expires)}
               </div>
             </div>
             <Button
-              variant={armed === d.id ? 'primary' : 'danger'}
+              variant={armed === d.id ? 'destructive' : 'danger'}
               size="tiny"
               onClick={() => void kick(d)}
               title="撤销这台设备的凭据，它下一个请求就会被拒"
@@ -151,19 +155,19 @@ export function DevicesPanel({
 
       <div className="mt-3 border-t border-line pt-2.5">
         <div className="mb-1.5 flex items-center justify-between">
-          <strong className="text-[13px]">passkey</strong>
+          <strong className="text-[13px] font-medium">passkey</strong>
           {pkAvail && passkeySupported() && (
             <Button size="tiny" onClick={() => void addPasskey()}>添加</Button>
           )}
         </div>
         {!pkAvail && (
-          <p className="text-[11.5px]/relaxed text-muted">
+          <p className="text-xs/relaxed text-muted">
             这个部署用不了：WebAuthn 要求标识是域名，用 IP 访问不行。让域名指到这台机器
             （内网地址也可以）就能用了。
           </p>
         )}
         {pkAvail && keys.length === 0 && (
-          <p className="text-[11.5px]/relaxed text-muted">
+          <p className="text-xs/relaxed text-muted">
             还没有。加一把之后：<b>换新设备不用回机器前</b>（同步的 passkey 在你所有设备上都有），
             而且会话凭据的寿命可以压到一天 —— 就算被偷走，能用的窗口也只有那么长。
           </p>
@@ -173,12 +177,12 @@ export function DevicesPanel({
             <li key={k.id} className="flex items-center gap-2 py-1.5">
               <div className="min-w-0 flex-1">
                 <div className="truncate">{k.label}</div>
-                <div className="text-[11.5px] text-muted">
+                <div className="text-xs text-muted">
                   {new Date(k.created).toLocaleDateString()} 添加 · 最后用于 {ago(k.lastUsed)}
                 </div>
               </div>
               <Button
-                variant={armed === 'pk' + k.id ? 'primary' : 'danger'}
+                variant={armed === 'pk' + k.id ? 'destructive' : 'danger'}
                 size="tiny"
                 onClick={() => void delPasskey(k)}
               >
@@ -190,15 +194,18 @@ export function DevicesPanel({
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-2.5">
-        <Button variant={armed === 'logout' ? 'primary' : 'default'} size="tiny" onClick={() => void logout()}>
+        <Button variant={armed === 'logout' ? 'destructive' : 'default'} size="tiny" onClick={() => void logout()}>
           {label('logout', '登出这台')}
         </Button>
-        <Button variant={armed === 'all' ? 'primary' : 'danger'} size="tiny" onClick={() => void kickAll()}>
+        <Button variant={armed === 'all' ? 'destructive' : 'danger'} size="tiny" onClick={() => void kickAll()}>
           {label('all', '全部踢掉')}
         </Button>
       </div>
 
-      <p className="mt-2.5 text-[11.5px]/relaxed text-muted">
+      <p className="mt-3 border-t border-line pt-3 text-xs/relaxed text-muted
+                    [&_code]:rounded [&_code]:border [&_code]:border-line [&_code]:bg-ctl
+                    [&_code]:px-1 [&_code]:py-px [&_code]:font-mono [&_code]:text-[11px] [&_code]:text-fg
+                    [&_strong]:font-medium [&_strong]:text-fg">
         凭据在 HttpOnly cookie 里、服务端只存哈希，绑设备不绑 IP —— 换 Wi-Fi 和换网段都不用重新配对。
         撤销之后那台设备的下一个请求就是 401。命令行上是 <code>herdr-web devices / revoke</code>。
         <br />

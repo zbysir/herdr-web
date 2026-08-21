@@ -26,7 +26,26 @@ import (
 //
 // herdr 检测到 HERDR_* 就会拒绝启动（"nested herdr is disabled"）。如果本服务是在
 // herdr / tmux 的 pane 里起的，必须把这些痕迹从子进程环境里清掉。
-var dropEnv = regexp.MustCompile(`^(HERDR_|TMUX$|TMUX_|ZELLIJ|STY$|ITERM_|TERM_PROGRAM|TERM_SESSION_ID|TERM_FEATURES|LC_TERMINAL|CLAUDECODE$|CLAUDE_CODE_)`)
+// dropEnv 是**不能进 PTY 子进程**的环境变量。两类：
+//
+//  1. 终端多路复用器的痕迹。herdr 检测到 HERDR_* 就拒绝启动（"nested herdr is disabled"），
+//     所以本服务在 herdr pane 里起的时候必须清掉。
+//  2. **凭据。** PTY 里跑的是登录 shell，agent 就在那里面 —— 它 `echo $CLOUDFLARE_DNS_API_TOKEN`
+//     就能把你的云账号密钥读走，一次 prompt injection 就够了。这些变量是为了 ACME 签证书
+//     才进到本进程环境里的（见 internal/acme），没有任何理由传给子进程。
+//
+// 清掉不影响你自己用：PTY 起的是 `-l` 登录 shell，会重新 source 你的 profile，
+// 你在 rc 里 export 的那些照样在。
+var dropEnv = regexp.MustCompile(`^(` + strings.Join([]string{
+	// 多路复用器 / 终端痕迹
+	`HERDR_`, `TMUX$`, `TMUX_`, `ZELLIJ`, `STY$`, `ITERM_`,
+	`TERM_PROGRAM`, `TERM_SESSION_ID`, `TERM_FEATURES`, `LC_TERMINAL`,
+	`CLAUDECODE$`, `CLAUDE_CODE_`,
+	// DNS 服务商的凭据（ACME 用）
+	`CLOUDFLARE_`, `CF_`, `ALICLOUD_`, `ALIBABA_CLOUD_`, `ALIYUN_`,
+	`TENCENTCLOUD_`, `DNSPOD_`, `AWS_`, `DO_AUTH_TOKEN$`, `DIGITALOCEAN_`,
+	`HUAWEICLOUD_`, `HUAWEI_`,
+}, `|`) + `)`)
 
 func childEnv() []string {
 	out := []string{}

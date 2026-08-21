@@ -204,13 +204,13 @@ export function Dock({
         <span
           key={side}
           data-testid={`dock-side-${side}`}
-          className="absolute inset-y-0 z-1 flex w-4 cursor-ew-resize touch-none items-center justify-center select-none"
+          className="group absolute inset-y-0 z-1 flex w-4 cursor-ew-resize touch-none items-center justify-center select-none"
           style={side === 'l' ? { left: offL } : { right: offR }}
           title="左右拖：面板这一边收到哪儿（横向改宽度）。双击复位"
           onPointerDown={(e) => startEdge(e, side, 'x')}
           onDoubleClick={resetAll}
         >
-          <span className="h-8 w-1 rounded-full bg-fg/25" />
+          <span className="h-8 w-1 rounded-full bg-line-hi transition-colors group-hover:bg-faint" />
         </span>
       ))}
 
@@ -248,7 +248,7 @@ export function Dock({
                   >
                     <span
                       className={cn(
-                        'h-1.5 rounded-full bg-fg/25 group-active:bg-accent',
+                        'h-1.5 rounded-full bg-line-hi transition-colors group-hover:bg-faint group-active:bg-brand',
                         zone === 'm' ? 'w-16' : 'w-10',
                       )}
                     />

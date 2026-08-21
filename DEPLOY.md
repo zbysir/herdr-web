@@ -69,7 +69,7 @@ CLOUDFLARE_DNS_API_TOKEN=... \
 ```
 
 支持 `cloudflare` / `alidns`（阿里云）/ `tencentcloud`（腾讯云）/ `route53`（AWS）/
-`digitalocean` / `huaweicloud`。**第一次先加 `HERDR_WEB_ACME_STAGING=1`** 跑通流程 ——
+`digitalocean` / `huaweicloud` —— **每家的 token 怎么拿、该给什么权限，见 [DNS.md](DNS.md)**。**第一次先加 `HERDR_WEB_ACME_STAGING=1`** 跑通流程 ——
 正式环境同一组域名一周只给 5 张证书，反复试会把自己锁一周。签完的证书放在
 `~/.herdr-web/data/acme/`，到期前 30 天自动续，续完**不用重启**（热重载）。
 

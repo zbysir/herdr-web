@@ -67,7 +67,7 @@ export function Compose({
         onAttach(e.dataTransfer.files, caret)
       }}
     >
-      <div className="flex flex-wrap items-center gap-1.5">
+      <div className="flex flex-wrap items-center gap-2">
         <Select
           data-testid="compose-target"
           className="min-w-0 flex-[0_1_320px] @max-3xl:flex-[0_0_100%]"
@@ -102,7 +102,7 @@ export function Compose({
           onChange={(e) => { if (e.target.files) onAttach(e.target.files, caret); e.target.value = '' }}
         />
         <label
-          className="flex shrink-0 cursor-pointer items-center gap-1.5 text-[11.5px] text-muted"
+          className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-muted"
           title="本地改动跟着推回远端输入框（不回车）。只对 claude / codex 这种有真输入框的 pane 生效 —— 普通 pane 里跑的可能是 vim，那里的字符是命令不是文本。"
         >
           <Checkbox checked={live} onCheckedChange={(v) => onLive(!!v)} />双向
@@ -110,8 +110,8 @@ export function Compose({
 
         <span
           className={cn(
-            'min-w-0 flex-1 truncate text-[11.5px] @max-3xl:order-9 @max-3xl:flex-[0_0_100%]',
-            bad ? 'text-bad' : 'text-muted',
+            'min-w-0 flex-1 truncate text-xs @max-3xl:order-9 @max-3xl:flex-[0_0_100%]',
+            bad ? 'text-bad' : 'text-faint',
           )}
           title={`轮询 ${pollMs}ms · 双向防抖 ${pushMs}ms（URL 加 ?poll=&push= 可临时改）`}
         >

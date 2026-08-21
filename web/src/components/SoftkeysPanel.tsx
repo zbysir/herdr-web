@@ -364,22 +364,27 @@ export function SoftkeysPanel({
 
   const chipCls = (k: SoftKey, on: boolean) =>
     cn(
-      'flex shrink-0 items-center gap-1 rounded-[7px] border border-line bg-fg/8 px-2.5 py-1.5',
-      'font-mono text-[12.5px] text-fg cursor-grab select-none active:cursor-grabbing',
+      'flex shrink-0 items-center gap-1 rounded-md border border-line bg-ctl px-2.5 py-1.5',
+      'font-mono text-xs text-fg cursor-grab select-none active:cursor-grabbing',
+      'transition-[background-color,border-color,color] duration-100 hover:border-line-hi hover:bg-ctl-hi',
       k.wide && 'min-w-[70px]',
-      on && 'border-accent bg-accent/25',
+      // 正在改的那个：淡绿底 + 绿字。别整块涂满 —— 库里几十个键并排，
+      // 一块饱和色会把周围的键全压下去
+      on && 'border-brand/50 bg-brand/12 text-brand hover:border-brand/50 hover:bg-brand/12',
     )
 
   /** 一个筐。zone 是 'lib' 时是「我的按键」（不出 ✕），否则是条上的一行 */
   const box = (zone: Zone, label: string, hint: string, count: number) => (
-    <div className="flex items-start gap-1.5">
-      <span className="w-11 shrink-0 pt-2 text-[11.5px] text-muted">{label}</span>
+    <div className="flex items-start gap-2">
+      <span className="w-11 shrink-0 pt-2.5 text-xs text-faint">{label}</span>
       <div
         ref={(el) => { zoneEl.current[zone] = el }}
         data-testid={`keys-zone-${zone}`}
         className={cn(
-          'flex min-h-[42px] flex-1 flex-wrap content-start items-start gap-1.5 rounded-[8px] border border-dashed border-line p-1.5',
-          over?.zone === zone && 'border-accent bg-accent/8',
+          // 虚线框 + 比面板暗一档的底：一眼看出「这是个筐，东西能拖进来」
+          'flex min-h-[44px] flex-1 flex-wrap content-start items-start gap-1.5 rounded-lg p-2',
+          'border border-dashed border-line-hi/70 bg-bg/40 transition-colors duration-100',
+          over?.zone === zone && 'border-brand/60 bg-brand/8',
         )}
       >
         {Array.from({ length: count }, (_, i) => {
@@ -387,7 +392,7 @@ export function SoftkeysPanel({
           if (!k) return null
           return (
             <div key={`${zone}-${i}`} className="flex items-center">
-              {over?.zone === zone && over.i === i && <span className="mr-1 h-6 w-0.5 shrink-0 rounded bg-accent" />}
+              {over?.zone === zone && over.i === i && <span className="mr-1 h-6 w-0.5 shrink-0 rounded-full bg-brand" />}
               <span
                 data-chip
                 role="button"
@@ -414,9 +419,9 @@ export function SoftkeysPanel({
             </div>
           )
         })}
-        {over?.zone === zone && over.i >= count && <span className="h-6 w-0.5 rounded bg-accent" />}
+        {over?.zone === zone && over.i >= count && <span className="h-6 w-0.5 rounded-full bg-brand" />}
         {count === 0 && over?.zone !== zone && (
-          <span className="px-1 py-1.5 text-[11.5px] text-muted">{hint}</span>
+          <span className="px-1 py-1.5 text-xs text-faint">{hint}</span>
         )}
       </div>
     </div>
@@ -427,29 +432,46 @@ export function SoftkeysPanel({
   const body = (
     <>
       {/* 行数 + 存盘。行数放最前面：它决定下面画一栏还是两栏 */}
-      <div className="mb-2 flex flex-wrap items-center gap-1.5">
-        <span className="text-[11.5px] text-muted">软键条</span>
-        <Button size="tiny" on={rows === 1} onClick={() => setLaneCount(1)} title="只要一行（键多了横滑）">一行</Button>
-        <Button size="tiny" on={rows === 2} onClick={() => setLaneCount(2)} title="要两行，每行各自横滑">两行</Button>
-        <span className="ml-auto text-[11.5px] text-muted tabular-nums">{bar.reduce((n, r) => n + r.length, 0)} 个在条上</span>
-        <Button size="tiny" variant="primary" onClick={save}>保存</Button>
+      <div className="mb-2.5 flex flex-wrap items-center gap-2">
+        <span className="text-[13px] font-medium">软键条</span>
+        {/* 「一行 / 两行」是二选一，贴成一个分段控件 —— 两个独立按钮并排时看不出
+            它们是同一个选择（原来就是两个按钮，谁开着全靠颜色深浅去猜） */}
+        <div className="flex overflow-hidden rounded-md border border-line">
+          <Button
+            size="tiny" on={rows === 1} onClick={() => setLaneCount(1)} title="只要一行（键多了横滑）"
+            className="rounded-none border-0 border-r border-line"
+          >
+            一行
+          </Button>
+          <Button
+            size="tiny" on={rows === 2} onClick={() => setLaneCount(2)} title="要两行，每行各自横滑"
+            className="rounded-none border-0"
+          >
+            两行
+          </Button>
+        </div>
+        <span className="ml-auto text-xs text-faint tabular-nums">{bar.reduce((n, r) => n + r.length, 0)} 个在条上</span>
         <Button size="tiny" variant="danger" onClick={reset}>恢复默认</Button>
+        <Button size="tiny" variant="primary" onClick={save}>保存</Button>
       </div>
 
-      <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-2">
         {box(1, rows === 2 ? '第一行' : '按键', '从下面「我的按键」拖上来', bar[0]?.length ?? 0)}
         {rows === 2 && box(2, '第二行', '拖上来的键排在第二行', bar[1]?.length ?? 0)}
       </div>
 
       {/* 我的按键：所有定义都在这儿，新增 / 改 / 删都在这儿 */}
-      <div className="mt-3 border-t border-line pt-2">
-        <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
-          <span className="text-[11.5px] text-muted">
-            我的按键 <span className="tabular-nums">{lib.length}/{max}</span>：点一下改它，<strong>按住拖到上面</strong>就上条
+      <div className="mt-4 border-t border-line pt-3">
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <span className="text-[13px] font-medium">
+            我的按键 <span className="ml-0.5 text-xs font-normal text-faint tabular-nums">{lib.length}/{max}</span>
+          </span>
+          <span className="min-w-0 flex-1 text-xs text-muted">
+            点一下改它，<strong className="font-medium text-fg">按住拖到上面</strong>就上条
           </span>
           <Button
             size="tiny"
-            className="ml-auto shrink-0"
+            className="shrink-0"
             title="把内置预设加进「我的按键」（已经有的跳过），之后每个都能自己改"
             onClick={loadPresets}
           >
@@ -464,7 +486,7 @@ export function SoftkeysPanel({
 
         {/* 选中的那个定义 —— 改这里，条上所有引用一起变 */}
         {sel && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 rounded-[8px] bg-fg/5 p-1.5">
+          <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-line bg-bg/50 p-2">
             <Input
               className="w-[5.5em] shrink-0"
               value={sel.label}
@@ -478,11 +500,11 @@ export function SoftkeysPanel({
               placeholder="ctrl+b c"
               onChange={(e) => patchSel((x) => parseKind(e.target.value, x))}
             />
-            <label className="flex shrink-0 items-center gap-1 text-[11px] text-muted" title="占宽一点">
+            <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-muted" title="占宽一点">
               <Checkbox checked={!!sel.wide} onCheckedChange={(v) => patchSel((x) => ({ ...x, wide: !!v }))} />
               宽
             </label>
-            <label className="flex shrink-0 items-center gap-1 text-[11px] text-muted" title="点两下才真发出去：第一下只是举起来（变红），3 秒不点就放下">
+            <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-muted" title="点两下才真发出去：第一下只是举起来（变红），3 秒不点就放下">
               <Checkbox checked={!!sel.confirm} onCheckedChange={(v) => patchSel((x) => ({ ...x, confirm: !!v }))} />
               两下
             </label>
@@ -493,9 +515,14 @@ export function SoftkeysPanel({
         )}
       </div>
 
-      {err && <p className="mt-1.5 text-[11.5px] text-bad">{err}</p>}
+      {err && <p className="mt-2 text-xs text-bad">{err}</p>}
 
-      <p className="mt-2 text-[11.5px]/relaxed text-muted">
+      {/* 说明里的按键谱本来是裸 <code>，和正文混在一块儿分不出哪儿是要照抄的字面量。
+          统一给一个小灰块，别一个个地方写 */}
+      <p className="mt-4 border-t border-line pt-3 text-xs/relaxed text-muted
+                    [&_code]:rounded [&_code]:border [&_code]:border-line [&_code]:bg-ctl
+                    [&_code]:px-1 [&_code]:py-px [&_code]:font-mono [&_code]:text-[11px] [&_code]:text-fg
+                    [&_strong]:font-medium [&_strong]:text-fg">
         条上放的是「我的按键」里那个键的<strong>引用</strong>：拖上去是选中它，库里那个还在，
         所以<strong>同一个键两行各放一个也行</strong>；改一处定义，条上所有引用一起变；
         ✕ 只是从条上拿下来，不是删。<br />
@@ -515,7 +542,7 @@ export function SoftkeysPanel({
       {/* 跟着手指走的残影。fixed + pointer-events-none：它自己不能挡住命中判定 */}
       {drag && (
         <span
-          className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-1/2 rounded-[7px] border border-accent bg-accent/90 px-2.5 py-1.5 font-mono text-[12.5px] text-white shadow-lg"
+          className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-1/2 rounded-md border border-brand-line bg-brand-bg px-2.5 py-1.5 font-mono text-xs text-brand-fg shadow-[0_10px_24px_-8px_rgba(0,0,0,.7)]"
           style={{ left: drag.x, top: drag.y }}
         >
           {drag.key.label || kindOf(drag.key)}

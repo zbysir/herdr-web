@@ -114,12 +114,12 @@ export function QrScan({ onCode, onClose }: { onCode: (code: string) => void; on
         />
         {/* 取景框：告诉人「把码放中间」，纯装饰 */}
         <div className="pointer-events-none absolute inset-0 grid place-items-center">
-          <div className="size-40 rounded-[10px] border-2 border-accent/70" />
+          <div className="size-40 rounded-xl border-2 border-brand/70" />
         </div>
       </div>
       <div className="mt-1.5 flex items-center gap-2">
         <Button size="tiny" onClick={onClose}>取消</Button>
-        <span className="text-[12px] text-muted">
+        <span className="text-xs text-muted">
           {err || '对准机器上打出来的那个二维码，认出来就自动配对'}
         </span>
       </div>

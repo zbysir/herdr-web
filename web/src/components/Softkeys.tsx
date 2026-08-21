@@ -86,7 +86,7 @@ export function Softkeys({
                 // 当场挪位置，第二下就点到隔壁去了。
                 className={cn(
                   k.wide && 'min-w-[78px]',
-                  up && 'border-transparent bg-bad text-white',
+                  up && 'border-bad bg-bad text-white hover:border-bad hover:bg-bad',
                 )}
                 title={up ? '再点一次才真的发出去' : (k.spec || k.sticky || k.act || '') + (k.confirm ? '（要点两下）' : '')}
                 // 这一个不能顺手 focus 终端，否则没法收起键盘

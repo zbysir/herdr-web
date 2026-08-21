@@ -39,6 +39,10 @@
   --color-ok: #3ecf8e;
   --color-bad: #e5484d;
 
+  /* accent 是旧名字（原来那个亮蓝）。留成 brand 的别名而不是删掉：这仓库同时有别的
+     人在改前端，谁手上还留着 bg-accent 也不会突然变成「什么样式都没有」。新代码写 brand。 */
+  --color-accent: var(--color-brand);
+
   /* 浮层用 12px（面板 / 卡片），控件一律 rounded-md=6px —— 两档就够，
      原来 7/8/10px 混着用，边角看着毛。 */
   --radius-card: 12px;

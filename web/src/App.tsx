@@ -413,7 +413,7 @@ export default function App() {
           onClick={() => setPeek(true)}
           onMouseDown={(e) => e.preventDefault()}
         >
-          <span className="h-0.5 w-10 rounded-full bg-fg/25" />
+          <span className="h-0.5 w-10 rounded-full bg-line-hi" />
         </button>
       )}
 
@@ -421,7 +421,7 @@ export default function App() {
           「连接」、字号和明暗那三个图标挪进设置 →「终端」页。七个图标在 393px 上排不下，
           折成两行就白吃掉 ~36px（约三行终端），而这三个都是一次调完的东西。 */}
       {!barHidden && (
-      <header className="flex shrink-0 flex-wrap items-center gap-2.5 border-b border-line bg-bar px-2.5 py-[7px] select-none max-md:gap-1.5 max-md:px-2">
+      <header className="flex shrink-0 flex-wrap items-center gap-2.5 border-b border-line bg-bar px-3 py-2 select-none max-md:gap-1.5 max-md:px-2">
         <div className="flex min-w-0 flex-1 items-center gap-[7px] max-phone:flex-none">
           <span
             title={status.text}
@@ -432,7 +432,7 @@ export default function App() {
               status.cls === '' && 'bg-muted',
             )}
           />
-          <span className="truncate text-muted tabular-nums max-md:text-[11.5px] max-phone:hidden">{status.text}</span>
+          <span className="truncate text-xs text-muted tabular-nums max-phone:hidden">{status.text}</span>
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5">
@@ -462,12 +462,13 @@ export default function App() {
             不裁的话它会画到发件箱上面去；冻帧那张图也靠这个裁 */}
         <div ref={host} className="term-host absolute inset-0 overflow-hidden pt-1.5 pr-1 pb-1 pl-2" />
         {overlay && (
-          <div className="absolute inset-0 z-5 grid place-items-center bg-bg/85 p-5 backdrop-blur-[3px]">
-            <div className="max-w-[460px] text-center">
-              <h1 className="mb-2 text-[17px] font-semibold tracking-[.2px]">herdr in the browser</h1>
-              <p className="text-muted [&_code]:rounded [&_code]:bg-fg/10 [&_code]:px-1.5 [&_code]:py-px"
+          <div className="absolute inset-0 z-5 grid place-items-center bg-bg/80 p-5 backdrop-blur-sm">
+            <div className="max-w-[440px] text-center">
+              <h1 className="mb-2 text-[17px] font-medium tracking-tight">herdr in the browser</h1>
+              <p className="text-[13px]/relaxed text-muted [&_code]:rounded [&_code]:border [&_code]:border-line
+                            [&_code]:bg-ctl [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-xs [&_code]:text-fg"
                  dangerouslySetInnerHTML={{ __html: overlay.msg }} />
-              <Button variant="primary" className="mt-1.5 px-[22px] py-2.5 text-sm" onClick={connect}>
+              <Button variant="primary" className="mt-4 px-5 py-2 text-[13px]" onClick={connect}>
                 {overlay.btn}
               </Button>
             </div>
