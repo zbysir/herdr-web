@@ -89,19 +89,34 @@ function legacyCopy(text: string): boolean {
 }
 
 /**
- * 读手机剪贴板。`null` = 读不到（不是安全上下文、没有这个 API、或者用户拒了那个提示）。
+ * 等读剪贴板的上限（毫秒）。比写那边宽得多是因为**这一步可能在等人**：Chrome 读剪贴板
+ * 会弹一次「粘贴」确认（Android 上是个系统小浮层），用户点了才 resolve。
+ *
+ * 但也不能不设上限：`readText` 和 `writeText` 一样，在标签页不可见时**永远挂着**
+ * （实测点一下「粘」什么都不发生 —— 既没粘进来，也没弹出兜底的框）。超时之后就摊那个
+ * 「长按这儿粘贴」的框，那条路不依赖任何权限。
+ */
+const READ_TIMEOUT = 8000
+
+/**
+ * 读手机剪贴板。`null` = 读不到（不是安全上下文、没有这个 API、用户拒了、或者超时）。
  *
  * 和写一样吃**用户手势**那条限制，所以只能在点击的处理函数里调 —— 软键条上那个「粘」键
- * 就是为这一下存在的。Chrome 还会额外弹一个「粘贴」确认（Android 上是系统级的小浮层），
- * 用户不点就一直等着，所以这里**不设超时**：那个等待是有界面的，不是静默挂死。
+ * 就是为这一下存在的。
  *
  * 读不到就交给 UI 摊一个框让人长按粘（components/PastePrompt.tsx）—— 手机上「长按 →
  * 粘贴」永远是通的，因为那是浏览器自己的菜单，不受这套权限管。
+ *
+ * 超时之后那次读可能**后来才落地**（用户过了很久才点确认）；调用方拿到的是 null，
+ * 那份迟到的文本直接丢掉 —— 宁可让人在框里再粘一次，也不能过一会儿突然往终端里塞一段。
  */
-export async function readClipboard(): Promise<string | null> {
+export async function readClipboard(ms = READ_TIMEOUT): Promise<string | null> {
   if (!navigator.clipboard?.readText) return null
   try {
-    return await navigator.clipboard.readText()
+    return await Promise.race([
+      navigator.clipboard.readText(),
+      new Promise<null>((done) => setTimeout(() => done(null), ms)),
+    ])
   } catch {
     return null
   }

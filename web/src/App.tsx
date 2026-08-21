@@ -408,6 +408,9 @@ export default function App() {
    * 读不到就摊一个框让人长按粘（PastePrompt）—— 长按菜单是浏览器自己的，永远通。
    */
   const pastePhone = async () => {
+    // 先说一句：这一步可能在等人（Chrome 读剪贴板要点一次「粘贴」确认），不吭声的话
+    // 那几秒看着就像按键没反应
+    toast('读手机剪贴板…')
     const text = await readClipboard()
     if (text === null) {
       setPasteOpen(true)
