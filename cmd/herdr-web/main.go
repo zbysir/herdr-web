@@ -14,6 +14,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
@@ -32,6 +33,7 @@ import (
 
 	"github.com/zbysir/herdr-web/internal/acme"
 	"github.com/zbysir/herdr-web/internal/admin"
+	"github.com/zbysir/herdr-web/internal/agentwatch"
 	"github.com/zbysir/herdr-web/internal/auth"
 	"github.com/zbysir/herdr-web/internal/config"
 	"github.com/zbysir/herdr-web/internal/ctl"
@@ -201,6 +203,12 @@ func serve(webDir string) error {
 	// 已经要退出的进程去发请求。
 	updates := startUpdateWatch(cfg)
 
+	// 盯 agent 状态变化，给「面板一览」的时间列打时间戳。herdr 的 API 里没有任何
+	// 时间戳，所以只能这一侧自己记（细节见 internal/agentwatch 的包注释）。
+	// herdr 没在跑也无所谓：它自己按 5 秒重试，只在日志里说一次。
+	agents := agentwatch.New(cfg.Socket)
+	agents.Start(context.Background())
+
 	names := append([]string{}, cfg.Hostnames...)
 	if cert != nil {
 		names = append(names, cert.DNSNames...)
@@ -212,6 +220,7 @@ func serve(webDir string) error {
 		RPID:        cfg.PasskeyRPID(),
 		Version:     version.Version,
 		Updates:     updates,
+		Agents:      agents,
 	})
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)

@@ -512,6 +512,7 @@ export default function App() {
         {panesOpen && (
           <PaneSwitcher
             panes={compose.panes}
+            watching={compose.watching}
             onClose={() => setPanesOpen(false)}
             onGoto={(id, zoom) => void gotoPane(id, zoom)}
             onReload={() => void compose.loadPanes()}

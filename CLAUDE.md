@@ -5,8 +5,15 @@
 一个 Go 二进制，前端（React + Vite + Tailwind）嵌在里面：`make build` → `./herdr-web`。
 怎么跑、环境变量、代码结构、移动端手势、已处理的坑：[README.md](README.md)。
 
-动 herdr socket 调用、输入框抽取、或发件箱之前先读 [HANDOFF.md](HANDOFF.md)。里面是已验证的
-API 语义和一串**会静默出错**的坑，其中这几条最容易再踩一遍：
+动这三块之前先读对应的那份 —— 里面是实测出来的语义和一串**会静默出错**的坑：
+
+| 要动 | 读 |
+|---|---|
+| herdr socket 调用（`internal/herdr`、`outbox`、`agentwatch`） | [HERDR-API.md](HERDR-API.md) |
+| 抽输入框（`internal/composer`） | [COMPOSER.md](COMPOSER.md) |
+| 发件箱（`internal/outbox`、`web/src/hooks/useCompose.ts`） | [OUTBOX.md](OUTBOX.md) |
+
+这几条最容易再踩一遍：
 
 - `ctrl+u` 清空是 **2N−1 次**（N 行输入），固定次数只够两行；清不空就别投。
 - `HERDR_WEB_SETTLE_MS` **别调成 0**，否则两次 `pane.read` 落在同一帧上，清空循环整体失效。

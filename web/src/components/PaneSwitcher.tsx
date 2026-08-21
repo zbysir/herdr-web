@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { RefreshCw, Search } from 'lucide-react'
 import type { Pane } from '@/lib/api'
 import { Panel } from './ui/panel'
@@ -22,13 +22,36 @@ import { cn } from '@/lib/utils'
  * 那就有了第二个真相源。
  *
  * 「点了就全屏」默认开：手机上多 pane 平铺根本读不了，去了不放大等于没去。平板横屏
- * （或者你就想看那个 tab 的分屏）时关掉它，那时候点一行是「切焦点 + 退出全屏」。
+ * （或者你就想看那个 tab 的分屏）时关掉它，那时候点一行是「切焦点 + 退出放大」。
  */
 const LS_ZOOM = 'panesZoom'
 const LS_ONLY_AGENT = 'panesOnlyAgent'
+const LS_SORT = 'panesSort'
 
-/** 长路径显示成 ~/…：一行里 cwd 是最认得出 pane 的东西，但绝对路径太占宽度 */
-const shortCwd = (p: string) => p.replace(/^\/(?:Users|home)\/[^/]+/, '~')
+type Sort = 'priority' | 'recent' | 'herdr'
+
+const SORTS: { id: Sort; label: string; hint: string }[] = [
+  { id: 'priority', label: '优先级', hint: '要你看的在前（等你 > 完成 > 在跑/闲着），同档按最近动过' },
+  { id: 'recent', label: '最近', hint: '纯按最近动过排，不分状态' },
+  { id: 'herdr', label: 'herdr 顺序', hint: '按 workspace / tab / pane 的原顺序分组，和 herdr 里看到的一样' },
+]
+
+/**
+ * 优先级分档：按「还需不需要你」。这是需求方定的规则 —— **需要人看的 > 完成的**，
+ * 同一档里按最近动过排。
+ *
+ * `working` 和 `idle` 故意合成一档：两个都不需要你，谁该在前面没有客观答案，交给
+ * 「刚动过」去定（一个刚开始跑的 agent 比一个闲了三天的更值得看一眼）。
+ * 非 agent pane（shell）永远最后 —— 那儿没有状态可言。
+ */
+const BUCKET: Record<string, number> = { blocked: 0, done: 1, working: 2, idle: 2 }
+const bucketOf = (p: Pane) => (p.agent ? (BUCKET[p.status] ?? 3) : 4)
+
+/** 只给最该被看见的两个状态加字：其余靠那个点的颜色，别把每行都塞满标签 */
+const STATUS_CHIP: Record<string, { text: string; cls: string }> = {
+  blocked: { text: '等你', cls: 'border-bad/50 bg-bad/15 text-bad' },
+  done: { text: '完成', cls: 'border-brand/40 bg-brand/12 text-brand' },
+}
 
 const DOT: Record<string, string> = {
   working: 'bg-brand',
@@ -37,10 +60,33 @@ const DOT: Record<string, string> = {
   done: 'bg-muted',
 }
 
+/** 长路径显示成 ~/…：一行里 cwd 是最认得出 pane 的东西，但绝对路径太占宽度 */
+const shortCwd = (p: string) => p.replace(/^\/(?:Users|home)\/[^/]+/, '~')
+
+/**
+ * 「上次动过」多久了。给的是 unix 毫秒，0 / 缺失就返回空字符串 —— **空着比编一个时间好**
+ * （herdr 的 API 不带时间戳，herdr-web 起来之前发生的变化就是不知道，见 internal/agentwatch）。
+ *
+ * 用 `3m` `2h` `4d` 这种紧凑写法而不是「3 分钟前」：这一列在手机上只有几十像素，
+ * 完整时间放在 title 里。
+ */
+export function ago(ms?: number, now = Date.now()) {
+  if (!ms) return ''
+  const s = Math.max(0, Math.round((now - ms) / 1000))
+  if (s < 45) return '刚刚'
+  const m = Math.round(s / 60)
+  if (m < 60) return `${m}m`
+  const h = Math.round(m / 60)
+  if (h < 24) return `${h}h`
+  return `${Math.round(h / 24)}d`
+}
+
 export function PaneSwitcher({
-  panes, onClose, onGoto, onReload,
+  panes, watching, onClose, onGoto, onReload,
 }: {
   panes: Pane[]
+  /** 状态变化的订阅连着没有。没连着时时间列必然是空的，得说清不是坏了 */
+  watching?: boolean
   onClose: () => void
   /** 跳过去（zoom=true 顺带全屏）。面板自己不等结果，交给上层 toast */
   onGoto: (id: string, zoom: boolean) => void
@@ -50,35 +96,64 @@ export function PaneSwitcher({
   const [q, setQ] = useState('')
   const [zoom, setZoom] = useState(() => localStorage.getItem(LS_ZOOM) !== '0')
   const [onlyAgent, setOnlyAgent] = useState(() => localStorage.getItem(LS_ONLY_AGENT) === '1')
+  const [sort, setSort] = useState<Sort>(() => {
+    const v = localStorage.getItem(LS_SORT)
+    return SORTS.some((s) => s.id === v) ? (v as Sort) : 'priority'
+  })
 
-  const groups = useMemo(() => {
+  // 「3m」不能是死的：面板开着不动的时候也得走。30 秒一拍够了（最小刻度就是分钟）
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30_000)
+    return () => clearInterval(t)
+  }, [])
+
+  const rows = useMemo(() => {
     const kw = q.trim().toLowerCase()
     const hit = (p: Pane) =>
       (!onlyAgent || !!p.agent) &&
-      (!kw || `${p.agent} ${p.workspace} ${p.tab} ${p.title} ${p.cwd} ${p.id}`.toLowerCase().includes(kw))
-    // 按 workspace 分组，顺序沿用 pane.list（herdr 自己的顺序，用户对它有肌肉记忆）
+      (!kw || `${p.agent} ${p.status} ${p.workspace} ${p.tab} ${p.title} ${p.cwd} ${p.id}`.toLowerCase().includes(kw))
+    const list = panes.map((p, i) => ({ p, i })).filter(({ p }) => hit(p))
+    if (sort === 'herdr') return list
+    // 排序只认 seq（state_change_seq）：它是 herdr 里的全局递增计数，「谁最近动过」
+    // 一直算得准；changed 只有 herdr-web 在盯的这段时间里才有，拿它排会把「起来之前
+    // 就没动过」的 pane 一律沉到底，那不是事实。
+    return [...list].sort((a, b) =>
+      (sort === 'priority' ? bucketOf(a.p) - bucketOf(b.p) : 0) ||
+      (b.p.seq ?? 0) - (a.p.seq ?? 0) ||
+      a.i - b.i,
+    )
+  }, [panes, q, onlyAgent, sort])
+
+  // herdr 顺序按 workspace 分组（和 herdr 里看到的一样）；另外两种是全局排序，
+  // 分组会把排序切碎，所以是一条平铺的列表，workspace 挪进每行的副行。
+  const groups = useMemo(() => {
+    if (sort !== 'herdr') return [{ ws: '', items: rows.map((r) => r.p) }]
     const out: { ws: string; items: Pane[] }[] = []
-    for (const p of panes) {
-      if (!hit(p)) continue
+    for (const { p } of rows) {
       const g = out.find((x) => x.ws === p.workspace)
       if (g) g.items.push(p)
       else out.push({ ws: p.workspace, items: [p] })
     }
     return out
-  }, [panes, q, onlyAgent])
-
-  const total = groups.reduce((n, g) => n + g.items.length, 0)
+  }, [rows, sort])
 
   const flip = (key: string, v: boolean, set: (v: boolean) => void) => {
     set(v)
     localStorage.setItem(key, v ? '1' : '0')
   }
+  const cycleSort = () => {
+    const next = SORTS[(SORTS.findIndex((s) => s.id === sort) + 1) % SORTS.length].id
+    setSort(next)
+    localStorage.setItem(LS_SORT, next)
+  }
+  const cur = SORTS.find((s) => s.id === sort)!
 
   return (
     <Panel
       title="面板一览"
       onClose={onClose}
-      // 一览是要扫的，比设置面板高一档、宽一档；手机上几乎铺满（48 个 pane 得能滚起来）
+      // 一览是要扫的，比设置面板高一档、宽一档；手机上几乎铺满（几十个 pane 得能滚起来）
       className="w-[520px] max-h-[calc(100%-24px)] max-md:inset-x-2 max-md:top-3 max-md:w-auto"
     >
       {/* 这一排粘在顶上：滚到第三个 workspace 还得能改筛选（-top-2/-mt-2/pt-2 那三个一套，
@@ -98,6 +173,14 @@ export function PaneSwitcher({
         </div>
         <Button
           size="tiny"
+          data-testid="panes-sort"
+          title={`排序：${cur.hint}（点一下换下一种）`}
+          onClick={cycleSort}
+        >
+          {cur.label}
+        </Button>
+        <Button
+          size="tiny"
           on={onlyAgent}
           title="只看跑着 agent 的 pane（claude / codex）"
           onClick={() => flip(LS_ONLY_AGENT, !onlyAgent, setOnlyAgent)}
@@ -113,12 +196,12 @@ export function PaneSwitcher({
         >
           全屏
         </Button>
-        <Button size="tiny" title="刷新列表" onClick={onReload}>
+        <Button size="tiny" title="刷新列表（状态和时间都会重新拉）" onClick={onReload}>
           <RefreshCw className="size-3" />
         </Button>
       </div>
 
-      {total === 0 && (
+      {rows.length === 0 && (
         <p className="px-1 py-6 text-center text-xs text-faint">
           {panes.length === 0 ? '拿不到 pane 列表 —— herdr server 在跑吗？' : '没有匹配的 pane'}
         </p>
@@ -126,54 +209,81 @@ export function PaneSwitcher({
 
       {groups.map((g) => (
         <section key={g.ws} className="mb-1.5">
-          <h4 className="px-1 pt-1.5 pb-1 text-[11px] font-medium tracking-wide text-faint">{g.ws}</h4>
+          {g.ws && <h4 className="px-1 pt-1.5 pb-1 text-[11px] font-medium tracking-wide text-faint">{g.ws}</h4>}
           <div className="flex flex-col gap-0.5">
-            {g.items.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                data-testid="panes-row"
-                // min-h-11：一行至少 44px，手指点得中（这一条整块都是热区，不是只有文字）
-                className={cn(
-                  'flex min-h-11 w-full cursor-pointer items-center gap-2.5 rounded-md border border-transparent',
-                  'px-2 py-1.5 text-left outline-none transition-colors duration-100',
-                  'hover:border-line hover:bg-ctl focus-visible:ring-2 focus-visible:ring-brand/35',
-                  p.focused && 'border-brand/40 bg-brand/10',
-                )}
-                onClick={() => onGoto(p.id, zoom)}
-              >
-                <span
-                  title={p.agent ? `${p.agent} · ${p.status}` : 'shell'}
-                  className={cn('size-1.5 shrink-0 rounded-full', DOT[p.status] ?? 'bg-line-hi')}
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="flex items-center gap-1.5">
-                    <span className="truncate text-[13px]">{p.tab}</span>
-                    {p.agent && (
-                      <span className="shrink-0 rounded border border-line bg-ctl px-1 py-px font-mono text-[10px] text-muted">
-                        {p.agent}
+            {g.items.map((p) => {
+              const chip = p.agent ? STATUS_CHIP[p.status] : undefined
+              const when = ago(p.changed, now)
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  data-testid="panes-row"
+                  // min-h-11：一行至少 44px，手指点得中（这一条整块都是热区，不是只有文字）
+                  className={cn(
+                    'flex min-h-11 w-full cursor-pointer items-center gap-2.5 rounded-md border border-transparent',
+                    'px-2 py-1.5 text-left outline-none transition-colors duration-100',
+                    'hover:border-line hover:bg-ctl focus-visible:ring-2 focus-visible:ring-brand/35',
+                    p.focused && 'border-brand/40 bg-brand/10',
+                  )}
+                  onClick={() => onGoto(p.id, zoom)}
+                >
+                  <span
+                    title={p.agent ? `${p.agent} · ${p.status}` : 'shell'}
+                    className={cn('size-1.5 shrink-0 rounded-full', DOT[p.status] ?? 'bg-line-hi')}
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-1.5">
+                      <span className="truncate text-[13px]">{p.tab}</span>
+                      {p.agent && (
+                        <span className="shrink-0 rounded border border-line bg-ctl px-1 py-px font-mono text-[10px] text-muted">
+                          {p.agent}
+                        </span>
+                      )}
+                      {chip && (
+                        <span className={cn('shrink-0 rounded border px-1 py-px text-[10px]', chip.cls)}>
+                          {chip.text}
+                        </span>
+                      )}
+                      {p.focused && (
+                        <span className="shrink-0 rounded border border-brand/40 bg-brand/12 px-1 py-px text-[10px] text-brand">
+                          当前
+                        </span>
+                      )}
+                      <span
+                        className="ml-auto shrink-0 font-mono text-[10px] text-faint"
+                        title={p.changed ? `上次状态变化：${new Date(p.changed).toLocaleString()}` : ''}
+                      >
+                        {when}
                       </span>
-                    )}
-                    {p.focused && (
-                      <span className="shrink-0 rounded border border-brand/40 bg-brand/12 px-1 py-px text-[10px] text-brand">
-                        当前
+                    </span>
+                    {/* agent pane 的 terminal_title 是它自己写的会话标题（「图片识别」这种），
+                        比路径认得出得多；shell pane 的标题只是 user@host:path，那还是给路径。
+                        平铺排序时没有 workspace 分组，所以 workspace 挪到这儿来 */}
+                    <span className="mt-px flex items-center gap-1.5 font-mono text-[11px] text-faint">
+                      <span className="truncate">
+                        {sort !== 'herdr' && `${p.workspace} · `}
+                        {(p.agent && p.title) || shortCwd(p.cwd) || p.id}
                       </span>
-                    )}
+                      {/* pane id 在手机上**也要出**：一个 tab 里有两个 pane 时（herdr 里分屏），
+                          两行的 tab 标签和 cwd 一模一样，id 是唯一分得开的东西（实拍见过） */}
+                      <span className="ml-auto shrink-0 text-[10px]">{p.id}</span>
+                    </span>
                   </span>
-                  {/* agent pane 的 terminal_title 是它自己写的会话标题（「图片识别」这种），
-                      比路径认得出得多；shell pane 的标题只是 user@host:path，那还是给路径 */}
-                  <span className="mt-px block truncate font-mono text-[11px] text-faint">
-                    {(p.agent && p.title) || shortCwd(p.cwd) || p.id}
-                  </span>
-                </span>
-                {/* pane id 在手机上**也要出**：一个 tab 里有两个 pane 时（herdr 里分屏），
-                    两行的 tab 标签和 cwd 一模一样，id 是唯一分得开的东西（实拍见过） */}
-                <span className="shrink-0 font-mono text-[10px] text-faint">{p.id}</span>
-              </button>
-            ))}
+                </button>
+              )
+            })}
           </div>
         </section>
       ))}
+
+      {/* 时间列空着的两种原因完全不同，别让用户以为坏了 */}
+      {watching === false && rows.length > 0 && (
+        <p className="px-1 pt-1 text-[11px] text-faint">
+          没在盯 agent 状态变化（herdr server 没在跑？），所以没有时间。排序仍然按 herdr 的
+          状态变化计数来，是准的。
+        </p>
+      )}
     </Panel>
   )
 }

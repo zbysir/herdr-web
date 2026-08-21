@@ -15,6 +15,8 @@ export interface ComposeCfg { poll: number; push: number }
 export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toast: (m: string) => void) {
   const [text, setText] = useState('')
   const [panes, setPanes] = useState<Pane[]>([])
+  // 服务端在盯 agent 状态变化没有。盯着才有「3 分钟前」那一列（herdr 不给时间戳）
+  const [watching, setWatching] = useState(false)
   const [presets, setPresets] = useState<PresetGroup[]>([])
   const [sel, setSel] = useState<string>(() => localStorage.getItem('composeTarget') || FOLLOW)
   const [info, setInfo] = useState('')
@@ -73,8 +75,9 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
 
   const loadPanes = useCallback(async (quiet = false) => {
     try {
-      const r = await api.get<{ panes: Pane[] }>('/herdr/panes')
+      const r = await api.get<{ panes: Pane[]; watching?: boolean }>('/herdr/panes')
       setPanes(r.panes ?? [])
+      setWatching(!!r.watching)
     } catch (e) {
       setPanes([])
       // socket 在跑 herdr server 的那台机器上，不一定是跑 herdr-web 的这台
@@ -316,7 +319,7 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
   }, [])
 
   return {
-    text, setText: onChangeText, panes, presets, sel, selectTarget,
+    text, setText: onChangeText, panes, watching, presets, sel, selectTarget,
     info, bad, busy, aimed,
     loadPanes, loadSoftkeyPresets, tick, pull, submit, recall, attach, upload, append, jump,
   }

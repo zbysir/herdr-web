@@ -6,7 +6,7 @@
 
 浏览器里的终端，用来跑 `herdr`。一个 Go 二进制（前端嵌在里面），手机也能用。
 
-> **语音投稿**（平板手写笔说话打字 → 投进 agent pane）是这个项目的主功能，见下面「发件箱」。设计取舍、herdr socket API 的已验证语义和踩过的坑在 [HANDOFF.md](HANDOFF.md)。
+> **语音投稿**（平板手写笔说话打字 → 投进 agent pane）是这个项目的主功能，见下面「发件箱」。三份配套文档：发件箱的设计取舍在 [OUTBOX.md](OUTBOX.md)，抽输入框那套坑在 [COMPOSER.md](COMPOSER.md)，herdr socket API 实测出来的语义在 [HERDR-API.md](HERDR-API.md)。
 
 ## 装
 
@@ -114,7 +114,7 @@ herdr 有 `events.subscribe` 推送通道，但 agent 一 working 就是刷屏�
 | **500ms（默认）** | ~300ms | ~500ms | ~800ms |
 | 1200ms | 408ms | 794ms | 818ms |
 
-地板是一次 sync 的耗时，因为 herdr 的每次调用都可能撞上一个 ~100ms 的 tick（原因见 HANDOFF 的「100ms 的坎」）。想临时试手感：URL 上加 `?poll=200&push=400`，会覆盖服务端下发的默认值。
+地板是一次 sync 的耗时，因为 herdr 的每次调用都可能撞上一个 ~100ms 的 tick（原因见 [HERDR-API.md](HERDR-API.md) 的「100ms 的坎」）。想临时试手感：URL 上加 `?poll=200&push=400`，会覆盖服务端下发的默认值。
 
 几个要知道的：
 
@@ -143,6 +143,37 @@ workspace + tab + pane（焦点连着 workspace 和 tab 一起切过去，不用
 herdr 那边一切焦点，画面自己就跟过来了；键盘那套操作一个字都没变，Mac 上照旧敲键盘。这条是
 刻意的：手机端「只接管一个 pane + 做一套图形界面管面板」的做法能做得更花，代价是**两套使用
 习惯**和第二个真相源。所以这个面板只做「去哪儿」，不做增删改。
+
+### 排序（可切换）
+
+顶上那个按钮点一下换一种，记在本地：
+
+| 排序 | 规则 |
+|---|---|
+| **优先级**（默认）| 按「还需不需要你」分档：**等你回答 > 跑完了 > 在跑 / 闲着 > 认不出**，同一档里按最近动过排 |
+| **最近** | 不分状态，纯按最近动过排 |
+| **herdr 顺序** | workspace / tab / pane 的原顺序，按 workspace 分组 —— 和你在 herdr 里看到的一样 |
+
+`在跑` 和 `闲着` 故意合成一档：两个都不需要你，谁该在前面没有客观答案，交给「刚动过」去定
+（一个刚开始跑的 agent 比一个闲了三天的更值得看一眼）。`等你` / `完成` 两档在行上额外挂一个
+小标签，别的状态只有那个点的颜色 —— 每行都塞标签就没有重点了。
+
+**排序只认 `state_change_seq`**（herdr 里的全局递增计数，每次 agent 状态变化推高一格），
+不认时间。因为 herdr 的 API 里**一个时间戳都没有**：`agent.list` 只给这个计数，事件里也不带
+时间。计数一直是对的，所以排序一直是对的。
+
+### 「3 分钟前」那一列
+
+时间是 **herdr-web 自己盯着状态变化打的**（`internal/agentwatch`：订一条
+`pane.agent_status_changed`，收到就记 `time.Now()`）。所以：
+
+- **herdr-web 刚起来时这一列是空的**，随着一次次状态变化填回来。空着是实话 —— 那个变化发生在
+  本进程起来之前，没法知道是什么时候，编一个时间比空着糟得多。
+- 不落盘。`pane_id` 在 herdr 重启之后会重新分配（这次的 `w1:p4K` 下次是别的 pane），而 herdr
+  一重启所有 agent 会话本来也都换了 —— 存下来的时间只会张冠李戴。
+- 订阅没连上（herdr server 没在跑）时，列表底下会说一句，免得空着的时间列看着像坏了。
+- 显示用 `3m` `2h` `4d` 这种紧凑写法（不到 45 秒算「刚刚」），完整时间在 title 里。手机上这一列
+  只有几十像素，「3 分钟前」四个字放不下。
 
 几个细节：
 
@@ -314,7 +345,8 @@ internal/
   herdr/              herdr socket 客户端（一次调用一条连接）
   composer/           按 agent 分派抽输入框 + testdata 里的真机抓屏
   outbox/             列目标 / 拉回 / 清空 / 投稿 / 推草稿
-  softkeys/           软键条配置 + 按键谱解析（data.go 是生成的）
+  softkeys/           软键条配置 + 按键谱解析（data.go 是从旧 JS 版生成的，不是手抄的；
+                      testdata/js-snapshot.json 存着当时的快照，测试比对前 6 组）
   uploads/            图片落盘（按魔数认类型）
   server/             HTTP 路由 + PTY/WebSocket + 静态资源
                       guard.go 是门卫（Host 白名单 / Origin / 安全响应头）
@@ -335,7 +367,7 @@ web/                  Vite + React + TS + Tailwind v4 + shadcn 风格组件
                       Pairing.tsx 是配对页（没配对时只渲染它）
                       SettingsPanel.tsx 是设置面板，软键条编辑器和设备管理是它的两页
                       QrScan.tsx 是配对页里的扫码器（BarcodeDetector + 后摄）
-reference/            最早的 Python 原型，HANDOFF 里那些「已验证」都是拿它验的
+reference/            最早的 Python 原型，那三份文档里的「已验证」都是拿它验的
 npm/herdr-web/        npm 根包 @bysir/herdr-web：一个 JS 壳，按平台找二进制
 scripts/npm-*.mjs     把 goreleaser 产物摊成 npm 包 / 按顺序发布
 install.sh            没有 node 时的装法（下载 + 强制校验 sha256）

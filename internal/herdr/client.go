@@ -13,6 +13,7 @@ package herdr
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -155,6 +156,94 @@ func (c *Client) PaneList() ([]Pane, error) {
 	var l PaneList
 	err := c.Call("pane.list", nil, &l)
 	return l.Panes, err
+}
+
+// Agent 是 agent.list 里的一项。比 pane.list 多一个 **state_change_seq**：herdr 里
+// 每次 agent 状态变化都会推高这个全局计数，用来排「谁最近动过」。API 里没有任何时间戳，
+// 这个计数是唯一一个「一直对」的排序依据（时间要自己记，见 internal/agentwatch）。
+type Agent struct {
+	PaneID      string `json:"pane_id"`
+	Agent       string `json:"agent"`
+	AgentStatus string `json:"agent_status"`
+	Seq         uint64 `json:"state_change_seq"`
+}
+
+type agentList struct {
+	Agents []Agent `json:"agents"`
+}
+
+func (c *Client) AgentList() ([]Agent, error) {
+	var l agentList
+	err := c.Call("agent.list", nil, &l)
+	return l.Agents, err
+}
+
+// Subscribe 开一条**长连**收事件。
+//
+// 不能走 Call：herdr 的订阅是**连接级**的 —— 发一个 events.subscribe 之后，事件就一直
+// 从这条连接上来，连接一关订阅就没了。所以这里握手完就把读超时**清掉**（事件可能几分钟
+// 才来一个），靠 herdr 关连接或者 ctx 结束来收工。
+//
+// on 返回 false = 收工（调用方用它表达「pane 集合变了，我要重新订阅」）。
+//
+// 注意订阅粒度：`pane.agent_status_changed` **要带 pane_id**（每个 pane 一条订阅），
+// 而全局那个 `pane.updated` 实测 20 秒来 193 条（跟着输出走），不能拿来当状态变化用。
+func (c *Client) Subscribe(ctx context.Context, subs []any, on func(kind string, data json.RawMessage) bool) error {
+	conn, err := net.DialTimeout("unix", c.Socket, c.Timeout)
+	if err != nil {
+		return fmt.Errorf("连不上 herdr socket %s: %w", c.Socket, err)
+	}
+	defer conn.Close()
+	go func() { // ctx 一结束就把连接拆了，好让底下那个 ReadBytes 立刻返回
+		<-ctx.Done()
+		_ = conn.Close()
+	}()
+
+	req, err := json.Marshal(map[string]any{
+		"id": "web-sub", "method": "events.subscribe",
+		"params": map[string]any{"subscriptions": subs},
+	})
+	if err != nil {
+		return err
+	}
+	_ = conn.SetDeadline(time.Now().Add(c.Timeout))
+	if _, err := conn.Write(append(req, '\n')); err != nil {
+		return fmt.Errorf("写 herdr socket 失败: %w", err)
+	}
+
+	r := bufio.NewReaderSize(conn, 1<<20)
+	line, err := r.ReadBytes('\n')
+	if err != nil {
+		return fmt.Errorf("订阅没有响应: %w", err)
+	}
+	var ack response
+	if err := json.Unmarshal(line, &ack); err != nil {
+		return fmt.Errorf("订阅响应不是合法 JSON: %w", err)
+	}
+	if ack.Error != nil {
+		return ack.Error
+	}
+
+	_ = conn.SetDeadline(time.Time{}) // 事件之间可以隔很久，别按超时算
+	for {
+		line, err := r.ReadBytes('\n')
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		}
+		var ev struct {
+			Event string          `json:"event"`
+			Data  json.RawMessage `json:"data"`
+		}
+		if json.Unmarshal(line, &ev) != nil || ev.Event == "" {
+			continue // 心跳 / 别的响应，不是事件
+		}
+		if !on(ev.Event, ev.Data) {
+			return nil
+		}
+	}
 }
 
 // Zoom 是 pane.zoom 的结果。

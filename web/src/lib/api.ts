@@ -123,6 +123,15 @@ export interface Pane {
   title: string
   cwd: string
   focused: boolean
+  /**
+   * seq = herdr 的 `state_change_seq`（全局递增，每次 agent 状态变化推高一格）。
+   * **排序只认它** —— herdr 的 API 里没有任何时间戳，这个计数是唯一一个一直对的依据。
+   *
+   * changed = 上次状态变化的 unix 毫秒，只有 herdr-web 在盯的这段时间里才有（0 / 缺失
+   * = 不知道）。它只管显示「3 分钟前」，不参与排序。
+   */
+  seq?: number
+  changed?: number
 }
 
 export interface PaneInfo {

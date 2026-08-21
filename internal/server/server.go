@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zbysir/herdr-web/internal/agentwatch"
 	"github.com/zbysir/herdr-web/internal/auth"
 	"github.com/zbysir/herdr-web/internal/config"
 	"github.com/zbysir/herdr-web/internal/herdr"
@@ -41,6 +42,10 @@ type Server struct {
 	TLS   bool            // 浏览器眼里是不是 https（决定 cookie 的 Secure）
 	names map[string]bool // Host 头里允许出现的域名，见 guard.go
 
+	// Agents 盯着 agent 状态变化打时间戳（面板一览的「几分钟前」）。可以为 nil：
+	// 那时候时间列空着，排序退回按 state_change_seq。
+	Agents *agentwatch.Watcher
+
 	// Version / Updates 给设置面板显示「当前版本 / 有没有新的」。
 	// 为什么也给网页端而不只给管理页：网页里就有一个终端，看到提示的人正好能就地
 	// 敲 herdr-web update —— 而管理页只有坐在机器前的人能开。
@@ -57,15 +62,20 @@ type Options struct {
 	RPID         string
 	Version      string
 	Updates      *selfupdate.Checker
+	Agents       *agentwatch.Watcher
 }
 
 func New(cfg *config.Config, web fs.FS, a *auth.Store, g *auth.Gate, opt Options) *Server {
 	c := herdr.New(cfg.Socket)
+	ob := &outbox.Outbox{C: c, SettleMS: cfg.SettleMS}
+	if opt.Agents != nil {
+		ob.Seen = opt.Agents.At
+	}
 	s := &Server{
 		Cfg:         cfg,
 		Auth:        a,
 		Gate:        g,
-		Outbox:      &outbox.Outbox{C: c, SettleMS: cfg.SettleMS},
+		Outbox:      ob,
 		Softkeys:    &softkeys.Store{Dir: cfg.Dir},
 		Uploads:     &uploads.Store{Dir: cfg.Dir},
 		Web:         web,
@@ -75,6 +85,7 @@ func New(cfg *config.Config, web fs.FS, a *auth.Store, g *auth.Gate, opt Options
 		TLS:         opt.BrowserHTTPS,
 		Version:     opt.Version,
 		Updates:     opt.Updates,
+		Agents:      opt.Agents,
 		names:       map[string]bool{"localhost": true},
 	}
 	for _, n := range opt.Hostnames {
@@ -287,7 +298,12 @@ func (s *Server) apiHerdr(w http.ResponseWriter, r *http.Request, seg []string) 
 			fail(w, 400, err)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"panes": list, "socket": s.Cfg.Socket})
+		// watching 说「状态变化的订阅这会儿连着没有」——前端拿它区分「这个 pane 还没
+		// 变过状态」和「压根没在盯」，不然空着的时间列看着像坏了。
+		writeJSON(w, 200, map[string]any{
+			"panes": list, "socket": s.Cfg.Socket,
+			"watching": s.Agents != nil && s.Agents.Live(),
+		})
 
 	// 跳到某个 pane：切焦点 + 全屏，一次调用（herdr 的 pane.zoom 按 pane_id 寻址，
 	// 跨 workspace / tab 也一起切过去）。手机上「面板一览」点一行走的就是这个口 ——

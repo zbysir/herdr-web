@@ -21,9 +21,17 @@ const Follow = "__focused"
 type Outbox struct {
 	C        *herdr.Client
 	SettleMS int
+	// Seen 给「这个 pane 上次状态变化是什么时候」（unix 毫秒，0 = 不知道）。
+	// 由 internal/agentwatch 提供，可以为 nil —— herdr 的 API 里没有任何时间戳，
+	// 时间是那边盯着事件自己打的，拿不到就当不知道，只影响显示不影响排序。
+	Seen func(paneID string) int64
 }
 
 // Target 是一个可投的 pane。
+//
+// Seq / Changed 是给「面板一览」排序用的：**Seq（state_change_seq）一直是对的**，
+// Changed（上次状态变化的 unix 毫秒）只有 herdr-web 在盯的这段时间里才有 —— 所以
+// 排序以 Seq 兜底，Changed 只管显示「3 分钟前」。
 type Target struct {
 	ID        string `json:"id"`
 	Agent     string `json:"agent"`
@@ -33,6 +41,8 @@ type Target struct {
 	Title     string `json:"title"`
 	CWD       string `json:"cwd"`
 	Focused   bool   `json:"focused"`
+	Seq       uint64 `json:"seq,omitempty"`
+	Changed   int64  `json:"changed,omitempty"`
 }
 
 // Info 是一个 pane 的可显示身份（workspace / tab 的好看标签由前端用缓存补）。
@@ -158,14 +168,27 @@ func (o *Outbox) ListTargets() ([]Target, error) {
 			tabLabel[t.TabID] = orElse(t.Label, fmt.Sprintf("t%d", t.Number))
 		}
 	}
+	// agent.list 是唯一带 state_change_seq 的口（pane.list 不带），拿不到就算了：
+	// 那时候前端的「优先级」排序退化成只按状态分档。
+	seq := map[string]uint64{}
+	if ags, err := o.C.AgentList(); err == nil {
+		for _, a := range ags {
+			seq[a.PaneID] = a.Seq
+		}
+	}
 	out := make([]Target, 0, len(panes))
 	for _, p := range panes {
-		out = append(out, Target{
+		t := Target{
 			ID: p.PaneID, Agent: p.Agent, Status: orUnknown(p.AgentStatus),
 			Workspace: orElse(wsLabel[p.WorkspaceID], p.WorkspaceID),
 			Tab:       orElse(tabLabel[p.TabID], p.TabID),
 			Title:     p.Title, CWD: p.CWD, Focused: p.Focused,
-		})
+			Seq: seq[p.PaneID],
+		}
+		if o.Seen != nil {
+			t.Changed = o.Seen(p.PaneID)
+		}
+		out = append(out, t)
 	}
 	return out, nil
 }

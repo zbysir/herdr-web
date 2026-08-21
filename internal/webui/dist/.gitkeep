@@ -1,6 +1,0 @@
-占位。`make build` 会把 web/dist 的内容拷到这个目录。
-
-这个文件**必须入库**：internal/webui/embed.go 的 `go:embed all:dist` 在目录完全为空时
-是编译错误（pattern all:dist: no matching files found），于是新 clone 出来的仓库连
-`go build ./...` 都跑不过 —— CI 和贡献者第一步就卡住。有它在，没构建前端也能编，
-启动时会提示前端产物缺失。
