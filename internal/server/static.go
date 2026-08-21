@@ -18,6 +18,8 @@ var mimeByExt = map[string]string{
 	".map":   "application/json",
 	".ico":   "image/x-icon",
 	".png":   "image/png",
+	// 少了这一条安卓不认 manifest（Chrome 只吃 application/manifest+json）
+	".webmanifest": "application/manifest+json",
 }
 
 // handleStatic 伺候前端产物。SPA：认不出的路径一律回 index.html。
@@ -31,7 +33,7 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		p = "index.html"
 	}
 
-	// 浏览器会主动探 /favicon.ico；页面里已经用 data: URI 声明过图标了，
+	// 浏览器会主动探 /favicon.ico；页面里已经用 <link rel=icon> 指到 /logo.svg 了，
 	// 这里回 204 只是别让控制台留一条 404。
 	if p == "favicon.ico" {
 		w.WriteHeader(http.StatusNoContent)

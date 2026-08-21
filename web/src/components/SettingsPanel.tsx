@@ -55,7 +55,13 @@ export function SettingsPanel({
           下划线式，不是三个填充按钮 —— 三个色块并排时「当前是哪一页」只能靠颜色深浅
           去猜，而下划线是位置信息，扫一眼就知道自己在第几页。手指要点得中的那点高度
           靠 py-2.5 撑（约 38px），不靠按钮外壳。 */}
-      <nav className="sticky top-0 z-1 -mx-4 mb-3 flex gap-5 border-b border-line bg-bar px-4">
+      {/* `-top-2 -mt-2 pt-2` 这三个是**一套**，不是凑好看的：外面那层滚动容器有 pt-2
+          （见 ui/panel），而 sticky 的定位是相对**内容盒**顶边算的 —— 只写 top-0 的话
+          分页条最高只能停在内容盒顶上，上面那 8px 的内边距就是个口子，下面的内容会从
+          分页条上方那条缝里滚过去（截图实拍）。所以：-mt-2 把它抻到滚动区真正的顶边、
+          -top-2 让 sticky 允许它停在那儿（只给 -mt-2 会被 sticky 又推回去，实测），
+          再用自己的 pt-2 把分页条的视觉位置还原。改了 panel 的 pt 就得同步改这儿。 */}
+      <nav className="sticky -top-2 z-1 -mx-4 -mt-2 mb-3 flex gap-5 border-b border-line bg-bar px-4 pt-2">
         {TABS.map((t) => (
           <button
             key={t.id}

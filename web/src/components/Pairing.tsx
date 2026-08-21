@@ -4,6 +4,7 @@ import { isCancel, loginPasskey, passkeySupported } from '@/lib/passkey'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { QrScan, qrScanSupported } from './QrScan'
+import { Logo } from './Logo'
 
 /**
  * 进门页。两种模式，长得像但含义不同：
@@ -76,6 +77,7 @@ export function Pairing({
       {/* 装进一张卡片：这一页是整个应用的门，裸铺在画布上时看着像还没加载完 */}
       <div className="w-full max-w-[420px] rounded-card border border-line bg-bar p-5
                       shadow-[0_24px_60px_-16px_rgba(0,0,0,.6)]">
+        <Logo size={40} className="mb-3" />
         <h1 className="mb-1.5 text-[17px] font-medium tracking-tight">
           {reauth ? '需要再验证一次' : '这台设备还没配对'}
         </h1>

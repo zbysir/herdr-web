@@ -14,6 +14,7 @@ import { Softkeys } from '@/components/Softkeys'
 import { Compose } from '@/components/Compose'
 import { SettingsPanel, type SettingsTab, type TermOpts } from '@/components/SettingsPanel'
 import { Pairing } from '@/components/Pairing'
+import { Logo } from '@/components/Logo'
 import { cn } from '@/lib/utils'
 
 /** Safari 的私有全屏 API。lib.dom 里没有这几个，本地补上，省得到处 as any */
@@ -204,7 +205,7 @@ export default function App() {
    * 手机上**键盘一弹起来就把顶栏收掉**，只留一条能点开的缝。
    *
    * 那一刻屏幕上只剩 ~430px 高，而顶栏（45px）里的东西那时候一个都用不上 ——
-   * 正在打字的人要的是软键条和发件箱。「连接」「敲 herdr」是连之前的事。
+   * 正在打字的人要的是软键条和发件箱，「连接」是连之前的事。
    *
    * 收起是临时的：手动点开（peek）只管这一次，键盘一收就自动恢复常态，不留状态 ——
    * 否则用户会记不住自己上次是展开还是收起的，下次打字时顶栏在不在全靠碰。
@@ -435,13 +436,12 @@ export default function App() {
           <span className="truncate text-xs text-muted tabular-nums max-phone:hidden">{status.text}</span>
         </div>
 
+        {/* 「敲 herdr」那个按钮去掉了：连上就自动敲（HERDR_WEB_ONCONNECT），退出去了要再敲
+            一次的话，软键条预设里有现成的「敲 herdr」键 —— 顶栏这个位置比它值钱。 */}
         <div className="flex shrink-0 items-center gap-1.5">
           {/* 连上之后「连接」没用了（真断了会弹遮罩，那上面有自己的连接按钮），
               手机上这 54px 让给别的 */}
           {(status.cls !== 'on' || !phone) && <Button onClick={connect}>连接</Button>}
-          <Button title="向终端写入 herdr↵" onClick={() => { sess.current?.send('herdr\r'); sess.current?.focus() }}>
-            敲 herdr
-          </Button>
         </div>
 
         <div className="flex shrink-0 items-center gap-1">
@@ -464,11 +464,14 @@ export default function App() {
         {overlay && (
           <div className="absolute inset-0 z-5 grid place-items-center bg-bg/80 p-5 backdrop-blur-sm">
             <div className="max-w-[440px] text-center">
+              <Logo size={48} className="mx-auto mb-3.5" />
               <h1 className="mb-2 text-[17px] font-medium tracking-tight">herdr in the browser</h1>
               <p className="text-[13px]/relaxed text-muted [&_code]:rounded [&_code]:border [&_code]:border-line
                             [&_code]:bg-ctl [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-xs [&_code]:text-fg"
                  dangerouslySetInnerHTML={{ __html: overlay.msg }} />
-              <Button variant="primary" className="mt-4 px-5 py-2 text-[13px]" onClick={connect}>
+              {/* 这一个是「一屏里唯一的主操作」，故意比顶栏那套大一档。高度是写死的
+                  （见 ui/button 的 size），所以给 h-10 而不是加 py */}
+              <Button variant="primary" className="mt-4 h-10 px-5 text-[13px]" onClick={connect}>
                 {overlay.btn}
               </Button>
             </div>
