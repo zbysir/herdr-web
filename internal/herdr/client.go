@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -90,7 +91,10 @@ func (c *Client) Call(method string, params any, out any) error {
 
 // Pane 是 pane.get / pane.current / pane.list 里的 pane 对象。
 type Pane struct {
-	PaneID      string `json:"pane_id"`
+	PaneID string `json:"pane_id"`
+	// TerminalID 跟着终端进程走，pane 一开一关也不会串（PaneID 是位置编号，会被重新
+	// 分配给别人）。要跨时间记东西就得认这个，见 internal/agentwatch。
+	TerminalID  string `json:"terminal_id"`
 	WorkspaceID string `json:"workspace_id"`
 	TabID       string `json:"tab_id"`
 	Focused     bool   `json:"focused"`
@@ -186,8 +190,11 @@ func (c *Client) AgentList() ([]Agent, error) {
 //
 // on 返回 false = 收工（调用方用它表达「pane 集合变了，我要重新订阅」）。
 //
-// 注意订阅粒度：`pane.agent_status_changed` **要带 pane_id**（每个 pane 一条订阅），
-// 而全局那个 `pane.updated` 实测 20 秒来 193 条（跟着输出走），不能拿来当状态变化用。
+// **事件名统一成下划线**再交出去。herdr 这里有两套拼法（实测）：全局订阅回的是
+// `pane_created` / `pane_updated`，而按 pane 订的 `pane.agent_status_changed` 回的是
+// **原样的点号订阅名**，负载形状也不一样（没有 `type` 字段，`pane_id` / `agent_status`
+// 直接摊在 data 上）。按下划线那一套写判断、再在这里归一，比让每个调用方都记得写两种强 ——
+// 这个坑真踩过：状态事件全被当成「别的事件」，时间列一条都没记上。
 func (c *Client) Subscribe(ctx context.Context, subs []any, on func(kind string, data json.RawMessage) bool) error {
 	conn, err := net.DialTimeout("unix", c.Socket, c.Timeout)
 	if err != nil {
@@ -240,7 +247,7 @@ func (c *Client) Subscribe(ctx context.Context, subs []any, on func(kind string,
 		if json.Unmarshal(line, &ev) != nil || ev.Event == "" {
 			continue // 心跳 / 别的响应，不是事件
 		}
-		if !on(ev.Event, ev.Data) {
+		if !on(strings.ReplaceAll(ev.Event, ".", "_"), ev.Data) {
 			return nil
 		}
 	}

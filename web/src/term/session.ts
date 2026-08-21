@@ -15,6 +15,7 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
+import { writeClipboard } from '@/lib/clipboard'
 import { ptyURL } from '@/lib/api'
 
 /**
@@ -49,6 +50,11 @@ export interface SessionCallbacks {
   onOverlay: (msg: string | null, btn?: string) => void
   onHeal: (n: number) => void
   onKeyboardChange: (up: boolean) => void
+  /**
+   * 剪贴板写不进去（手机上没有用户手势那一档，见 lib/clipboard.ts）。
+   * 文本交回 UI，让它出一个「点一下复制」—— 那一下点击本身就是手势。
+   */
+  onCopyBlocked: (text: string) => void
 }
 
 // 程序请求过的私有模式 → 人话 + 我们是否真支持
@@ -121,7 +127,15 @@ export class Session {
     this.term.loadAddon(new WebLinksAddon((_e, uri) => openLink(uri)))
     this.term.loadAddon(new Unicode11Addon())
     this.term.unicode.activeVersion = '11'
-    this.term.loadAddon(new ClipboardAddon()) // OSC 52
+    // OSC 52（终端里的程序自己写剪贴板 —— herdr 的 COPY 模式按 `y` 走的就是这条）。
+    // **必须换成自己的 provider**：默认那个直接调 navigator.clipboard，手机上没有用户
+    // 手势就是一个没人接的 rejected promise，复制静默失败。走 this.copy 才有兜底。
+    this.term.loadAddon(
+      new ClipboardAddon(undefined, {
+        readText: () => navigator.clipboard?.readText?.().catch(() => '') ?? Promise.resolve(''),
+        writeText: (_sel: string, text: string) => void this.copy(text),
+      }),
+    )
     this.term.open(host)
     try {
       // preserveDrawingBuffer：合成完别把绘制缓冲丢掉，不然改尺寸前读不出画面（见 freeze()）
@@ -142,7 +156,7 @@ export class Session {
       this.ws.send(buf)
     })
     this.term.onSelectionChange(() => {
-      if (this.opts.copyOnSelect && this.term.hasSelection()) this.copy(this.term.getSelection())
+      if (this.opts.copyOnSelect && this.term.hasSelection()) void this.copy(this.term.getSelection())
     })
 
     host.addEventListener('contextmenu', (e) => e.preventDefault())
@@ -325,7 +339,7 @@ export class Session {
       if (isMac && e.metaKey) {
         const k = e.key.toLowerCase()
         if (k === 'c' && this.term.hasSelection()) {
-          this.copy(this.term.getSelection())
+          void this.copy(this.term.getSelection())
           e.preventDefault()
           return false
         }
@@ -337,7 +351,7 @@ export class Session {
         return true // ⌘V 及其它 ⌘ 组合留给浏览器
       }
       if (!isMac && e.ctrlKey && e.shiftKey && e.code === 'KeyC' && this.term.hasSelection()) {
-        this.copy(this.term.getSelection())
+        void this.copy(this.term.getSelection())
         e.preventDefault()
         return false
       }
@@ -385,20 +399,18 @@ export class Session {
     this.setSticky(which, !this.sticky[which])
   }
 
-  copy(text: string) {
+  /**
+   * 复制到系统剪贴板。三个入口都走这里：⌘C / Ctrl+Shift+C、「选中即复制」、
+   * OSC 52（herdr 的 COPY 模式）。
+   *
+   * **写不进去时一定要说话。** 手机上真正会走到这儿的两条路（COPY 模式、选中即复制）
+   * 都不是点击，浏览器于是不给写剪贴板；以前这里 catch 完就完了，表现是「选区好好的、
+   * 什么都没发生、剪贴板里还是上一次的东西」。现在把文本交给 UI 出一个「点一下复制」。
+   */
+  async copy(text: string) {
     if (!text) return
-    ;(navigator.clipboard?.writeText(text) ?? Promise.reject()).catch(() => {
-      // http 的局域网地址不是安全上下文，navigator.clipboard 不可用，退回老办法
-      const ta = document.createElement('textarea')
-      ta.value = text
-      ta.style.position = 'fixed'
-      ta.style.opacity = '0'
-      document.body.appendChild(ta)
-      ta.select()
-      document.execCommand('copy')
-      ta.remove()
-      this.term.focus()
-    })
+    if (await writeClipboard(text)) return
+    this.cb.onCopyBlocked(text)
   }
 
   /* ------------------------------------------------------------- 键盘显隐 */
@@ -678,6 +690,19 @@ export class Session {
       this.relayout()
     }
     return v
+  }
+
+  /**
+   * 把一段文本当成「粘贴」送进终端。
+   *
+   * 走 `term.paste` 而不是自己 `send()`：它会按 pane 当前的**括号粘贴模式**（DEC 2004）
+   * 编码，agent 那边才知道这是一整段粘贴而不是一个字一个字敲的 —— 差别是多行文本会不会
+   * 被当成「每行一次回车」。
+   *
+   * 不顺手 focus 终端：手机上那一下会把系统键盘顶出来，而粘完多半是要看一眼再决定。
+   */
+  paste(text: string) {
+    if (text) this.term.paste(text)
   }
 
   focus() {

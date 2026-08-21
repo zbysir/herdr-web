@@ -170,6 +170,16 @@ func (s *Server) handlePTY(w http.ResponseWriter, r *http.Request) {
 	write := ws.write
 	sendJSON := ws.json
 
+	// `?session=` 是地址栏里那一段（`https://host/work` → `work`）：连上之后敲的是
+	// `herdr --session work`，没有这个 session 就新建一个。名字不合法**不能静默退回
+	// 默认 session** —— 那样人以为自己在 work 里，其实在默认那个 herdr 上乱敲。
+	// 这时候连接已经升级完了，所以用 fatal 帧说话（前端会弹遮罩显示这句）。
+	session, err := sessionOf(r)
+	if err != nil {
+		sendJSON(map[string]any{"t": "fatal", "msg": err.Error()})
+		return
+	}
+
 	cols, rows := atoiDef(q.Get("cols"), 120), atoiDef(q.Get("rows"), 34)
 	label := filepath.Base(s.Cfg.Shell)
 
@@ -189,8 +199,12 @@ func (s *Server) handlePTY(w http.ResponseWriter, r *http.Request) {
 	defer livePTY.Add(-1)
 
 	sid := atomic.AddInt64(&seq, 1)
-	log.Printf("[herdr-web] #%d 打开 %s (pid %d, %dx%d) —— %s", sid, label, cmd.Process.Pid, cols, rows, id.Label)
-	sendJSON(map[string]any{"t": "ready", "label": label, "pid": cmd.Process.Pid, "mode": "local"})
+	where := "默认 session"
+	if session != "" {
+		where = "session " + session
+	}
+	log.Printf("[herdr-web] #%d 打开 %s (pid %d, %dx%d, %s) —— %s", sid, label, cmd.Process.Pid, cols, rows, where, id.Label)
+	sendJSON(map[string]any{"t": "ready", "label": label, "pid": cmd.Process.Pid, "mode": "local", "session": session})
 
 	done := make(chan struct{})
 	firstOut := make(chan struct{})
@@ -214,7 +228,7 @@ func (s *Server) handlePTY(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	autoType(f, s.Cfg.OnConnect, s.Cfg.OnConnectMS, s.Cfg.DebugInput, firstOut, done)
+	autoType(f, onConnectLine(s.Cfg.OnConnect, session), s.Cfg.OnConnectMS, s.Cfg.DebugInput, firstOut, done)
 
 	ping := time.NewTicker(25 * time.Second)
 	defer ping.Stop()

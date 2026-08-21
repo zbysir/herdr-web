@@ -21,6 +21,8 @@
 //	{act: "kbd"}        显示 / 收起系统键盘
 //	{act: "img"}        传图（相机 / 相册 / 剪贴板）
 //	{act: "panes"}      面板一览（点一行跳过去 + 全屏）
+//	{act: "clip"}       把机器上的剪贴板取到手机剪贴板（herdr 复制的东西在那儿）
+//	{act: "paste"}      把手机剪贴板粘进终端
 //
 // 另外每个按键可以打上 {confirm: true}：第一下只是「举起来」，第二下才真发出去。
 // 给关 pane / 关标签 / 断开这种误触代价很大的键用。
@@ -59,6 +61,9 @@ const MaxRows = 2
 const MaxBar = 40
 
 // Key 是一个按键的定义。Spec/Send 只在 send 形态下有值。
+// acts 是 act 的白名单。前端拿到不认识的 act 只能画一个点了没反应的键，所以这里挡住。
+var acts = map[string]bool{"kbd": true, "img": true, "panes": true, "clip": true, "paste": true}
+
 type Key struct {
 	ID      string `json:"id,omitempty"` // 稳定标识，软键条按这个引用（存盘时补齐）
 	Label   string `json:"label"`
@@ -67,7 +72,7 @@ type Key struct {
 	Send    string `json:"send,omitempty"`    // 解析出来的字节（下发给前端）
 	Spec    string `json:"spec,omitempty"`    // 用户写的按键谱（回显到编辑器）
 	Sticky  string `json:"sticky,omitempty"`  // ctrl | alt
-	Act     string `json:"act,omitempty"`     // kbd | img | panes（网页端自己处理，不发字节）
+	Act     string `json:"act,omitempty"`     // kbd | img | panes | clip | paste（网页端自己处理，不发字节）
 }
 
 // stored 是落盘的形状：只存用户写的东西，不存解析结果。
@@ -243,8 +248,11 @@ func normalize(k Key, i int) (Key, error) {
 	case k.Act != "":
 		// act 是「网页端自己处理」的动作，不发任何字节。这里只认白名单里的几个：
 		// 前端拿到不认识的 act 就只能画一个点了没反应的键。
-		if k.Act != "kbd" && k.Act != "img" && k.Act != "panes" {
-			return Key{}, fmt.Errorf("%s 的 act 目前只支持 kbd（键盘）/ img（传图）/ panes（面板一览）", at)
+		// clip / paste 是剪贴板那两条：**两个方向各要一次点击**，因为浏览器只在用户手势里
+		// 给读写剪贴板（见 web/src/lib/clipboard.ts）。
+		if !acts[k.Act] {
+			return Key{}, fmt.Errorf("%s 的 act 目前只支持 kbd（键盘）/ img（传图）/ panes（面板一览）"+
+				"/ clip（取机器剪贴板）/ paste（粘手机剪贴板）", at)
 		}
 		out.Act = k.Act
 	default:

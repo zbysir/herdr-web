@@ -5,6 +5,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -12,10 +13,12 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/zbysir/herdr-web/internal/agentwatch"
 	"github.com/zbysir/herdr-web/internal/auth"
+	"github.com/zbysir/herdr-web/internal/clip"
 	"github.com/zbysir/herdr-web/internal/config"
 	"github.com/zbysir/herdr-web/internal/herdr"
 	"github.com/zbysir/herdr-web/internal/outbox"
@@ -46,6 +49,16 @@ type Server struct {
 	// 那时候时间列空着，排序退回按 state_change_seq。
 	Agents *agentwatch.Watcher
 
+	// Ctx 决定后台那些 goroutine（按 session 起的状态订阅）活多久。nil = Background。
+	Ctx context.Context
+
+	// 按 session 分派的那一套：一个 URL 一个 herdr session，每个 session 有自己的
+	// socket，所以发件箱和状态订阅都得分开（见 session.go 的包内注释）。
+	// def 是默认 session（`/`）那一份，直接用上面的 Outbox / Agents。
+	mu   sync.Mutex
+	sess map[string]*live
+	def  *live
+
 	// Version / Updates 给设置面板显示「当前版本 / 有没有新的」。
 	// 为什么也给网页端而不只给管理页：网页里就有一个终端，看到提示的人正好能就地
 	// 敲 herdr-web update —— 而管理页只有坐在机器前的人能开。
@@ -55,6 +68,7 @@ type Server struct {
 
 // Options 是 main 那边算出来的东西：证书里有哪些域名、浏览器看到的是不是 https。
 type Options struct {
+	Ctx          context.Context
 	BrowserHTTPS bool
 	Hostnames    []string
 	Passkeys     *auth.Passkeys
@@ -86,8 +100,11 @@ func New(cfg *config.Config, web fs.FS, a *auth.Store, g *auth.Gate, opt Options
 		Version:     opt.Version,
 		Updates:     opt.Updates,
 		Agents:      opt.Agents,
+		Ctx:         opt.Ctx,
 		names:       map[string]bool{"localhost": true},
+		sess:        map[string]*live{},
 	}
+	s.def = &live{socket: cfg.Socket, outbox: ob, agents: opt.Agents}
 	for _, n := range opt.Hostnames {
 		if n = strings.ToLower(strings.TrimSpace(n)); n != "" {
 			s.names[n] = true
@@ -192,6 +209,8 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 		s.apiState(w, r)
 	case "softkeys":
 		s.apiSoftkeys(w, r)
+	case "clip":
+		s.apiClip(w, r)
 	case "herdr":
 		s.apiHerdr(w, r, seg)
 	default:
@@ -202,13 +221,21 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiState(w http.ResponseWriter, r *http.Request) {
 	host, _ := os.Hostname()
 	user := os.Getenv("USER")
+	// session 名不合法就直接说，别在这儿静默退回默认 session —— 前端拿这个响应
+	// 确认「我这个页面对着的是哪个 herdr」，给错的话后面每一条投稿都投错地方。
+	name, err := sessionOf(r)
+	if err != nil {
+		fail(w, 400, err)
+		return
+	}
 	writeJSON(w, 200, map[string]any{
 		"shell":         baseName(s.Cfg.Shell),
 		"user":          user,
 		"hostname":      host,
 		"secureContext": s.TLS || s.Cfg.Loopback,
 		"compose":       map[string]int{"pollMs": s.Cfg.PollMS, "pushMs": s.Cfg.PushMS, "settleMs": s.Cfg.SettleMS},
-		"herdrSocket":   s.Cfg.Socket,
+		"session":       name, // 空 = 默认 session
+		"herdrSocket":   s.Cfg.SessionSocket(name),
 		"version":       s.versionInfo(),
 	})
 }
@@ -240,6 +267,27 @@ func baseName(p string) string {
 		return p[i+1:]
 	}
 	return p
+}
+
+// apiClip 把**这台机器**的剪贴板交给浏览器。
+//
+// 为什么需要它：herdr 的复制（选中即复制 / COPY 模式）落在跑 herdr 那台机器的剪贴板上，
+// 浏览器一无所知 —— 实测手机上拖选一段，herdr 报「copied 84 chars」，那 84 个字进的是
+// Mac 的剪贴板，手机上哪儿都粘不出来。所以手机上要拿到它，只能由这一侧读出来。
+//
+// 只有读，没有写：写这一侧的剪贴板暂时没有用处（手机剪贴板里的东西要进终端，浏览器直接
+// 发给 PTY 就行，不用绕这台机器一圈）。
+func (s *Server) apiClip(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		fail(w, 405, errf("方法不对"))
+		return
+	}
+	text, err := clip.Read()
+	if err != nil {
+		fail(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"text": text, "bytes": len(text)})
 }
 
 func (s *Server) apiSoftkeys(w http.ResponseWriter, r *http.Request) {
@@ -285,15 +333,28 @@ func (s *Server) apiSoftkeys(w http.ResponseWriter, r *http.Request) {
 // target 省略或传 "__focused" = 投给此刻在 herdr 里激活的那个 pane。
 // socket 在**跑 herdr server 的那台机器**上；现在只连本机（或 HERDR_WEB_SOCKET
 // 指到的路径）。
+//
+// `?session=` 决定连哪个 socket：命名 session 有自己的一个（见 session.go）。
+// 解析不了就报错**不退回默认 session** —— 投错 herdr 是完全静默的。
 func (s *Server) apiHerdr(w http.ResponseWriter, r *http.Request, seg []string) {
 	if len(seg) < 2 {
 		fail(w, 404, errf("没有这个接口"))
 		return
 	}
 	q := r.URL.Query()
+	name, err := sessionOf(r)
+	if err != nil {
+		fail(w, 400, err)
+		return
+	}
+	sess, err := s.live(name)
+	if err != nil {
+		fail(w, 400, err)
+		return
+	}
 	switch {
 	case seg[1] == "panes" && r.Method == http.MethodGet:
-		list, err := s.Outbox.ListTargets()
+		list, err := sess.outbox.ListTargets()
 		if err != nil {
 			fail(w, 400, err)
 			return
@@ -301,8 +362,8 @@ func (s *Server) apiHerdr(w http.ResponseWriter, r *http.Request, seg []string) 
 		// watching 说「状态变化的订阅这会儿连着没有」——前端拿它区分「这个 pane 还没
 		// 变过状态」和「压根没在盯」，不然空着的时间列看着像坏了。
 		writeJSON(w, 200, map[string]any{
-			"panes": list, "socket": s.Cfg.Socket,
-			"watching": s.Agents != nil && s.Agents.Live(),
+			"panes": list, "socket": sess.socket, "session": sess.name,
+			"watching": sess.watching(),
 		})
 
 	// 跳到某个 pane：切焦点 + 全屏，一次调用（herdr 的 pane.zoom 按 pane_id 寻址，
@@ -317,16 +378,16 @@ func (s *Server) apiHerdr(w http.ResponseWriter, r *http.Request, seg []string) 
 			fail(w, 400, err)
 			return
 		}
-		out, err := s.Outbox.Goto(b.Target, b.Zoom == nil || *b.Zoom)
+		out, err := sess.outbox.Goto(b.Target, b.Zoom == nil || *b.Zoom)
 		respond(w, out, err)
 
 	case seg[1] == "pull" && r.Method == http.MethodGet:
-		out, err := s.Outbox.Pull(q.Get("target"), q.Get("mode"))
+		out, err := sess.outbox.Pull(q.Get("target"), q.Get("mode"))
 		respond(w, out, err)
 
 	// 自动拉回的轮询口：一次给「焦点在哪」+「那个输入框里是什么」
 	case seg[1] == "sync" && r.Method == http.MethodGet:
-		out, err := s.Outbox.Pull(q.Get("target"), "")
+		out, err := sess.outbox.Pull(q.Get("target"), "")
 		respond(w, out, err)
 
 	case seg[1] == "say" && r.Method == http.MethodPost:
@@ -335,7 +396,7 @@ func (s *Server) apiHerdr(w http.ResponseWriter, r *http.Request, seg []string) 
 			fail(w, 400, err)
 			return
 		}
-		out, err := s.Outbox.Say(b.Target, b.Text)
+		out, err := sess.outbox.Say(b.Target, b.Text)
 		respond(w, out, err)
 
 	// 双向同步的本地→远端那半边：写进远端输入框但不回车
@@ -345,7 +406,7 @@ func (s *Server) apiHerdr(w http.ResponseWriter, r *http.Request, seg []string) 
 			fail(w, 400, err)
 			return
 		}
-		out, err := s.Outbox.Draft(b.Target, b.Text)
+		out, err := sess.outbox.Draft(b.Target, b.Text)
 		respond(w, out, err)
 
 	// 图片落盘，返回绝对路径 —— 前端把路径插进提示词，agent 自己去读文件

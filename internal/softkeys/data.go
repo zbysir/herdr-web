@@ -125,6 +125,12 @@ func Presets() []PresetGroup {
 			{Label: "🖼 传图", Wide: true, Act: "img"},
 			{Label: "⌨ 键盘", Act: "kbd"},
 			{Label: "▦ 面板", Wide: true, Act: "panes"},
+			// 剪贴板两条**必须是两个键**：手机浏览器只在用户手势里给读 / 写剪贴板，
+			// 所以「取」和「粘」各要用户自己点一下，没法合成一个「同步」。
+			// 「取」拿的是跑 herdr 那台机器的剪贴板 —— herdr 的复制落在那儿（实测），
+			// 不取过来手机上哪儿都粘不出来。
+			{Label: "📋 取", Wide: true, Act: "clip"},
+			{Label: "📥 粘", Wide: true, Act: "paste"},
 		}},
 	}
 }

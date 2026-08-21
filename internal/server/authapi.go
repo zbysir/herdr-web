@@ -3,8 +3,10 @@ package server
 import (
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/zbysir/herdr-web/internal/auth"
+	"github.com/zbysir/herdr-web/internal/config"
 )
 
 // handleRoot 在静态资源前面截两种「URL 里带着秘密」的进入方式，换成 cookie 之后
@@ -65,6 +67,9 @@ func (s *Server) enter(w http.ResponseWriter, r *http.Request, code, legacy stri
 
 // clean 跳到「去掉 pair/token、其余查询参数原样保留」的 URL。
 // 保留是有意的：?poll= / ?push= 那两个调试参数还得能用。
+//
+// 路径也要保留：`/{session}` 是「开这个 herdr session」，扫码进来的链接是
+// `https://host/work?pair=CODE`，洗成 `/` 的话人配完对就落在默认 session 上了。
 func (s *Server) clean(w http.ResponseWriter, r *http.Request, kv ...string) {
 	q := r.URL.Query()
 	q.Del("pair")
@@ -72,9 +77,24 @@ func (s *Server) clean(w http.ResponseWriter, r *http.Request, kv ...string) {
 	for i := 0; i+1 < len(kv); i += 2 {
 		q.Set(kv[i], kv[i+1])
 	}
-	u := url.URL{Path: "/", RawQuery: q.Encode()}
+	u := url.URL{Path: sessionPath(r.URL.Path), RawQuery: q.Encode()}
 	w.Header().Set("cache-control", "no-store")
 	http.Redirect(w, r, u.String(), http.StatusFound)
+}
+
+// sessionPath 把请求路径收成「/」或者「/{合法的 session 名}」。
+//
+// **不能把 r.URL.Path 原样回填进 Location**：`GET //evil.com` 这种请求的路径是
+// `//evil.com`，回填出来是个协议相对的 URL，浏览器会当外站跳过去 —— 一个开放重定向。
+// 走白名单就没有这类问题。
+func sessionPath(p string) string {
+	// 只收「一段」：`//evil.com` 去掉两边的斜杠之后是个看着合法的名字（`evil.com`），
+	// 所以判断要在**斜杠还在**的时候做。
+	seg := strings.TrimRight(p, "/")
+	if strings.HasPrefix(seg, "/") && config.ValidSessionName(seg[1:]) {
+		return seg
+	}
+	return "/"
 }
 
 // apiAuth 是唯一一组**不要求已认证**的接口 —— 配对页自己得能加载和提交。

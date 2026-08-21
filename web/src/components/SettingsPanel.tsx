@@ -131,7 +131,10 @@ function TermSection({
 
       {row('kitty', 'kitty 键盘协议（Ctrl+Shift+x / Ctrl+数字 / Ctrl+Enter）')}
       {row('meta', 'Option 当作 Meta（alt+1、alt+g 这类快捷键）')}
-      {row('copyOnSelect', '选中即复制')}
+      {/* 说清「鼠标」：触屏上单指手势被终端那层接管了，压根没有选区 —— 手机上开这个不起
+          作用，而它看着正是手机上想要的那个功能（真实误会过）。手机上复制走 herdr 的
+          COPY 模式，见 README 的「手机上怎么复制」。 */}
+      {row('copyOnSelect', '选中即复制（鼠标选中时；触屏上没有选区）')}
       {row('sync2026', '同步输出 DEC 2026（防画面撕裂；留一块空白画不上来时关它）')}
 
       {heals > 0 && (
@@ -149,6 +152,9 @@ function TermSection({
         <dl className="m-0 mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
           <dt className="text-faint">后端</dt>
           <dd className="m-0 truncate text-muted">{state.user}@{state.hostname} · {state.shell}</dd>
+          {/* 哪个 herdr session（地址栏里 /{name} 那一段），下面那个 socket 就是它的 */}
+          <dt className="text-faint">session</dt>
+          <dd className="m-0 truncate text-muted">{state.session || '默认'}</dd>
           <dt className="text-faint">socket</dt>
           <dd className="m-0 truncate font-mono text-muted">{state.herdrSocket}</dd>
           {state.version && (

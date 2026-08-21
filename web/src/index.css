@@ -38,6 +38,10 @@
 
   --color-ok: #3ecf8e;
   --color-bad: #e5484d;
+  /* warn 是「正在跑」那一档的黄：和 herdr 自己 agents 栏里那个黄点一致。
+     不能拿 brand 绿去表示「在跑」—— 绿在这套界面里已经是「当前 / 打开着」的意思，
+     一行里同时出现绿点和绿色的「当前」标签，谁是谁根本分不出来（实拍翻车过）。 */
+  --color-warn: #e0a33e;
 
   /* accent 是旧名字（原来那个亮蓝）。留成 brand 的别名而不是删掉：这仓库同时有别的
      人在改前端，谁手上还留着 bg-accent 也不会突然变成「什么样式都没有」。新代码写 brand。 */
@@ -75,6 +79,8 @@
   --color-brand-fg: #ffffff;
   --color-ok: #12915f;
   --color-bad: #d02b31;
+  /* 亮底上 #e0a33e 太浅（对比度不够），压深两档 */
+  --color-warn: #a2680a;
 }
 
 /* 高度跟着 visualViewport 走：iOS 的虚拟键盘从不缩布局视口，Android 也要

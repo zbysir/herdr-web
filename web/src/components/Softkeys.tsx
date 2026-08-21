@@ -30,7 +30,7 @@ const CONFIRM_MS = 3000
  * 键挨得这么近，关 pane / 关标签这种误触一下就没了，而 herdr 那边没有撤销。
  */
 export function Softkeys({
-  bar, sticky, kbdUp, onSend, onSticky, onKeyboard, onImage, onPanes,
+  bar, sticky, kbdUp, onSend, onSticky, onKeyboard, onImage, onPanes, onClip, onPaste,
 }: {
   /** 每行的按键（已按 id 解析好）。一到两行 */
   bar: SoftKey[][]
@@ -43,6 +43,15 @@ export function Softkeys({
   onImage: () => void
   /** act:panes 的键：开「面板一览」。手机上键盘一弹起来顶栏就收掉了，那时候只有这条路 */
   onPanes: () => void
+  /**
+   * act:clip：把**跑 herdr 那台机器**的剪贴板取到手机剪贴板（herdr 的复制落在那儿）。
+   * act:paste：把手机剪贴板粘进终端。
+   *
+   * 这两个只能是「用户点的键」——浏览器只在用户手势里给读写剪贴板，定时器或者事件里
+   * 偷偷做一律被拒（而且是静默的）。
+   */
+  onClip: () => void
+  onPaste: () => void
 }) {
   const phone = usePhone()
 
@@ -104,6 +113,8 @@ export function Softkeys({
                   if (k.act === 'kbd') onKeyboard()
                   else if (k.act === 'img') onImage()
                   else if (k.act === 'panes') onPanes()
+                  else if (k.act === 'clip') onClip()
+                  else if (k.act === 'paste') onPaste()
                   else if (k.sticky) onSticky(k.sticky)
                   else if (k.send) onSend(k.send)
                 }}

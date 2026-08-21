@@ -11,10 +11,37 @@
 // 302 掉），以及 `make dev` 时前端跑在 vite 上、进不了服务端那条 302。
 const TOKEN = new URLSearchParams(location.search).get('token') ?? ''
 
+/**
+ * 地址栏里的 herdr session：`https://host/work` → `work`，`https://host/` → `''`（默认）。
+ *
+ * 页面就是靠这一段决定「我对着哪个 herdr」：终端里敲的是 `herdr --session work`，
+ * 而**命名 session 有自己的 socket**，所以发件箱、面板一览这些请求也必须带上它 ——
+ * 不带就会拿默认 session 的 pane 列表去投一个 work 里的 agent，投进另一个 herdr 而
+ * 屏幕上一切正常（服务端那边也有一道判断，见 internal/server/session.go）。
+ *
+ * 这里的字符集要和 Go 那边的 config.ValidSessionName 对齐；这一份只是别把明显不合法的
+ * 东西发过去，**真正的判据在服务端**（拿它拼命令行和 socket 路径的是那一侧）。
+ */
+export const SESSION = (() => {
+  let seg = location.pathname.split('/')[1] ?? ''
+  try {
+    seg = decodeURIComponent(seg) // 坏的 %xx 会抛，那种路径本来也不是合法名字
+  } catch {
+    return ''
+  }
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/.test(seg) && !seg.includes('..') ? seg : ''
+})()
+
+// session 挂在**每个** /api 请求上，不是只挂发件箱那几个：漏一个的表现是「这一个口
+// 悄悄读了默认 session」，而漏没漏只能一个调用点一个调用点去看。用不上的口（softkeys、
+// auth）服务端直接忽略这个参数。
 function url(path: string) {
-  if (!TOKEN) return `/api${path}`
-  const sep = path.includes('?') ? '&' : '?'
-  return `/api${path}${sep}token=${encodeURIComponent(TOKEN)}`
+  const extra = new URLSearchParams()
+  if (TOKEN) extra.set('token', TOKEN)
+  if (SESSION) extra.set('session', SESSION)
+  const q = extra.toString()
+  if (!q) return `/api${path}`
+  return `/api${path}${path.includes('?') ? '&' : '?'}${q}`
 }
 
 // 跨站请求设不了自定义头（会触发 preflight，而服务端压根不答 preflight），
@@ -72,6 +99,7 @@ export const api = {
 export function ptyURL(cols: number, rows: number) {
   const q = new URLSearchParams({ cols: String(cols), rows: String(rows) })
   if (TOKEN) q.set('token', TOKEN)
+  if (SESSION) q.set('session', SESSION) // 服务端据此敲 `herdr --session <name>`
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
   return `${proto}://${location.host}/pty?${q}`
 }
@@ -108,6 +136,8 @@ export interface State {
   hostname: string
   secureContext: boolean
   compose: { pollMs: number; pushMs: number; settleMs: number }
+  /** 服务端解析出来的 session 名（空 = 默认 session）。herdrSocket 是**这个 session 的**。 */
+  session?: string
   herdrSocket: string
   /** 版本信息。outdated 为真时才有 latest / how —— 后端只在有新版本时才带这两个，
       前端不用自己比版本号（比法在 Go 那边，只有一份）。 */
@@ -150,6 +180,8 @@ export interface SyncResult extends PaneInfo { text?: string; noBox?: boolean }
 export interface SayResult extends PaneInfo { chars: number; lines: number; cleared: { rounds: number; empty: boolean | null } }
 export interface DraftResult extends PaneInfo { pushed?: number; skipped?: 'not-agent' | 'busy' | 'no-box' }
 export interface UploadResult { path: string; name: string; bytes: number; kind: string; dir: string }
+/** GET /api/clip：跑 herdr 那台机器的剪贴板（herdr 的复制落在那儿，不是浏览器里）。 */
+export interface ClipResult { text: string; bytes: number }
 
 /**
  * 「跳到某个 pane」的结果。
@@ -168,7 +200,12 @@ export interface SoftKey {
   send?: string    // 解析出来的字节（前端照发）
   spec?: string    // 用户写的按键谱（编辑器回显）
   sticky?: 'ctrl' | 'alt'
-  act?: 'kbd' | 'img' | 'panes' // 网页端自己处理，不发字节
+  /**
+   * 网页端自己处理的动作，不发字节。剪贴板那两个是**两个键**：手机浏览器只在用户手势里
+   * 给读 / 写剪贴板，所以「取」（机器剪贴板 → 手机）和「粘」（手机剪贴板 → 终端）各要
+   * 用户自己点一下，合不成一个「同步」。
+   */
+  act?: 'kbd' | 'img' | 'panes' | 'clip' | 'paste'
 }
 export interface PresetGroup { group: string; items: SoftKey[] }
 /**

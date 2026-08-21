@@ -28,24 +28,24 @@ const LS_ZOOM = 'panesZoom'
 const LS_ONLY_AGENT = 'panesOnlyAgent'
 const LS_SORT = 'panesSort'
 
-type Sort = 'priority' | 'recent' | 'herdr'
+type Sort = 'priority' | 'group'
 
 const SORTS: { id: Sort; label: string; hint: string }[] = [
-  { id: 'priority', label: '优先级', hint: '要你看的在前（等你 > 完成 > 在跑/闲着），同档按最近动过' },
-  { id: 'recent', label: '最近', hint: '纯按最近动过排，不分状态' },
-  { id: 'herdr', label: 'herdr 顺序', hint: '按 workspace / tab / pane 的原顺序分组，和 herdr 里看到的一样' },
+  { id: 'priority', label: '优先级', hint: '要你看的在前（等你 > 完成 > 在跑 > 闲着），同档按最近动过' },
+  { id: 'group', label: '分组', hint: '按 workspace 分组，组里是 tab / pane 的原顺序 —— 和你在 herdr 里看到的一样' },
 ]
 
 /**
- * 优先级分档：按「还需不需要你」。这是需求方定的规则 —— **需要人看的 > 完成的**，
- * 同一档里按最近动过排。
+ * 优先级分档：**等你 > 完成 > 在跑 > 闲着 > 非 agent**，同一档里按最近动过排。
  *
- * `working` 和 `idle` 故意合成一档：两个都不需要你，谁该在前面没有客观答案，交给
- * 「刚动过」去定（一个刚开始跑的 agent 比一个闲了三天的更值得看一眼）。
+ * 前两档是需求方定的（需要人看的 > 完成的）。「在跑」单独一档也是他定的 —— 一开始
+ * 我把「在跑」和「闲着」合成一档，理由是两个都不需要你、谁在前面没有客观答案；实际用起来
+ * 不对：黄点那个（正在跑）会被十几个闲着的埋掉，而列表里最想一眼看到的就是它。
+ *
  * 非 agent pane（shell）永远最后 —— 那儿没有状态可言。
  */
-const BUCKET: Record<string, number> = { blocked: 0, done: 1, working: 2, idle: 2 }
-const bucketOf = (p: Pane) => (p.agent ? (BUCKET[p.status] ?? 3) : 4)
+const BUCKET: Record<string, number> = { blocked: 0, done: 1, working: 2, idle: 3 }
+const bucketOf = (p: Pane) => (p.agent ? (BUCKET[p.status] ?? 4) : 5)
 
 /** 只给最该被看见的两个状态加字：其余靠那个点的颜色，别把每行都塞满标签 */
 const STATUS_CHIP: Record<string, { text: string; cls: string }> = {
@@ -53,15 +53,30 @@ const STATUS_CHIP: Record<string, { text: string; cls: string }> = {
   done: { text: '完成', cls: 'border-brand/40 bg-brand/12 text-brand' },
 }
 
+/**
+ * 状态点的颜色：**红 = 等你，绿 = 跑完了，黄 = 在跑**，闲着是灰点。
+ *
+ * 「在跑」用黄不用绿 —— 和 herdr 自己 agents 栏里那个黄点一致。绿留给「跑完了」（这是
+ * 通用约定，一眼就知道是好事）。只有闲着没有颜色：一列点里要是全是彩的，就没有重点了。
+ */
 const DOT: Record<string, string> = {
-  working: 'bg-brand',
+  working: 'bg-warn',
   blocked: 'bg-bad',
+  done: 'bg-ok',
   idle: 'bg-muted',
-  done: 'bg-muted',
 }
 
 /** 长路径显示成 ~/…：一行里 cwd 是最认得出 pane 的东西，但绝对路径太占宽度 */
 const shortCwd = (p: string) => p.replace(/^\/(?:Users|home)\/[^/]+/, '~')
+
+/**
+ * 去掉标题前面那个状态字形。Claude Code 会在终端标题前挂一个转圈的符号（`✳ 图片识别`、
+ * `◐ Herdr session URL 路由`），herdr 的 `terminal_title_stripped` 只剥掉了一部分
+ * （实拍见过 ◐ 留在里面）。这一行左边已经有一个状态点了，再挂一个抖动的字形只是噪音。
+ *
+ * 只吃「符号 + 空白」这种开头，所以 `~/subhub`（符号后面没空格）不会被误伤。
+ */
+const cleanTitle = (t: string) => t.replace(/^[^\p{L}\p{N}\s]+\s+/u, '')
 
 /**
  * 「上次动过」多久了。给的是 unix 毫秒，0 / 缺失就返回空字符串 —— **空着比编一个时间好**
@@ -114,21 +129,21 @@ export function PaneSwitcher({
       (!onlyAgent || !!p.agent) &&
       (!kw || `${p.agent} ${p.status} ${p.workspace} ${p.tab} ${p.title} ${p.cwd} ${p.id}`.toLowerCase().includes(kw))
     const list = panes.map((p, i) => ({ p, i })).filter(({ p }) => hit(p))
-    if (sort === 'herdr') return list
-    // 排序只认 seq（state_change_seq）：它是 herdr 里的全局递增计数，「谁最近动过」
+    if (sort === 'group') return list
+    // 同一档里认 seq（state_change_seq）：它是 herdr 里的全局递增计数，「谁最近动过」
     // 一直算得准；changed 只有 herdr-web 在盯的这段时间里才有，拿它排会把「起来之前
     // 就没动过」的 pane 一律沉到底，那不是事实。
     return [...list].sort((a, b) =>
-      (sort === 'priority' ? bucketOf(a.p) - bucketOf(b.p) : 0) ||
+      bucketOf(a.p) - bucketOf(b.p) ||
       (b.p.seq ?? 0) - (a.p.seq ?? 0) ||
       a.i - b.i,
     )
   }, [panes, q, onlyAgent, sort])
 
-  // herdr 顺序按 workspace 分组（和 herdr 里看到的一样）；另外两种是全局排序，
-  // 分组会把排序切碎，所以是一条平铺的列表，workspace 挪进每行的副行。
+  // 「分组」按 workspace 分组（和 herdr 里看到的一样）；优先级是全局排序，
+  // 分组会把它切碎，所以那边是一条平铺的列表，workspace 挪进每行的副行。
   const groups = useMemo(() => {
-    if (sort !== 'herdr') return [{ ws: '', items: rows.map((r) => r.p) }]
+    if (sort !== 'group') return [{ ws: '', items: rows.map((r) => r.p) }]
     const out: { ws: string; items: Pane[] }[] = []
     for (const { p } of rows) {
       const g = out.find((x) => x.ws === p.workspace)
@@ -262,8 +277,8 @@ export function PaneSwitcher({
                         平铺排序时没有 workspace 分组，所以 workspace 挪到这儿来 */}
                     <span className="mt-px flex items-center gap-1.5 font-mono text-[11px] text-faint">
                       <span className="truncate">
-                        {sort !== 'herdr' && `${p.workspace} · `}
-                        {(p.agent && p.title) || shortCwd(p.cwd) || p.id}
+                        {sort !== 'group' && `${p.workspace} · `}
+                        {(p.agent && cleanTitle(p.title)) || shortCwd(p.cwd) || p.id}
                       </span>
                       {/* pane id 在手机上**也要出**：一个 tab 里有两个 pane 时（herdr 里分屏），
                           两行的 tab 标签和 cwd 一模一样，id 是唯一分得开的东西（实拍见过） */}
@@ -278,12 +293,19 @@ export function PaneSwitcher({
       ))}
 
       {/* 时间列空着的两种原因完全不同，别让用户以为坏了 */}
-      {watching === false && rows.length > 0 && (
-        <p className="px-1 pt-1 text-[11px] text-faint">
-          没在盯 agent 状态变化（herdr server 没在跑？），所以没有时间。排序仍然按 herdr 的
-          状态变化计数来，是准的。
-        </p>
-      )}
+      {rows.length > 0 && (watching === false
+        ? (
+          <p className="px-1 pt-1 text-[11px] text-faint">
+            没在盯 agent 状态变化（herdr server 没在跑？），所以没有时间。排序仍然按 herdr 的
+            状态变化计数来，是准的。
+          </p>
+        )
+        : rows.some(({ p }) => p.agent && !p.changed) && (
+          <p className="px-1 pt-1 text-[11px] text-faint">
+            没时间的那几个：herdr 的 API 不给时间戳，时间是 herdr-web 盯着状态变化自己记的 ——
+            起来之后还没变过状态的就先空着，变一次就有了（记下来的会存着，重启不丢）。
+          </p>
+        ))}
     </Panel>
   )
 }

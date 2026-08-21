@@ -126,7 +126,7 @@ func TestResolveValidation(t *testing.T) {
 // act 是「网页端自己处理」的动作，只认白名单 —— 打错了要当场报错，
 // 而不是下发一个点了没反应的键
 func TestActWhitelist(t *testing.T) {
-	for _, act := range []string{"kbd", "img", "panes"} {
+	for _, act := range []string{"kbd", "img", "panes", "clip", "paste"} {
 		got, err := Resolve([]Key{{Label: "x", Act: act}})
 		if err != nil {
 			t.Fatalf("act:%s 应当被接受: %v", act, err)

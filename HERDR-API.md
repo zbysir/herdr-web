@@ -63,14 +63,18 @@ w(d["schemas"]["request"]); print(len(out))'
 
 | 事实 | 怎么验的 |
 |---|---|
-| **`pane.agent_status_changed` 的订阅必须带 `pane_id`** | 不带直接报 `missing field pane_id`。所以是「每个 agent pane 一条订阅」，pane 集合一变就得重订 |
-| 全局的 `pane.updated` 不用带 pane_id，但**不能拿来当状态变化用** | 实测 **20 秒 193 条**（跟着输出走） |
-| **订阅一建立，herdr 会补发一个旧的 `pane_created`** | 每次都是同一个 pane、`revision: 0` |
+| **`pane.agent_status_changed` 会漏，别用它盯状态** | 它必须带 `pane_id`（不带直接报 `missing field pane_id`），于是要给每个 agent pane 订一条、pane 集合一变还得整条连接重订 —— 换来的却是漏事件：同一个五分钟里 `pane.updated` 那条流看到 3 次状态变化，它只来了 1 条（快速来回的 working↔idle 大概被防抖吞了）|
+| **盯状态要用全局 `pane.updated`** | 每条都带完整 pane 对象（`terminal_id` / `agent_status` 都在），不用带 pane_id、不用重订。量大（一个 agent 在跑时实测 20 秒 193 条，跟着输出走）但每条只是几百字节，解析可忽略 —— 这就是 herdr 自己界面用的那条流。`internal/agentwatch` 走的是这条 |
+| **事件名有两套拼法** | 全局订阅回的是**下划线**（`pane_created` / `pane_updated`），按 pane 订的 `pane.agent_status_changed` 回的是**原样的点号订阅名**，负载形状也不一样（没有 `type` 字段，`pane_id` / `agent_status` 直接摊在 `data` 上）。踩过：按下划线写判断，于是每条真的状态变化都掉进「别的事件」那条分支，时间列一条都没记上，而假 socket 的测试用下划线发、还是绿的。现在 `herdr.Subscribe` 把事件名统一成下划线再交出去，测试也改成两种都发 |
+| **订阅一建立，herdr 会补发一个旧的 `pane_created`** | 每次都是同一个 pane、`revision: 0`。原来「收到全局事件就重订阅」，于是每 800ms 重连一次、永远在重连（`Live()` 采样几乎全是 false）。换成只听 `pane.updated` 之后这条自然消失了：别的事件一律忽略、连接一直挂着 |
 
-最后那条坑得最深：原来的逻辑是「收到全局事件就重订阅」，于是补发的事件触发重订、重订又收到补发
-—— 每 800ms 重连一次、永远在重连（`Live()` 采样几乎全是 false）。现在两道防：收到全局事件先**另开
-一条连接**核对 agent pane 集合真的变了没有；状态事件**只有和上次记的不一样才算变化**。第二道尤其
-重要 —— 把补发的事件当变化，会把所有 pane 的「上次动过」刷成「刚刚」，那是**编时间**。
+上面那几条是一路踩出来的，顺序值得记一下：先按「看着最对口」的 `pane.agent_status_changed` 写，
+被**事件名的两套拼法**坑了一轮（一条都没记上，而假 socket 的测试是绿的）；改对名字之后又发现
+**它本身会漏**（五分钟 3 次变化只来 1 条）；最后换成全局 `pane.updated`，顺带把「补发的
+`pane_created` 触发重订、重订又收到补发」那个 800ms 无限重连也一起消掉了。
+
+留下来的那道防仍然要紧：**只有状态和上次记的不一样才算一次变化**。把补发的、重复的事件当变化，
+会把所有 pane 的「上次动过」刷成「刚刚」—— 那是**编时间**，比空着糟得多。
 
 ## pane.zoom：跳到某个 pane
 
@@ -114,6 +118,18 @@ connect 后等 150ms 再 send -> 209ms      # 又量化到 100 的倍数
 要真正拿到亚毫秒，客户端得在 connect 的同一个系统调用序列里把请求写出去 —— Go 的
 `net.DialTimeout` + 立刻 `Write` 也未必赢得了这个竞争（赢不了就只是慢一跳，不影响正确性）。真到了
 嫌慢那一步，方向是**减少每拍的调用数**，不是调 sleep。
+
+## 命名 session 各有一个 socket
+
+| 事实 | 怎么验的 |
+|---|---|
+| **`herdr --session <name>` 是另一个 server，另一个 socket** | `herdr session list --json` 给每个 session 的 `socket_path`：默认是 `~/.config/herdr/herdr.sock`，命名的是 `~/.config/herdr/sessions/<name>/herdr.sock` |
+| 从浏览器新建一个 session 是通的 | 网页开 `/{name}` → PTY 里敲 `herdr --session <name>` → `session list` 里那个 session `running`，`pane.list` 只有它自己那一个 pane（默认 session 那边同时是 49 个） |
+| socket 路径**从默认 socket 的目录推**，别写死文件名 | `config.SessionSocket()`：`<dir(HERDR_WEB_SOCKET)>/sessions/<name>/<base(HERDR_WEB_SOCKET)>`；`HERDR_WEB_SOCKET` 自己就指在某个 `sessions/<x>/` 里时要先退回上层，否则拼出 `sessions/x/sessions/y/` |
+
+**socket 选错是完全静默的**：拿默认 session 的 socket 去投一个命名 session 里的 pane，
+`agent.prompt` 照样成功，只是进了另一个 herdr。所以 herdr-web 那边每个请求都带 `?session=`，
+解析不了就报错而**不退回默认 session**（`internal/server/session.go`）。
 
 ## socket 在哪台机器上
 

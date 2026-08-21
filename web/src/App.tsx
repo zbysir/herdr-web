@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Keyboard, Pencil, CircleHalf, Gear, AArrowDown, AArrowUp, Maximize, Minimize, Panes } from './icons'
-import { api, resolveBar, UNAUTHED, type SoftKey, type SoftkeysResponse, type State, type UnauthedDetail, type WhoAmI } from '@/lib/api'
+import { api, resolveBar, SESSION, UNAUTHED, type ClipResult, type SoftKey, type SoftkeysResponse, type State, type UnauthedDetail, type WhoAmI } from '@/lib/api'
+import { readClipboard, writeClipboard } from '@/lib/clipboard'
 import { Session } from '@/term/session'
 import { initialScheme, type Scheme } from '@/term/themes'
 import { useViewportHeight } from '@/hooks/useViewportHeight'
@@ -15,6 +16,8 @@ import { Compose } from '@/components/Compose'
 import { SettingsPanel, type SettingsTab, type TermOpts } from '@/components/SettingsPanel'
 import { PaneSwitcher } from '@/components/PaneSwitcher'
 import { Pairing } from '@/components/Pairing'
+import { CopyPrompt } from '@/components/CopyPrompt'
+import { PastePrompt } from '@/components/PastePrompt'
 import { Logo } from '@/components/Logo'
 import { cn } from '@/lib/utils'
 
@@ -57,7 +60,11 @@ export default function App() {
 
   const [status, setStatus] = useState<{ text: string; cls: 'on' | 'err' | '' }>({ text: '未连接', cls: '' })
   const [overlay, setOverlay] = useState<{ msg: string; btn: string } | null>({
-    msg: '点「连接」开一个本机登录 shell，然后敲 <code>herdr</code>。',
+    // 地址栏里点名了 session 就把那条命令写全 —— 这一屏是「这个页面会干什么」的唯一说明。
+    // SESSION 已经过白名单（只有字母数字和 ._-），拼进 innerHTML 是安全的。
+    msg: SESSION
+      ? `点「连接」开一个本机登录 shell，然后敲 <code>herdr --session ${SESSION}</code>。`
+      : '点「连接」开一个本机登录 shell，然后敲 <code>herdr</code>。',
     btn: '连接',
   })
   // 'checking' → 'ok' | 'pair'。后端没起时故意当成 ok：那时候该让终端那边的诊断
@@ -95,6 +102,13 @@ export default function App() {
   const kbRoom = useKeyboardUp()
   const [peek, setPeek] = useState(false)
 
+  // 剪贴板写不进去时手里那段文字（手机上没有用户手势那一档，见 lib/clipboard.ts）。
+  // null = 没有待复制的东西。
+  const [pendingCopy, setPendingCopy] = useState<string | null>(null)
+
+  // 「长按这儿粘贴」开着没有：手机剪贴板读不到时的那条路
+  const [pasteOpen, setPasteOpen] = useState(false)
+
   const [toastMsg, setToastMsg] = useState<string | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const toast = useCallback((m: string) => {
@@ -122,6 +136,7 @@ export default function App() {
         onOverlay: (msg, btn) => setOverlay(msg === null ? null : { msg, btn: btn ?? '连接' }),
         onHeal: setHeals,
         onKeyboardChange: setKbdUp,
+        onCopyBlocked: setPendingCopy,
       },
       scheme,
       fontSize,
@@ -362,6 +377,51 @@ export default function App() {
   }
 
   /**
+   * 「取」：把**跑 herdr 那台机器**的剪贴板搬到手机剪贴板。
+   *
+   * herdr 的复制（选中即复制 / COPY 模式）落在它自己那台机器的剪贴板上，浏览器一无所知
+   * —— 实测手机上拖选一段，herdr 报「copied 84 chars to clipboard」，那 84 个字进的是
+   * Mac 的剪贴板，手机上哪儿都粘不出来。所以要多这一下：读过来，再写进手机剪贴板。
+   *
+   * **必须是用户点出来的**：写剪贴板要用户手势。写不进去就退到「点一下复制」那条
+   * （CopyPrompt）—— 那上面的点击又是一次新的手势。
+   */
+  const pullClip = async () => {
+    let r: ClipResult
+    try {
+      r = await api.get<ClipResult>('/clip')
+    } catch (e) {
+      toast('取不到机器上的剪贴板：' + (e as Error).message)
+      return
+    }
+    if (!r.text) {
+      toast('那台机器的剪贴板是空的')
+      return
+    }
+    if (await writeClipboard(r.text)) toast(`已进手机剪贴板 · ${[...r.text].length} 字`)
+    else setPendingCopy(r.text)
+  }
+
+  /**
+   * 「粘」：手机剪贴板 → 终端（按括号粘贴送，见 Session.paste）。
+   *
+   * 读不到就摊一个框让人长按粘（PastePrompt）—— 长按菜单是浏览器自己的，永远通。
+   */
+  const pastePhone = async () => {
+    const text = await readClipboard()
+    if (text === null) {
+      setPasteOpen(true)
+      return
+    }
+    if (!text) {
+      toast('手机剪贴板是空的')
+      return
+    }
+    sess.current?.paste(text)
+    toast(`已粘进终端 · ${[...text].length} 字`)
+  }
+
+  /**
    * 开「面板一览」。顺手刷一次列表 —— agent 状态和 pane 的增删随时在变，
    * 而这个面板多半是隔了好一会儿才再打开一次。
    */
@@ -465,6 +525,17 @@ export default function App() {
             )}
           />
           <span className="truncate text-xs text-muted tabular-nums max-phone:hidden">{status.text}</span>
+          {/* 哪个 herdr session。手机上状态文字会收掉，这个标签留着 —— 「我这会儿在哪个
+              session」比「120×34」重要得多：命名 session 是**另一个 herdr**，pane 列表
+              和投稿目标全是另一套。 */}
+          {SESSION && (
+            <span
+              title={`herdr session：${SESSION}（地址栏里那一段。默认 session 在 /）`}
+              className="max-w-32 shrink-0 truncate rounded border border-line bg-ctl px-1.5 py-px font-mono text-[11px] text-muted"
+            >
+              {SESSION}
+            </span>
+          )}
         </div>
 
         {/* 「敲 herdr」那个按钮去掉了：连上就自动敲（HERDR_WEB_ONCONNECT），退出去了要再敲
@@ -535,6 +606,19 @@ export default function App() {
             onScheme={() => setScheme(scheme === 'dark' ? 'light' : 'dark')}
           />
         )}
+        {pasteOpen && (
+          <PastePrompt
+            onSend={(t) => { sess.current?.paste(t); toast(`已粘进终端 · ${[...t].length} 字`) }}
+            onClose={() => setPasteOpen(false)}
+          />
+        )}
+        {pendingCopy !== null && (
+          <CopyPrompt
+            text={pendingCopy}
+            onCopied={() => { setPendingCopy(null); toast('已复制') }}
+            onClose={() => setPendingCopy(null)}
+          />
+        )}
         <Toast msg={toastMsg} />
       </main>
 
@@ -553,6 +637,8 @@ export default function App() {
               onKeyboard={() => sess.current?.toggleKeyboard()}
               onImage={() => picker.current?.click()}
               onPanes={openPanes}
+              onClip={() => void pullClip()}
+              onPaste={() => void pastePhone()}
             />
           ) : null}
         >

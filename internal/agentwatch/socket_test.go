@@ -42,7 +42,7 @@ func TestWatchRecordsStatusEvent(t *testing.T) {
 		}
 	}()
 
-	w := New(sock)
+	w := New(sock, filepath.Join(dir, "seen.json"))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	w.Start(ctx)
@@ -81,14 +81,18 @@ func serve(conn net.Conn) {
 	switch req.Method {
 	case "pane.list":
 		_, _ = conn.Write([]byte(`{"id":"` + req.ID + `","result":{"panes":[` +
-			`{"pane_id":"w1:pA","agent":"claude","agent_status":"idle"},` +
-			`{"pane_id":"w1:pS","agent_status":"unknown"}]}}` + "\n"))
+			`{"pane_id":"w1:pA","terminal_id":"term_A","agent":"claude","agent_status":"idle"},` +
+			`{"pane_id":"w1:pS","terminal_id":"term_S","agent_status":"unknown"}]}}` + "\n"))
 	case "events.subscribe":
 		_, _ = conn.Write([]byte(`{"id":"` + req.ID + `","result":{"type":"subscription_started"}}` + "\n"))
-		// 先补发一个旧事件（真 herdr 就是这么干的），再给一个真的状态变化：
-		// 前者不该被当成变化，后者要记时间。
-		_, _ = conn.Write([]byte(`{"event":"pane_agent_status_changed","data":{"type":"pane_agent_status_changed","pane_id":"w1:pA","workspace_id":"w1","agent_status":"idle"}}` + "\n"))
-		_, _ = conn.Write([]byte(`{"event":"pane_agent_status_changed","data":{"type":"pane_agent_status_changed","pane_id":"w1:pA","workspace_id":"w1","agent_status":"blocked"}}` + "\n"))
+		// 先补发一个旧的 pane_created（真 herdr 每次订阅都会来这么一条），再推两条
+		// pane.updated：状态没变的那条不该记时间，变了的那条要记。
+		//
+		// 注意事件名故意用点号：真机上按 pane 订的那条回的就是点号形式，而全局的是
+		// 下划线 —— 客户端会统一成下划线，两种都得能吃下。
+		_, _ = conn.Write([]byte(`{"event":"pane_created","data":{"type":"pane_created","pane":{"pane_id":"w1:pS","terminal_id":"term_S"}}}` + "\n"))
+		_, _ = conn.Write([]byte(`{"event":"pane.updated","data":{"pane":{"pane_id":"w1:pA","terminal_id":"term_A","agent":"claude","agent_status":"idle"}}}` + "\n"))
+		_, _ = conn.Write([]byte(`{"event":"pane_updated","data":{"pane":{"pane_id":"w1:pA","terminal_id":"term_A","agent":"claude","agent_status":"blocked"}}}` + "\n"))
 		// 订阅是长连，别主动关：关了 watcher 会当成断线去重连
 		time.Sleep(5 * time.Second)
 	}
