@@ -14,12 +14,27 @@ all: build
 ## build —— 出一个自带前端的二进制
 build: web go
 
+# GITKEEP 是 internal/webui/dist/.gitkeep 的内容，写在这儿而不是靠 git 取：
+# make web 里那个 rm -rf 会删掉它，而它是**入库**的文件 —— 少了它，新 clone 出来的
+# 仓库里 dist/ 是空目录，go:embed all:dist 在空目录上直接是编译错误
+# （pattern all:dist: no matching files found），CI 和贡献者第一步就卡住。
+# 不用 `git show HEAD:...` 是因为那在「刚提交完删除」和「没有 .git 的源码包」里都取不到。
+define GITKEEP
+占位。`make build` 会把 web/dist 的内容拷到这个目录。
+
+这个文件必须入库：internal/webui/embed.go 的 `go:embed all:dist` 在目录完全为空时是
+编译错误，于是新 clone 出来的仓库连 `go build ./...` 都跑不过。有它在，没构建前端也能编，
+启动时会提示前端产物缺失。
+endef
+export GITKEEP
+
 web:
 	npm --prefix web ci --silent 2>/dev/null || npm --prefix web install --silent
 	npm --prefix web run build
 	rm -rf $(WEBDIST)
 	mkdir -p $(WEBDIST)
 	cp -R web/dist/. $(WEBDIST)/
+	@printf '%s\n' "$$GITKEEP" > $(WEBDIST)/.gitkeep
 
 # 版本号：本机构建从 git 取一个描述性的值。**发版不走这里**（走 goreleaser，
 # 它注入的是 tag）—— 这里只是为了让 `herdr-web version` 在开发时也有意义。
@@ -87,4 +102,4 @@ clean:
 	rm -rf web/dist $(WEBDIST) dist
 	rm -rf npm/herdr-web-*  npm/herdr-web/README.md
 	mkdir -p $(WEBDIST)
-	@echo "占位：make build 会把 web/dist 拷到这里" > $(WEBDIST)/.gitkeep
+	@printf '%s\n' "$$GITKEEP" > $(WEBDIST)/.gitkeep
