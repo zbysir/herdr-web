@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Keyboard, Pencil, CircleHalf, Gear, AArrowDown, AArrowUp, Maximize, Minimize, Panes, Files } from './icons'
-import { api, filesApi, resolveBar, SESSION, UNAUTHED, type ClipResult, type FileStat, type Notice, type SoftKey, type SoftkeysResponse, type State, type UnauthedDetail, type WhoAmI } from '@/lib/api'
+import { Maximize, Minimize } from './icons'
+import { api, filesApi, resolveBar, SESSION, UNAUTHED, type ClipResult, type FileStat, type Notice, type SoftKey, type SoftkeysResponse, type State, type TopbarResponse, type UnauthedDetail, type WhoAmI } from '@/lib/api'
 import { readClipboard, writeClipboard } from '@/lib/clipboard'
 import { Session } from '@/term/session'
 import { initialScheme, type Scheme } from '@/term/themes'
@@ -17,6 +17,7 @@ import { Softkeys } from '@/components/Softkeys'
 import { Compose } from '@/components/Compose'
 import { SettingsPanel, type SettingsTab, type TermOpts } from '@/components/SettingsPanel'
 import { PaneSwitcher, paneZoomPref } from '@/components/PaneSwitcher'
+import { TOPBAR_BY_ID, TOPBAR_DEFAULT, type TopbarId } from '@/components/topbarItems'
 import { AUTO_MS_DEFAULT, Notices } from '@/components/Notices'
 import { FilesPanel } from '@/components/FilesPanel'
 import { FileViewer } from '@/components/FileViewer'
@@ -44,6 +45,16 @@ const blurInput = () => {
   if (!(el instanceof HTMLElement)) return
   if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable) el.blur()
 }
+
+/**
+ * 这台机器有实体指针吗（鼠标 / 触控板）。
+ *
+ * 「要不要顺手把焦点还给终端」得按这个判，**不能按屏幕宽度**：原来用的是 `phone`
+ * （< 440px），可平板和横屏的手机都比 440 宽 —— 那些机器上 focus 终端就等于把系统输入法
+ * 顶出来。用户本来把键盘收着，换个 pane、点一下字号，键盘自己冒出来，这是错的（用户报的）。
+ * 有鼠标的机器上聚焦是白送的方便，没有代价。
+ */
+const finePointer = () => !matchMedia('(pointer: coarse)').matches
 
 const lsBool = (k: string, def: boolean) => {
   const v = localStorage.getItem(k)
@@ -140,6 +151,14 @@ export default function App() {
   const [noticeOS, setNoticeOS] = useState(() => lsBool('noticeOS', false))
   /** 系统通知：**人正看着这一页时也弹**。默认关（那时候右上角那张卡已经在说了） */
   const [noticeOSFg, setNoticeOSFg] = useState(() => lsBool('noticeOSFg', false))
+  /**
+   * 呼出键盘就自动全屏（**收起键盘不退出**）。默认关。
+   *
+   * 手机上打字那一下最缺高度：键盘吃掉半屏，地址栏和工具条又占一截，剩下的终端只有
+   * 三五行。全屏能把后者要回来。**收键盘不退出**是刻意的 —— 每打一次字闪进闪出一次
+   * 全屏，比不全屏还难受；退出全屏用顶栏那个按钮，一次的事。
+   */
+  const [kbdFull, setKbdFull] = useState(() => lsBool('kbdFull', false))
   /** 「跑完了」那种卡片挂多久（ms）；0 = 一直挂着。「等你回答」的永远挂着，不受这个管 */
   const [noticeMs, setNoticeMs] = useState(
     () => Number(localStorage.getItem('noticeCardMs') ?? AUTO_MS_DEFAULT) || 0,
@@ -147,6 +166,14 @@ export default function App() {
   // 软键条每行的按键（已按 id 解析好）。几行、哪个键在哪一行都是服务端存的配置，
   // 编辑器存完把整份配置回传过来
   const [bar, setBar] = useState<SoftKey[][]>([])
+  /**
+   * 顶栏上那排图标：**放哪几个、什么顺序**也是服务端存的配置（`topbar.json`，见
+   * internal/topbar），在设置 →「顶栏」页里拖。这里存的就是那一串 id。
+   *
+   * 初值用前端那份出厂顺序，别先渲染一条空栏 —— 请求回来之前那一两拍顶栏是空的话，
+   * 看着就像坏了（而且「设置」那个入口也不在，连改都没法改）。
+   */
+  const [topbar, setTopbar] = useState<TopbarId[]>(TOPBAR_DEFAULT)
   const [cfg, setCfg] = useState({ poll: urlNum('poll') ?? 500, push: urlNum('push') ?? 700 })
   const [state, setState] = useState<State | null>(null)
 
@@ -456,6 +483,11 @@ export default function App() {
         const sk = await api.get<SoftkeysResponse>('/softkeys')
         setBar(resolveBar(sk.lib, sk.bar))
       } catch { /* 软键条拿不到就先空着，面板里还能改 */ }
+      try {
+        const tb = await api.get<TopbarResponse>('/topbar')
+        // 认不出的 id 直接跳过（服务端不该给，防一手 —— 新版本存的配置在旧前端上读到过）
+        setTopbar(tb.items.filter((id): id is TopbarId => TOPBAR_BY_ID.has(id as TopbarId)))
+      } catch { /* 拿不到就用出厂顺序，顶栏不能空 */ }
       void compose.loadPanes(true)
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -514,6 +546,8 @@ export default function App() {
   // iOS Safari 只认 webkit 前缀那套（iPhone 上更是压根没有），所以两套都试，
   // 都没有就直说 —— 按钮点了没反应比没有这个按钮更糟。
   const [full, setFull] = useState(false)
+  // 全屏失败只吵一次：键盘那条路每弹一次键盘就会试一次
+  const fullWarned = useRef(false)
   useEffect(() => {
     const d = document as FsDoc
     const sync = () => {
@@ -528,21 +562,54 @@ export default function App() {
     }
   }, [relayout])
 
-  const toggleFull = () => {
+  /**
+   * 进全屏。已经在全屏里就什么都不做。
+   *
+   * quiet：键盘那条路会**反复**走到这儿（每弹一次键盘一次），失败提示只说一次就够了 ——
+   * 每弹一次键盘吐一条 toast 比不全屏烦得多。但也不能一声不吭：静默失败正是「点了没反应」
+   * 那类查不出来的毛病。
+   */
+  const enterFull = (quiet = false) => {
     const d = document as FsDoc
     const el = document.documentElement as FsEl
+    if (d.fullscreenElement ?? d.webkitFullscreenElement) return
+    const say = (m: string) => {
+      if (quiet && fullWarned.current) return
+      fullWarned.current = true
+      toast(m)
+    }
+    const req = el.requestFullscreen ?? el.webkitRequestFullscreen
+    if (!req) {
+      say('这个浏览器不给网页全屏。iPad / iPhone 上把页面「添加到主屏幕」，从主屏打开就没有地址栏了')
+      return
+    }
+    // 用户手势之外调用、或者被策略挡住都会 reject，别让它变成一个没人看见的报错
+    void Promise.resolve(req.call(el)).catch((e: unknown) => say('全屏失败：' + (e as Error).message))
+  }
+
+  const toggleFull = () => {
+    const d = document as FsDoc
     if (d.fullscreenElement ?? d.webkitFullscreenElement) {
       void (d.exitFullscreen?.() ?? d.webkitExitFullscreen?.())
       return
     }
-    const req = el.requestFullscreen ?? el.webkitRequestFullscreen
-    if (!req) {
-      toast('这个浏览器不给网页全屏。iPad / iPhone 上把页面「添加到主屏幕」，从主屏打开就没有地址栏了')
-      return
-    }
-    // 用户手势之外调用、或者被策略挡住都会 reject，别让它变成一个没人看见的报错
-    void Promise.resolve(req.call(el)).catch((e: unknown) => toast('全屏失败：' + (e as Error).message))
+    enterFull()
   }
+
+  /*
+   * 键盘一弹起来就进全屏（开了那个开关才算数）。
+   *
+   * **收起键盘不退出** —— 见 kbdFull 那条注释。
+   *
+   * 靠得住的前提是**浏览器还认得出这是用户手势**：键盘是你点输入框点出来的，而
+   * requestFullscreen 只在手势的有效期内（Chrome 约 5 秒）给过。键盘 300ms 就上来了，
+   * 所以这一下通常在窗口内；真被拒了会 toast 一次，不会闷着。
+   */
+  useEffect(() => {
+    if (kbdFull && kbRoom) enterFull(true)
+    // enterFull 只读 ref 和 document，不必进依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kbdFull, kbRoom])
 
   /* --------------------------------------------------------- 顶栏动作 */
   const connect = () => {
@@ -557,11 +624,22 @@ export default function App() {
     }
     sess.current?.connect()
   }
+  /**
+   * 顺手把焦点还给终端 —— 但**只在不会改变键盘开合的时候**。
+   *
+   * 两种情况可以聚：键盘本来就开着（焦点在终端上，那就把它还回去），或者这机器有鼠标
+   * （聚焦不会弹出任何东西）。触屏上键盘收着的时候一律不聚 —— 聚一下就是把输入法顶出来。
+   *
+   * 「键盘本来开着没有」认的是**终端那个隐藏输入框**：焦点在发件箱里时这里是 false，
+   * 那也正好 —— 不该把人正在口述的那个框的焦点抢过来。
+   */
+  const refocusTerm = () => { if (kbdUp || finePointer()) sess.current?.focus() }
+
   const bumpFont = (d: number) => {
     const n = sess.current?.setFontSize(fontSize + d) ?? fontSize
     setFontSize(n)
     localStorage.setItem('fontSize', String(n))
-    sess.current?.focus()
+    refocusTerm()
   }
   const toggleCompose = (v: boolean) => {
     setShowCompose(v)
@@ -641,6 +719,13 @@ export default function App() {
    * 收掉（焦点一走 `--vvh` 一变，面板跟着重排），于是「第一下不跳、第二下才跳」（真机实拍）。
    * 列表里那一行自己也补了一道（收工在 pointerup 上，见 PaneSwitcher），两条一起才稳。
    */
+  /**
+   * 面板一览开着时那一拍自动刷新用的。**必须是稳定的**（useCallback）：面板里那个
+   * interval 的依赖就是它，每次渲染换一个新函数的话 interval 每次都被重建，永远等不到 4 秒。
+   * 静默（quiet=true）—— 失败不弹 toast，见 PaneSwitcher 里那段。
+   */
+  const reloadPanes = useCallback(() => void compose.loadPanes(true), [compose.loadPanes])
+
   const openPanes = () => {
     blurInput()
     setPanesOpen(true)
@@ -655,19 +740,80 @@ export default function App() {
   /**
    * 跳到某个 pane。
    *
-   * 跳完不 focus 终端：手机上那一下会把系统键盘顶出来，而刚跳过去多半是要**看**，
-   * 不是要打字。宽屏上没这个代价，顺手聚上，接着敲就行。
+   * 跳完**不改键盘的开合**（见 refocusTerm）：刚跳过去多半是要看，不是要打字，而本来收着的
+   * 键盘被跳转顶出来最烦 —— 那时候屏幕只剩一半，还得先把它收掉才能看清跳到哪儿了。
    */
   const gotoPane = async (id: string, zoom: boolean) => {
     setPanesOpen(false)
     const r = await compose.jump(id, zoom)
     if (!r) return
-    if (!phone) sess.current?.focus()
+    refocusTerm()
+    // **herdr 回的是它自己认的焦点 pane**（`focused_pane_id`），不是我们请求的那个。两者
+    // 不一样就是没跳成，这时候绝不能报「已跳到」—— 屏幕上还在老 pane、弹窗却说成功，是最
+    // 难查的一种：用户以为是画面没刷新，而实际上焦点真的没动（用户报过）。
+    if (r.target !== id) {
+      toast(`没跳到 ${id}：herdr 说焦点在 ${r.target}`)
+      void compose.loadPanes(true) // 列表可能已经过期了（那个 pane 被关掉之类的）
+      return
+    }
+    // 终端这条连接断着 / 正在重连时，跳转本身是走 HTTP 的，照样成功 —— 但画面是冻住的旧帧，
+    // 看起来就是「点了没反应，多点几次也一样」。这时候必须说清是画面旧了，不是没跳过去。
+    const offline = status.cls !== 'on'
     toast(
-      r.singlePane
+      (r.singlePane
         ? `已跳到 ${r.target}（这个 tab 只有一个 pane）`
-        : `已跳到 ${r.target}${r.zoomed ? ' · 全屏' : ' · 已退出全屏'}`,
+        : `已跳到 ${r.target}${r.zoomed ? ' · 全屏' : ' · 已退出全屏'}`)
+      + (offline ? '。终端这会儿没连上，画面是旧的 —— 连上就跟过来了' : ''),
     )
+  }
+
+  /**
+   * 顶栏每个按钮**点了干什么**（`on` 是亮不亮、`badge` 是角标、`hide` 是这个部署没有这项）。
+   *
+   * 和「按钮长什么样」分开放：图标和名字在 `components/topbarItems.tsx`（编辑器要用同一份），
+   * 而这些动作要用 App 的状态和 Session，搬不出去。两边靠 id 对上，服务端那份白名单也是
+   * 同一批 id（internal/topbar，有测试盯着两边一致）。
+   */
+  const topbarAct: Partial<Record<TopbarId, {
+    on?: boolean
+    run: () => void
+    /** 覆盖 title（面板一览要写清「几条没看」，全屏要说清是进还是出） */
+    title?: string
+    /** 覆盖图标（全屏那个进 / 出两个样） */
+    icon?: React.ReactNode
+    badge?: number
+    /** 这个部署没有这项（文件浏览可以在服务端关掉），画出来点开是一片 404 */
+    hide?: boolean
+  }>> = {
+    panes: {
+      on: panesOpen,
+      run: () => (panesOpen ? setPanesOpen(false) : openPanes()),
+      // 说「条」不说「几个 agent」：同一个 agent 连着变几次就是几条，实测挂一会儿就能
+      // 攒十几条，写成「10 个 agent」是假的
+      title: notices.unread.length
+        ? `面板一览：${notices.unread.length} 条还没看（等你回答 / 跑完了）`
+        : undefined,
+      badge: noticeDot ? notices.unread.length : 0,
+    },
+    // 文件浏览能在服务端关掉（HERDR_WEB_FILES=0）。那时候连按钮都不画 ——
+    // 点开一片 404 比没有这个入口更糟。主入口其实是终端里那行路径可点。
+    files: { on: filesOpen, run: () => (filesOpen ? setFilesOpen(false) : openFiles()), hide: state?.files === false },
+    compose: { on: showCompose, run: () => toggleCompose(!showCompose) },
+    keys: { on: showKeys, run: () => toggleKeys(!showKeys) },
+    kbd: { on: kbdUp, run: () => sess.current?.toggleKeyboard() },
+    img: { run: () => picker.current?.click() },
+    clip: { run: () => void pullClip() },
+    paste: { run: () => void pastePhone() },
+    'font-': { run: () => bumpFont(-1) },
+    'font+': { run: () => bumpFont(1) },
+    theme: { run: () => setScheme(scheme === 'dark' ? 'light' : 'dark') },
+    full: {
+      on: full,
+      run: toggleFull,
+      title: full ? '全屏：点一下退出' : '全屏：去掉地址栏和工具条，终端多几行',
+      icon: full ? <Minimize className="size-4" /> : <Maximize className="size-4" />,
+    },
+    settings: { on: settings, run: () => setSettings(!settings) },
   }
 
   /**
@@ -786,31 +932,25 @@ export default function App() {
           {(status.cls !== 'on' || !phone) && <Button onClick={connect}>连接</Button>}
         </div>
 
-        <div className="flex shrink-0 items-center gap-1">
-          {iconBtn(
-            notices.unread.length
-              // 说「条」不说「几个 agent」：同一个 agent 连着变几次就是几条，
-              // 实测挂一会儿就能攒十几条，写成「10 个 agent」是假的
-              ? `面板一览：${notices.unread.length} 条还没看（等你回答 / 跑完了）`
-              : '面板一览：跳到某个 pane（顺带全屏）',
-            panesOpen,
-            () => (panesOpen ? setPanesOpen(false) : openPanes()),
-            <Panes className="size-4" />,
-            undefined,
-            noticeDot ? notices.unread.length : 0,
-          )}
-          {/* 文件浏览。服务端关掉（HERDR_WEB_FILES=0）就不画这个按钮 —— 点开一片 404
-              比没有这个入口更糟。主入口其实是终端里那行路径可点，这个按钮是兜底。 */}
-          {state?.files !== false &&
-            iconBtn('文件：看 agent 生成的图 / 翻目录', filesOpen, () => (filesOpen ? setFilesOpen(false) : openFiles()), <Files className="size-4" />)}
-          {iconBtn('语音投稿发件箱（说话打字 → 投进 agent pane）', showCompose, () => toggleCompose(!showCompose), <Pencil className="size-4" />)}
-          {iconBtn('软键盘条（Ctrl / Esc / 方向键）', showKeys, () => toggleKeys(!showKeys), <Keyboard className="size-4" />)}
-          {iconBtn('缩小字号', false, () => bumpFont(-1), <AArrowDown className="size-4" />, 'max-phone:hidden')}
-          {iconBtn('放大字号', false, () => bumpFont(1), <AArrowUp className="size-4" />, 'max-phone:hidden')}
-          {iconBtn('切换明暗', false, () => setScheme(scheme === 'dark' ? 'light' : 'dark'), <CircleHalf className="size-4" />, 'max-phone:hidden')}
-          {iconBtn(full ? '退出全屏' : '全屏（去掉地址栏和工具条，终端多几行）', full, toggleFull,
-            full ? <Minimize className="size-4" /> : <Maximize className="size-4" />)}
-          {iconBtn('设置（终端 / 软键条 / 设备）', settings, () => setSettings(!settings), <Gear className="size-4" />)}
+        {/* 顶栏那排按钮：**放哪几个、什么顺序**是配置（设置 →「顶栏」页里拖，存服务端）。
+            一行不换行、放不下自己横滑 —— 和手机上的软键条一个做法。换行的话顶栏会长出
+            第二行，白吃掉两行终端；而「拖上去的按钮被藏起来」是最难解释的一种行为，
+            所以这儿一个都不藏（原来字号 ± / 明暗在手机竖屏是 CSS 藏掉的，去掉了）。 */}
+        <div
+          data-testid="topbar-items"
+          className="flex min-w-0 shrink items-center gap-1 overscroll-contain
+                     [scrollbar-width:none] flex-nowrap overflow-x-auto [&::-webkit-scrollbar]:hidden"
+        >
+          {topbar.map((id) => {
+            const it = TOPBAR_BY_ID.get(id)
+            const act = topbarAct[id]
+            if (!it || !act || act.hide) return null
+            return (
+              <span key={id} className="shrink-0">
+                {iconBtn(act.title ?? `${it.label}：${it.hint}`, !!act.on, act.run, act.icon ?? it.icon, undefined, act.badge)}
+              </span>
+            )
+          })}
         </div>
       </header>
       )}
@@ -841,7 +981,7 @@ export default function App() {
             watching={compose.watching}
             onClose={() => setPanesOpen(false)}
             onGoto={(id, zoom) => void gotoPane(id, zoom)}
-            onReload={() => void compose.loadPanes()}
+            onReload={reloadPanes}
           />
         )}
         {filesOpen && (
@@ -878,8 +1018,11 @@ export default function App() {
             onOSFg={(v) => { setNoticeOSFg(v); localStorage.setItem('noticeOSFg', v ? '1' : '0') }}
             cardMs={noticeMs}
             onCardMs={(v) => { setNoticeMs(v); localStorage.setItem('noticeCardMs', String(v)) }}
+            kbdFull={kbdFull}
+            onKbdFull={(v) => { setKbdFull(v); localStorage.setItem('kbdFull', v ? '1' : '0') }}
             heals={heals}
             onSaved={(lib, b) => setBar(resolveBar(lib, b))}
+            onTopbar={setTopbar}
             toast={toast}
             state={state}
             fontSize={fontSize}

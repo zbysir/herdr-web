@@ -340,6 +340,13 @@ export interface PresetGroup { group: string; items: SoftKey[] }
 export interface SoftkeysConfig { rows: 1 | 2; lib: SoftKey[]; bar: string[][] }
 export interface SoftkeysResponse extends SoftkeysConfig { max: number; maxBar: number; presets: PresetGroup[] }
 
+/**
+ * 顶栏配置：`items` 是**一串按钮 id**（顺序就是顶栏上的顺序），按钮长什么样在
+ * `components/topbarItems.tsx`。`actions` 是服务端认的全部 id、`pinned` 是不能删的那几个
+ * （设置 ⚙ —— 删了就没路回来改配置了），`max` 是上限。
+ */
+export interface TopbarResponse { items: string[]; actions: string[]; pinned: string[]; max: number }
+
 /** 把 bar 里的 id 换成真的按键定义。认不出的 id 直接跳过（服务端不该给出这种，防一手） */
 export function resolveBar(lib: SoftKey[], bar: string[][]): SoftKey[][] {
   const by = new Map(lib.map((k) => [k.id, k]))

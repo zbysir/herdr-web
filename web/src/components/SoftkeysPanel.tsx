@@ -1,30 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { Download, Plus, Trash2, X } from 'lucide-react'
 import { api, type PresetGroup, type SoftKey, type SoftkeysConfig, type SoftkeysResponse } from '@/lib/api'
+import { useChipDrag, type ChipAt } from '@/lib/chipdrag'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Checkbox } from './ui/checkbox'
 import { Panel } from './ui/panel'
 import { cn } from '@/lib/utils'
 
-/** 拖放的三个筐：软键条第一行 / 第二行 / 「我的按键」 */
+/** 拖放的三个筐：软键条第一行 / 第二行 / 「我的按键」。手势本身在 lib/chipdrag（和顶栏编辑器共用） */
 type Zone = 1 | 2 | 'lib'
-type At = { zone: Zone; i: number }
-
-/**
- * 触屏上按住这么久才算「把键拿起来」。
- *
- * 为什么要按住：这一页要能上下滚，而键本身就是拖动的把手 —— 手指落在键上往下划，到底是
- * 滚页面还是拖这个键，只能靠「有没有按住」区分。给键写死 `touch-action: none` 的话页面
- * 就滚不动了（键铺满了整页），而 `pan-y` 又会把「往下拖到第二行」吃成滚动。
- *
- * 250ms 是取舍：再短一点，滚页面时容易误拿；再长就等得难受。
- */
-const HOLD_MS = 250
-/** 按住期间手指飘出这么多就当是在滚页面，撤销这次拿起 */
-const HOLD_SLOP = 10
-/** 鼠标不用按住：走这么多像素就算拖（鼠标没有「滚 vs 拖」的歧义） */
-const MOVE_SLOP = 6
+type At = ChipAt<Zone>
 
 /** 「按键」栏怎么显示：sticky/act 用 `sticky:ctrl` 这种写法，其余就是按键谱。 */
 const kindOf = (k: SoftKey) => (k.sticky ? `sticky:${k.sticky}` : k.act ? `act:${k.act}` : (k.spec ?? k.send ?? ''))
@@ -127,36 +113,7 @@ export function SoftkeysPanel({
   /* ------------------------------------------------------------ 拖动 */
 
   const zoneEl = useRef<Partial<Record<Zone, HTMLDivElement | null>>>({})
-  const [drag, setDrag] = useState<{ key: SoftKey; from: At; x: number; y: number } | null>(null)
-  const [over, setOver] = useState<At | null>(null)
-
   const zones = (): Zone[] => (rows === 2 ? [1, 2, 'lib'] : [1, 'lib'])
-
-  /**
-   * 指针落在哪个筐的第几个位置。
-   *
-   * 筐里是**换行**排的（和真软键条一样），所以先按 y 找到同一视觉行上的那几个键，再在这
-   * 一行里比 x 的中点。只比 x 的话，两行键叠在一起时插入点会跳到上一行去。
-   */
-  const hit = (x: number, y: number): At | null => {
-    for (const zone of zones()) {
-      const el = zoneEl.current[zone]
-      if (!el) continue
-      const r = el.getBoundingClientRect()
-      if (y < r.top - 8 || y > r.bottom + 8) continue
-      const rects = ([...el.querySelectorAll('[data-chip]')] as HTMLElement[]).map((c) => c.getBoundingClientRect())
-      if (!rects.length) return { zone, i: 0 }
-      const line = rects.filter((c) => y >= c.top - 2 && y <= c.bottom + 2)
-      if (!line.length) return { zone, i: y < rects[0].top ? 0 : rects.length }
-      for (let n = 0; n < rects.length; n++) {
-        const c = rects[n]
-        if (y < c.top - 2 || y > c.bottom + 2) continue
-        if (x < c.left + c.width / 2) return { zone, i: n }
-      }
-      return { zone, i: rects.lastIndexOf(line[line.length - 1]) + 1 }
-    }
-    return null
-  }
 
   /** 落一次拖动 */
   const drop = (from: At, to: At) => {
@@ -204,72 +161,13 @@ export function SoftkeysPanel({
     })
   }
 
-  /**
-   * 按下一个键。触屏按住 HOLD_MS 才算拿起、鼠标走 MOVE_SLOP 就算拖；
-   * 没拿起就松手 = 点一下（选中这个定义，下面那条改它）。
-   */
-  const onChipDown = (e: React.PointerEvent, from: At) => {
-    const key = at(from.zone, from.i)
-    if (!key) return
-    const target = e.currentTarget as HTMLElement
-    const touch = e.pointerType !== 'mouse'
-    const x0 = e.clientX
-    const y0 = e.clientY
-    let picked = false
-    let hold: number | undefined
-    let to: At | null = null
-    try { target.setPointerCapture(e.pointerId) } catch { /* 没这个指针就不捕获 */ }
-
-    // 拿起来之后不让页面跟着滚。手指在按住期间没动过，浏览器还没开始滚，这时候
-    // preventDefault 拦得住（等它滚起来就只剩 pointercancel 了）。
-    const noScroll = (ev: TouchEvent) => ev.preventDefault()
-
-    const pick = () => {
-      picked = true
-      setDrag({ key, from, x: x0, y: y0 })
-      document.addEventListener('touchmove', noScroll, { passive: false })
-    }
-    if (touch) hold = window.setTimeout(pick, HOLD_MS)
-
-    const onMove = (ev: PointerEvent) => {
-      const dx = ev.clientX - x0
-      const dy = ev.clientY - y0
-      if (!picked) {
-        if (touch) {
-          if (Math.abs(dx) > HOLD_SLOP || Math.abs(dy) > HOLD_SLOP) stop(false)  // 在滚页面，放手
-          return
-        }
-        if (Math.abs(dx) < MOVE_SLOP && Math.abs(dy) < MOVE_SLOP) return
-        pick()
-      }
-      setDrag((d) => (d ? { ...d, x: ev.clientX, y: ev.clientY } : d))
-      to = hit(ev.clientX, ev.clientY)
-      setOver(to)
-    }
-
-    const stop = (finish: boolean) => {
-      clearTimeout(hold)
-      document.removeEventListener('touchmove', noScroll)
-      target.removeEventListener('pointermove', onMove)
-      target.removeEventListener('pointerup', up)
-      target.removeEventListener('pointercancel', cancel)
-      setDrag(null)
-      setOver(null)
-      if (!finish) return
-      // 落在筐外面 = 什么都不做（放回原处）。误删太贵，删只走「删掉」那个按钮
-      if (picked) {
-        if (to) drop(from, to)
-        return
-      }
-      setSelId(key.id ?? null)   // 没拿起来就松手 = 点一下 = 选中它
-    }
-    const up = () => stop(true)
-    const cancel = () => stop(false)
-
-    target.addEventListener('pointermove', onMove)
-    target.addEventListener('pointerup', up)
-    target.addEventListener('pointercancel', cancel)
-  }
+  // 手势（按住才拿起、落在哪一格、影子跟手指）在 lib/chipdrag 里，和顶栏编辑器共用一份
+  const { drag, over, onChipDown } = useChipDrag<Zone>({
+    zones,
+    elOf: (z) => zoneEl.current[z],
+    onDrop: drop,
+    onTap: (a) => setSelId(at(a.zone, a.i)?.id ?? null), // 没拿起来就松手 = 选中它，下面那条改它
+  })
 
   /** 键盘也要能排：← → 本筐里挪，↑ ↓ 换筐，Delete 从条上拿下来 / 在库里删掉 */
   const onChipKey = (e: React.KeyboardEvent, from: At) => {
@@ -545,7 +443,7 @@ export function SoftkeysPanel({
           className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-1/2 rounded-md border border-brand-line bg-brand-bg px-2.5 py-1.5 font-mono text-xs text-brand-fg shadow-[0_10px_24px_-8px_rgba(0,0,0,.7)]"
           style={{ left: drag.x, top: drag.y }}
         >
-          {drag.key.label || kindOf(drag.key)}
+          {(() => { const k = at(drag.from.zone, drag.from.i); return k ? (k.label || kindOf(k)) : '' })()}
         </span>
       )}
     </>

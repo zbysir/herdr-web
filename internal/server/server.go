@@ -28,6 +28,7 @@ import (
 	"github.com/zbysir/herdr-web/internal/outbox"
 	"github.com/zbysir/herdr-web/internal/selfupdate"
 	"github.com/zbysir/herdr-web/internal/softkeys"
+	"github.com/zbysir/herdr-web/internal/topbar"
 	"github.com/zbysir/herdr-web/internal/uploads"
 )
 
@@ -37,6 +38,7 @@ type Server struct {
 	Gate     *auth.Gate
 	Outbox   *outbox.Outbox
 	Softkeys *softkeys.Store
+	Topbar   *topbar.Store
 	Uploads  *uploads.Store
 	Web      fs.FS // 前端产物（嵌进二进制，或 -web 指向的目录）
 
@@ -100,6 +102,7 @@ func New(cfg *config.Config, web fs.FS, a *auth.Store, g *auth.Gate, opt Options
 		Gate:     g,
 		Outbox:   ob,
 		Softkeys: &softkeys.Store{Dir: cfg.Dir},
+		Topbar:   &topbar.Store{Dir: cfg.Dir},
 		Uploads:  &uploads.Store{Dir: cfg.Dir},
 		Files: &files.Browser{
 			Enabled: cfg.Files,
@@ -238,6 +241,8 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 		s.apiState(w, r)
 	case "softkeys":
 		s.apiSoftkeys(w, r)
+	case "topbar":
+		s.apiTopbar(w, r)
 	case "clip":
 		s.apiClip(w, r)
 	case "herdr":
@@ -353,6 +358,46 @@ func (s *Server) apiSoftkeys(w http.ResponseWriter, r *http.Request) {
 		out(c)
 	case http.MethodDelete:
 		c, err := s.Softkeys.Save(softkeys.DefaultConfig())
+		if err != nil {
+			fail(w, 400, err)
+			return
+		}
+		out(c)
+	default:
+		fail(w, 405, errf("方法不对"))
+	}
+}
+
+// apiTopbar 是顶栏那排图标按钮「放哪几个、什么顺序」。
+//
+// 和软键条**分成两个口**：各自一个 PUT 收自己那一整份。混在一个口里的话两个编辑器都在
+// PUT「一整份配置」，谁后存谁把对方那一半清掉（见 internal/topbar 的包注释）。
+//
+// GET 顺带把白名单和上限也给出去：编辑器要拿它和自己那份按钮目录对一遍，服务端不认的
+// 就别画出来让人拖 —— 拖得上去、一存报错是最难受的那种交互。
+func (s *Server) apiTopbar(w http.ResponseWriter, r *http.Request) {
+	out := func(c topbar.Config) {
+		writeJSON(w, 200, map[string]any{
+			"items": c.Items, "actions": topbar.Actions, "pinned": topbar.Pinned, "max": topbar.MaxItems,
+		})
+	}
+	switch r.Method {
+	case http.MethodGet:
+		out(s.Topbar.Load())
+	case http.MethodPut:
+		var body topbar.Config
+		if err := readJSON(r, &body); err != nil {
+			fail(w, 400, err)
+			return
+		}
+		c, err := s.Topbar.Save(body)
+		if err != nil {
+			fail(w, 400, err)
+			return
+		}
+		out(c)
+	case http.MethodDelete:
+		c, err := s.Topbar.Save(topbar.DefaultConfig())
 		if err != nil {
 			fail(w, 400, err)
 			return

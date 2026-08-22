@@ -7,6 +7,8 @@ import { Button } from './ui/button'
 import { Checkbox } from './ui/checkbox'
 import { Select } from './ui/select'
 import { SoftkeysPanel } from './SoftkeysPanel'
+import { TopbarPanel } from './TopbarPanel'
+import type { TopbarId } from './topbarItems'
 import { DevicesPanel } from './DevicesPanel'
 import { cn } from '@/lib/utils'
 
@@ -33,17 +35,18 @@ const NOTIFY_HINT: Record<NotifyState, string> = {
 
 export type TermOpts = { kitty: boolean; meta: boolean; copyOnSelect: boolean; sync2026: boolean; switchPanel: boolean }
 
-export type SettingsTab = 'term' | 'keys' | 'devices'
+export type SettingsTab = 'term' | 'topbar' | 'keys' | 'devices'
 
 const TABS: { id: SettingsTab; label: string }[] = [
   { id: 'term', label: '终端' },
+  { id: 'topbar', label: '顶栏' },
   { id: 'keys', label: '软键条' },
   { id: 'devices', label: '设备' },
 ]
 
 export function SettingsPanel({
   tab, onTab, onClose, opts, setOpt, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs,
-  heals, onSaved, toast, state,
+  kbdFull, onKbdFull, heals, onSaved, onTopbar, toast, state,
   fontSize, onFont, scheme, onScheme,
 }: {
   tab: SettingsTab
@@ -63,8 +66,13 @@ export function SettingsPanel({
   /** 「跑完了」的卡片挂多久（ms，0 = 一直挂着） */
   cardMs: number
   onCardMs: (v: number) => void
+  /** 呼出键盘就自动全屏（收起键盘不退出） */
+  kbdFull: boolean
+  onKbdFull: (v: boolean) => void
   heals: number
   onSaved: (lib: SoftKey[], bar: string[][]) => void
+  /** 顶栏存好了：把新的那一串 id 交回去，顶栏立刻跟着变（不用刷新页面） */
+  onTopbar: (items: TopbarId[]) => void
   toast: (m: string) => void
   /** 启动时那次 /api/state 的结果，「终端」页底下当环境信息显示；没拿到就不显示 */
   state?: State | null
@@ -107,11 +115,13 @@ export function SettingsPanel({
       {tab === 'term' && (
         <TermSection
           opts={opts} setOpt={setOpt} dot={dot} onDot={onDot} os={os} onOS={onOS}
+          kbdFull={kbdFull} onKbdFull={onKbdFull}
           osFg={osFg} onOSFg={onOSFg} cardMs={cardMs} onCardMs={onCardMs}
           heals={heals} state={state} toast={toast}
           fontSize={fontSize} onFont={onFont} scheme={scheme} onScheme={onScheme}
         />
       )}
+      {tab === 'topbar' && <TopbarPanel onSaved={onTopbar} toast={toast} />}
       {tab === 'keys' && <SoftkeysPanel embedded onSaved={onSaved} toast={toast} />}
       {tab === 'devices' && <DevicesPanel embedded toast={toast} />}
     </Panel>
@@ -119,7 +129,7 @@ export function SettingsPanel({
 }
 
 function TermSection({
-  opts, setOpt, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs,
+  opts, setOpt, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs, kbdFull, onKbdFull,
   heals, state, fontSize, onFont, scheme, onScheme, toast,
 }: {
   opts: TermOpts
@@ -132,6 +142,8 @@ function TermSection({
   onOSFg: (v: boolean) => void
   cardMs: number
   onCardMs: (v: number) => void
+  kbdFull: boolean
+  onKbdFull: (v: boolean) => void
   toast: (m: string) => void
   heals: number
   state?: State | null
@@ -185,6 +197,18 @@ function TermSection({
           COPY 模式，见 README 的「手机上怎么复制」。 */}
       {row('copyOnSelect', '选中即复制（鼠标选中时；触屏上没有选区）')}
       {row('sync2026', '同步输出 DEC 2026（防画面撕裂；留一块空白画不上来时关它）')}
+
+      {/* 手机上打字那一下最缺高度：键盘吃掉半屏，地址栏和工具条又占一截。
+          **收键盘不退出**是刻意的 —— 每打一次字闪进闪出一次全屏，比不全屏还难受。 */}
+      <label className="flex cursor-pointer items-start gap-2.5 rounded-md py-1 transition-colors hover:text-fg">
+        <span className="pt-px"><Checkbox checked={kbdFull} onCheckedChange={(v) => onKbdFull(!!v)} /></span>
+        <span className="text-[13px]/relaxed">
+          呼出键盘时自动全屏
+          <span className="mt-0.5 block text-xs text-faint">
+            收起键盘<b>不</b>退出（退出用顶栏那个按钮）。键盘吃掉半屏时，地址栏那一截最值钱
+          </span>
+        </span>
+      </label>
 
       {/* 「点 switch 开面板一览」和上面那串终端行为不是一类：它改的是「点 herdr 那个按钮会
           发生什么」。和下面那个角标一样是「这台设备上顺手不顺手」的偏好，所以并在同一条线下面。 */}

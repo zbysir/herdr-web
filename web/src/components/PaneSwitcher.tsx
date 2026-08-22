@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
-import { RefreshCw, Search } from 'lucide-react'
+import { Search, X } from 'lucide-react'
 import type { Pane } from '@/lib/api'
 import { Panel } from './ui/panel'
 import { Button } from './ui/button'
@@ -110,6 +110,7 @@ export function PaneSwitcher({
   onClose: () => void
   /** 跳过去（zoom=true 顺带全屏）。面板自己不等结果，交给上层 toast */
   onGoto: (id: string, zoom: boolean) => void
+  /** 重新拉一次列表。面板开着的时候自己按拍调，界面上没有刷新按钮 —— 见下面那个 interval */
   onReload: () => void
 }) {
   /**
@@ -140,12 +141,15 @@ export function PaneSwitcher({
    * 那一行，中间布局怎么动都不影响。鼠标不走这条（`pointerType === 'mouse'` 直接放过），
    * 键盘 Enter 也不走 —— 那两条本来就是 click，而 click 在桌面上从不丢。
    */
-  const down = useRef<{ x: number; y: number } | null>(null)
+  const down = useRef<{ x: number; y: number; id: string } | null>(null)
   /** pointerup 已经接走的那一刻。紧跟着可能还来一个 click，得吃掉，不然跳两次 */
   const took = useRef(0)
   const tap = (p: Pane) => ({
     onPointerDown: (e: PointerEvent) => {
-      down.current = e.pointerType === 'mouse' ? null : { x: e.clientX, y: e.clientY }
+      // **手指落下那一刻就把 pane id 记住**，抬起时用记下来的这个，不用闭包里的 p.id：
+      // 列表是会在手底下变的（每 4 秒重拉一次），React 重渲染之后同一个 DOM 元素上挂的
+      // 已经是另一个 pane 的回调了 —— 那就会「跳到你没点的那个 pane」。
+      down.current = e.pointerType === 'mouse' ? null : { x: e.clientX, y: e.clientY, id: p.id }
     },
     // 滚列表时浏览器会给一个 pointercancel，那一下不算点
     onPointerCancel: () => { down.current = null },
@@ -155,7 +159,7 @@ export function PaneSwitcher({
       // 手指走了超过 10px 当成在滚列表（pointercancel 不是每次都来）
       if (!d || Math.abs(e.clientX - d.x) > 10 || Math.abs(e.clientY - d.y) > 10) return
       took.current = e.timeStamp
-      onGoto(p.id, zoom)
+      onGoto(d.id, zoom)
     },
     onClick: (e: MouseEvent) => {
       if (e.timeStamp - took.current < 800) return // pointerup 刚接走过
@@ -163,14 +167,33 @@ export function PaneSwitcher({
     },
   })
 
-  // 「3m」不能是死的：面板开着不动的时候也得走。30 秒一拍够了（最小刻度就是分钟）
+  /**
+   * 面板开着的时候**自己重新拉列表**，所以界面上没有刷新按钮。
+   *
+   * 原来只在打开那一下拉一次：开着看的这段时间里，状态点、「几分钟前」、新起的 pane 全是
+   * 打开那一刻的快照 —— 而这个面板正是用来看「谁在等我」的，停住的状态比没有更糟。手上
+   * 那颗刷新按钮等于把这件事推给人，它占的还是筛选那一排最右边、最容易误按的位置。
+   *
+   * 4 秒一拍，顺手把「3m」那一列的 now 也推一下（最小刻度是分钟，跟着一起走没坏处）。
+   * 标签页不可见时不打 —— 那时候没人看，而手机上后台请求最容易被系统掐着不放。
+   * 这一拍是**静默**的：失败不弹 toast（herdr 停了会一直失败，每 4 秒一条没人受得了），
+   * 列表空掉时底下那句「拿不到 pane 列表」已经把话说清楚了。
+   */
   const [now, setNow] = useState(() => Date.now())
+  // 回调放 ref 里，interval 只建一次。挂在依赖上试过，翻车了：外面每渲染一次
+  // （发件箱那条 500ms 的心跳一直在推状态）这个 prop 就可能换个新函数，interval
+  // 于是每半秒被拆了重建，4 秒那一拍永远等不到 —— 表现是「列表压根不自动刷新」。
+  const reload = useRef(onReload)
+  useEffect(() => { reload.current = onReload })
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 30_000)
+    const t = setInterval(() => {
+      setNow(Date.now())
+      if (!document.hidden) reload.current()
+    }, 4000)
     return () => clearInterval(t)
   }, [])
 
-  const rows = useMemo(() => {
+  const sorted = useMemo(() => {
     const kw = q.trim().toLowerCase()
     const hit = (p: Pane) =>
       (!onlyAgent || !!p.agent) &&
@@ -186,6 +209,33 @@ export function PaneSwitcher({
       a.i - b.i,
     )
   }, [panes, q, onlyAgent, sort])
+
+  /**
+   * **面板开着的时候顺序是冻住的。**
+   *
+   * 列表每 4 秒重拉一次，而「优先级」排序是按状态分档的 —— 十几个 agent 的机器上，状态
+   * 隔几秒就有变化，于是你正看着第三行、手指落下去的时候那一行已经是别的 pane 了。用户报
+   * 「点了跳不到正确的面板」就是这么来的（外加行的回调也跟着换了，那一半在 tap 里另修）。
+   *
+   * 冻的只有**顺序**：状态点、「等你」标签、时间列照常跟着刷。新出现的 pane 接在末尾，
+   * 关掉的自然消失。换排序 / 改筛选 / 下次再打开面板都会重排一次 —— 那几下都是「我想重新
+   * 看一遍」的意思，不是「我正瞄着某一行」。
+   */
+  const [frozen, setFrozen] = useState<string[] | null>(null)
+  // 换了排序 / 筛选就该重排（那是用户主动要求换个看法）
+  useEffect(() => { setFrozen(null) }, [sort, onlyAgent, q])
+  useEffect(() => {
+    if (frozen === null) setFrozen(sorted.map((r) => r.p.id))
+  }, [frozen, sorted])
+
+  const rows = useMemo(() => {
+    if (!frozen) return sorted
+    const rank = new Map(frozen.map((id, i) => [id, i]))
+    // 冻结名单里没有的（这一拍新出现的 pane）排在最后，保持它们自己的相对顺序
+    return [...sorted].sort((a, b) =>
+      (rank.get(a.p.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.p.id) ?? Number.MAX_SAFE_INTEGER),
+    )
+  }, [sorted, frozen])
 
   // 「分组」按 workspace 分组（和 herdr 里看到的一样）；优先级是全局排序，
   // 分组会把它切碎，所以那边是一条平铺的列表，workspace 挪进每行的副行。
@@ -213,14 +263,13 @@ export function PaneSwitcher({
 
   return (
     <Panel
-      title="面板一览"
       onClose={onClose}
       // 一览是要扫的，比设置面板高一档、宽一档；手机上几乎铺满（几十个 pane 得能滚起来）
       className="w-[520px] max-h-[calc(100%-24px)] max-md:inset-x-2 max-md:top-3 max-md:w-auto"
     >
       {/* 这一排粘在顶上：滚到第三个 workspace 还得能改筛选（-top-2/-mt-2/pt-2 那三个一套，
           和设置面板的分页条同理 —— 外层滚动容器有 pt-2，只写 top-0 会漏一条缝） */}
-      <div className="sticky -top-2 z-1 -mx-4 -mt-2 mb-2 flex flex-wrap items-center gap-1.5 border-b border-line bg-bar px-4 pt-2 pb-2">
+      <div className="sticky -top-2 z-1 -mx-4 -mt-2 mb-1.5 flex flex-wrap items-center gap-1.5 border-b border-line bg-bar px-4 pt-2 pb-1.5">
         <div className="relative min-w-0 flex-1">
           <Search className="pointer-events-none absolute top-1/2 left-2 size-3 -translate-y-1/2 text-faint" />
           <Input
@@ -258,8 +307,16 @@ export function PaneSwitcher({
         >
           全屏
         </Button>
-        <Button size="tiny" title="刷新列表（状态和时间都会重新拉）" onClick={onReload}>
-          <RefreshCw className="size-3" />
+        {/* 关闭并进这一排（面板没有标题栏了）。摆在最右边、和别的键留一点距离：
+            这是唯一一个「点了就没了」的按钮，别和筛选那几个挨成一片 */}
+        <Button
+          size="tiny"
+          className="ml-0.5"
+          aria-label="关闭"
+          title="关闭（Esc 也行）"
+          onClick={onClose}
+        >
+          <X className="size-3.5" />
         </Button>
       </div>
 
@@ -270,8 +327,8 @@ export function PaneSwitcher({
       )}
 
       {groups.map((g) => (
-        <section key={g.ws} className="mb-1.5">
-          {g.ws && <h4 className="px-1 pt-1.5 pb-1 text-[11px] font-medium tracking-wide text-faint">{g.ws}</h4>}
+        <section key={g.ws} className="mb-1">
+          {g.ws && <h4 className="px-1 pt-1 pb-0.5 text-[11px] font-medium tracking-wide text-faint">{g.ws}</h4>}
           <div className="flex flex-col gap-0.5">
             {g.items.map((p) => {
               const chip = p.agent ? STATUS_CHIP[p.status] : undefined
@@ -281,10 +338,13 @@ export function PaneSwitcher({
                   key={p.id}
                   type="button"
                   data-testid="panes-row"
-                  // min-h-11：一行至少 44px，手指点得中（这一条整块都是热区，不是只有文字）
+                  // min-h-9：一行至少 36px。原来是 44px（手指的常规下限），但这一行里本来就有
+                  // 两行字（≈30px），44 是硬撑出来的空白 —— 手机上一屏能看的 pane 少两三个，
+                  // 而这个面板的价值就是「一眼扫完」。整块都是热区（不是只有文字），36px 高、
+                  // 铺满整宽的条子点不空。
                   className={cn(
-                    'flex min-h-11 w-full cursor-pointer items-center gap-2.5 rounded-md border border-transparent',
-                    'px-2 py-1.5 text-left outline-none transition-colors duration-100',
+                    'flex min-h-9 w-full cursor-pointer items-center gap-2 rounded-md border border-transparent',
+                    'px-2 py-1 text-left leading-tight outline-none transition-colors duration-100',
                     'hover:border-line hover:bg-ctl focus-visible:ring-2 focus-visible:ring-brand/35',
                     p.focused && 'border-brand/40 bg-brand/10',
                   )}

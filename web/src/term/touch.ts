@@ -68,6 +68,19 @@ const HOLD_SLOP = 16
  */
 const SNAP_PX = 24
 
+/**
+ * 「点穿」的闸门开着多久之后自己撤掉（毫秒）。
+ *
+ * 这个数**不是判据**，只是兜底：判据是「一次性」——手指在终端外面抬起就把闸门打开，
+ * 补发的那一下鼠标事件用掉就关。给个超时是因为那一下未必会落到终端上（比如浮层没关，
+ * 补发的事件落在浮层自己身上），闸门不能一直开着。
+ *
+ * 故意给得很宽（1.5 秒）：主线程忙起来时这几个事件会被推后很多 —— 实测「关掉面板 + herdr
+ * 重绘」那一下，60ms 的等待量出来是 1008ms。原来这儿是「700ms 之内算点穿」的时间窗，就是
+ * 因此漏掉的（用户报了两次「切完 pane 键盘还是弹出来」）。
+ */
+const GHOST_MS = 1500
+
 /** 是不是画框线的字符（U+2500–U+259F：制表符 + 方块元素） */
 const isBorderGlyph = (ch: string) => {
   const c = ch.codePointAt(0) ?? 0
@@ -277,14 +290,95 @@ export function attachTouch(host: HTMLElement, term: Terminal, hooks: Hooks): ()
     }
   }
 
+  /**
+   * 「点穿」：**关掉浮层的那一下，浏览器会把兼容鼠标事件补发到底下的终端上**，
+   * xterm 的 mousedown 处理顺手 focus 它那个隐藏输入框 —— 手机上那就是输入法冒出来。
+   *
+   * 真机上的样子（用户报的）：键盘本来收着，在「面板一览」里点一行跳过去，面板当场关掉，
+   * 键盘自己弹了出来。**那一下不是用户在点终端**，是点击落在了刚消失的面板下面。
+   *
+   * 判据是**一次性闸门**，不是时间窗：手指在终端外面抬起就把闸门打开，接下来第一串鼠标事件
+   * 用掉它 —— 落在终端上就挡掉，落在别处就白用掉。为什么不看时间：主线程忙的时候这几个
+   * 事件会被推后到一秒开外（实测 1008ms），按时间窗判必然漏。
+   *
+   * **开闸认的是 `pointerup`，不能认 `touchend`** —— 这是这个 bug 修了三轮都没修掉的地方：
+   * 浮层是在 `pointerup` 的处理里被卸掉的（React 对离散事件是同步 flush 的），而 touch
+   * 事件的 target 在 touchstart 那一刻就钉死了，规范说得很清楚 ——「target 被移出文档之后，
+   * 事件仍然派给它，于是不再冒泡到 document」。所以那一下的 `touchend` **结构性地到不了
+   * document**，闸门永远开不了。`pointerup` 不一样：传播路径在派发开始时就算好了（那时浮层
+   * 还在），处理器里把浮层卸掉也不影响它沿既定路径走完，document 的捕获段一定收得到；
+   * 触摸的 pointer 事件还有隐式捕获，`pointerup` 的 target 恒等于 `pointerdown` 的 target，
+   * 「在不在终端里」的判断和原来一字不差。真鼠标（`pointerType === 'mouse'`）直接放过。
+   *
+   * 我们自己的手势在 `touchstart` 上就 `preventDefault` 了，所以**落在终端上的触摸浏览器
+   * 根本不补发兼容鼠标事件** —— 闸门只可能被终端外面那一下打开。
+   *
+   * **补发的那一串要整串挡掉**（mousemove / mousedown / mouseup / click），不是只挡
+   * mousedown。聚焦是 mousedown 带来的，但 herdr 常驻开着鼠标上报（1002/1003/1006），
+   * xterm 会把这些鼠标事件**当成真的点击上报给 herdr** —— 于是那一下幻影点击落在哪个 pane
+   * 上，herdr 的焦点就跳到哪儿。表现是用户报的这一条：「弹窗说切换成功，其实面板还在老的
+   * 那边」—— 跳过去的调用和幻影点击在抢，点击后到就把焦点又拽回了手指底下那个 pane。
+   */
+  let ghostOpen = false
+  let ghostTimer: ReturnType<typeof setTimeout> | undefined
+  const arm = (target: Node | null) => {
+    ghostOpen = !!target && !host.contains(target)
+    clearTimeout(ghostTimer)
+    if (ghostOpen) ghostTimer = setTimeout(() => { ghostOpen = false }, GHOST_MS)
+  }
+  const onDocPointerUp = (e: PointerEvent) => {
+    if (e.pointerType === 'mouse') return
+    arm(e.target as Node)
+  }
+  // touchend 那条留着当双保险：判定和 pointerup 永远同向，而它在**浮层没被卸掉**的情况下
+  // （比如点了浮层上一个不关闭它的按钮）照样能到 document
+  const onDocTouchEnd = (e: TouchEvent) => arm(e.target as Node)
+  const onDocMouse = (e: MouseEvent) => {
+    const inside = host.contains(e.target as Node)
+    /**
+     * 一条不依赖闸门状态的判据（Chrome / Safari 有，别的浏览器是 undefined，那就退回闸门）：
+     * `sourceCapabilities.firesTouchEvents` 为真 = 这个鼠标事件是**触摸派生出来的**。
+     *
+     * 落在终端上的真触摸永远在 `touchstart` 那一下就被 `preventDefault` 掉了，浏览器不会
+     * 为它补发兼容鼠标事件 —— 所以「终端里出现一个触摸派生的鼠标事件」本身就等于点穿，
+     * 不用问闸门开没开。闸门留着兜住没有这个字段的浏览器。
+     */
+    if (inside && (e as MouseEvent & { sourceCapabilities?: { firesTouchEvents?: boolean } })
+      .sourceCapabilities?.firesTouchEvents) {
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
+    if (!ghostOpen) return
+    // click 是这一串的最后一个；落在终端外面说明这一串跟终端无关 —— 两种情况都算用掉了
+    if (e.type === 'click' || !inside) {
+      ghostOpen = false
+      clearTimeout(ghostTimer)
+    }
+    if (!inside) return
+    e.preventDefault()
+    e.stopPropagation()
+  }
+  const ghostTypes = ['mousemove', 'mousedown', 'mouseup', 'click'] as const
+
   host.addEventListener('touchstart', onStart, { passive: false })
   host.addEventListener('touchmove', onMove, { passive: false })
   host.addEventListener('touchend', onEnd, { passive: true })
   host.addEventListener('touchcancel', onEnd, { passive: true })
+  // 这几条挂在 document 上：点穿是从**别的元素**上那一下来的，挂在终端上就已经晚了；
+  // 而鼠标事件要在 xterm 自己那个监听之前跑到（它的 mousedown 监听是「无条件 focus」，
+  // 见包注释里那段），所以走文档级的捕获阶段。
+  document.addEventListener('pointerup', onDocPointerUp, { capture: true, passive: true })
+  document.addEventListener('touchend', onDocTouchEnd, { capture: true, passive: true })
+  for (const t of ghostTypes) document.addEventListener(t, onDocMouse, true)
   return () => {
+    clearTimeout(ghostTimer)
     host.removeEventListener('touchstart', onStart)
     host.removeEventListener('touchmove', onMove)
     host.removeEventListener('touchend', onEnd)
     host.removeEventListener('touchcancel', onEnd)
+    document.removeEventListener('pointerup', onDocPointerUp, true)
+    document.removeEventListener('touchend', onDocTouchEnd, true)
+    for (const t of ghostTypes) document.removeEventListener(t, onDocMouse, true)
   }
 }
