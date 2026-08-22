@@ -283,7 +283,8 @@ func serve(webDir string) error {
 			if lanCert != cert {
 				conf = lanCert.TLSConfig()
 			}
-			h := srv.Handler()
+			// 这个口不在前置后面，转发头一定是客户端塞的 —— 见 server.StripForwarded
+			h := server.StripForwarded(srv.Handler())
 			go func() {
 				if err := http.Serve(tls.NewListener(lanLn, conf), h); err != nil {
 					log.Printf("局域网直连口挂了: %v", err)
@@ -594,6 +595,21 @@ func banner(cfg *config.Config, store *auth.Store, passkeys *auth.Passkeys, cert
 		}
 		fmt.Printf("  %s/   %s%s\n", base(cfg, n.Address), n.Name, tag)
 	}
+	// 局域网直连口。**必须说「点一次继续访问」**：那张证书是自签的，不点过一次的话
+	// 网页那边的嗅探会因为证书不认而失败 —— 而失败是静默的（安静走公网），人根本
+	// 不会知道这条路存在过。见 internal/server/lanapi.go。
+	if origins := lan.Origins(cfg.LanDirectPort()); len(origins) > 0 {
+		fmt.Println()
+		fmt.Println("  局域网直连（不绕公网，按键往返快一截）：")
+		for _, o := range origins {
+			fmt.Println("    " + o + "/")
+		}
+		fmt.Println("    ↑ 每台设备**先手动开一次**上面任一个、点「继续访问」（自签证书）。")
+		fmt.Println("      之后从公网那个地址进来，网页会自己探到它并切过去。")
+		fmt.Println("      建议在路由器上给这台机器绑个固定内网 IP —— 地址一变那一下信任就得重来。")
+	}
+
+	fmt.Println()
 	fmt.Printf("  管理页（只本机能开）：http://%s/\n", adminAddr)
 	fmt.Printf("  shell：%s   数据目录：%s\n", cfg.Shell, cfg.Dir)
 	fmt.Printf("  herdr socket：%s\n", cfg.Socket)

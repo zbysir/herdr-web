@@ -19,6 +19,11 @@ import (
 type Addr struct {
 	Name    string // 网卡名（en0 / eth0…），横幅上给人看
 	Address string
+	// Virtual：虚拟网卡上的地址（bridge / utun / vmnet / docker / OrbStack 那段）。
+	// 局域网直连的候选**必须把这些滤掉** —— 一台手机永远碰不到 bridge102 上的
+	// 192.168.107.0，留着只会白占一个嗅探名额，还把每个响应的 CSP 头拉长。
+	// 启动横幅那边照旧全都列（它连网卡名一起显示，看得出来是哪个）。
+	Virtual bool
 	score   int
 }
 
@@ -51,11 +56,13 @@ func Addresses() []Addr {
 			for _, bad := range []string{"bridge", "utun", "vmnet", "llw", "awdl", "anpi", "ap", "docker", "veth", "tap", "tun"} {
 				if strings.HasPrefix(ifc.Name, bad) {
 					n.score -= 10
+					n.Virtual = true
 					break
 				}
 			}
 			if strings.HasPrefix(ip, "198.18.") || strings.HasPrefix(ip, "198.19.") {
 				n.score -= 20 // benchmark 段，OrbStack 在用
+				n.Virtual = true
 			}
 			if strings.HasSuffix(ip, ".0") {
 				n.score -= 5
@@ -111,15 +118,16 @@ func ResetCache() {
 // Origins 把当前局域网地址拼成 https origin。给两处用：网页嗅探的候选清单，和 CSP 的
 // connect-src（不放行就连嗅探都发不出去 —— 那是同源策略之外的另一道，容易漏）。
 //
-// **只收私网地址**：公网 IP 挂上去等于把「从任何地方都能直连我」写进 CSP，而这个功能
-// 要解决的只是「同一个 Wi-Fi 下别绕公网」。
+// **只收私网地址上的真网卡**：公网 IP 挂上去等于把「从任何地方都能直连我」写进 CSP，
+// 而这个功能要解决的只是「同一个 Wi-Fi 下别绕公网」；虚拟网卡（见 Addr.Virtual）手机
+// 压根碰不到。
 func Origins(port int) []string {
 	if port <= 0 {
 		return nil
 	}
 	var out []string
 	for _, a := range Current() {
-		if !IsPrivate(a.Address) {
+		if a.Virtual || !IsPrivate(a.Address) {
 			continue
 		}
 		out = append(out, fmt.Sprintf("https://%s:%d", a.Address, port))

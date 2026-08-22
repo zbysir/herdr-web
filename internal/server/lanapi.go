@@ -55,3 +55,21 @@ func (s *Server) apiHandoff(w http.ResponseWriter, r *http.Request) {
 	code, exp := s.Auth.MintCode()
 	writeJSON(w, 200, map[string]any{"code": code, "expires": exp})
 }
+
+// StripForwarded 摘掉转发头，专门套在局域网直连那个监听上。
+//
+// 那个口**不在任何前置后面**（前置只在公网那条路上），所以到它这儿的 `X-Forwarded-For`
+// 一定是客户端自己塞的。而配了 `HERDR_WEB_TRUST_PROXY=1` 的部署里 ClientIP 会照信 ——
+// 于是同一个 Wi-Fi 上的人用一串假 XFF 就能把按 IP 的限速绕干净，而配对码猜解那道门
+// 正好在它后面（全局熔断还在，但那是最后一道，不该让它变成唯一一道）。
+//
+// 摘掉之后 ClientIP 只能拿到真的 RemoteAddr —— 直连口上那本来就是准的，这也是它比
+// 隧道那条路强的地方（frp 的 tcp 模式下所有人都是 127.0.0.1）。
+func StripForwarded(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Header.Del("X-Forwarded-For")
+		r.Header.Del("X-Real-Ip")
+		r.Header.Del("Forwarded")
+		next.ServeHTTP(w, r)
+	})
+}

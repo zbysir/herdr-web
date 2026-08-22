@@ -2,6 +2,7 @@ package tlsgen
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"net"
 	"os"
 	"path/filepath"
@@ -115,4 +116,56 @@ func copyFile(t *testing.T, from, to string) {
 	if err := os.WriteFile(to, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// IP 变了（换 Wi-Fi、插网线、DHCP 换段）之后 Resign 要把 SAN 补上。
+// 不补的表现是手机上 `ERR_CERT_COMMON_NAME_INVALID` —— 那个错**没有「继续访问」的
+// 口子**，而局域网直连这条路恰恰是靠「点一次继续」建立信任的。
+func TestResignPicksUpNewIP(t *testing.T) {
+	dir := t.TempDir()
+	old := []net.IP{net.IPv4(192, 168, 1, 5)}
+	if _, err := Load(dir, "", "", old, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// 换了网段
+	fresh := []net.IP{net.IPv4(10, 0, 0, 7)}
+	if err := Resign(dir, fresh, nil); err != nil {
+		t.Fatal(err)
+	}
+	leaf := readLeaf(t, dir)
+	if !hasIP(leaf, fresh[0]) {
+		t.Errorf("重签之后 SAN 里应当有新地址，现在是 %v", leaf.IPAddresses)
+	}
+
+	// 没变的话不该动 —— 每半分钟换一次证书会把所有连着的 TLS 会话搅一遍
+	before := leaf.SerialNumber.String()
+	if err := Resign(dir, fresh, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := readLeaf(t, dir).SerialNumber.String(); got != before {
+		t.Error("IP 没变却重签了")
+	}
+}
+
+func readLeaf(t *testing.T, dir string) *x509.Certificate {
+	t.Helper()
+	c, err := tls.LoadX509KeyPair(filepath.Join(dir, "tls", "cert.pem"), filepath.Join(dir, "tls", "key.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(c.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return leaf
+}
+
+func hasIP(c *x509.Certificate, ip net.IP) bool {
+	for _, have := range c.IPAddresses {
+		if have.Equal(ip) {
+			return true
+		}
+	}
+	return false
 }

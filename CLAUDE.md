@@ -50,6 +50,16 @@
   `lib/prefs.ts`，两边**一字不差、顺序也一样**，有测试盯着）。加一项就是两边各加一行 +
   `applyProfiles` 里刷一下 state。模型是**服务端为准 + localStorage 镜像**：读的地方一律
   照旧读镜像（终端回调里有几处是同步读的），别改成读 state。
+- 局域网直连（`internal/lan`、`internal/server/lanapi.go`、`web/src/hooks/useLanDirect.ts`）：
+  从隧道进来的页面嗅探「能不能直连」再切过去。四条都是**静默出错**的：① 局域网那个口必须是
+  **TLS** —— https 页面对 `http://` 目标的 fetch 算 active mixed content，浏览器无条件拦死
+  （`no-cors` 也拦），明文口连嗅探都发不出去；② 那些 origin 必须进 **CSP 的 `connect-src`**，
+  不放行的话是被**自己的 CSP** 挡掉，而控制台里那条错和「连不上」长得一样；③ 嗅探只能用
+  `mode:'no-cors'`（普通 fetch 会因为没有 CORS 头 reject，于是把「通」也当成「不通」），它能
+  分清「有响应」和「连不上 / 证书不认」，而这正好是要的全部信息；④ 候选**每次现报**，别缓存 ——
+  内网 IP 会变，而且虚拟网卡（`Addr.Virtual`）要滤掉，手机碰不到 bridge/utun 上那些地址。
+  另外「探不通」有两种原因，**必须分开报**：在外面（安静走公网）和地址变了（旧 origin 上那一下
+  「继续访问」作废了，要提示人去新地址再点一次）—— 混成一种的话这条路会永久静默失效且查不出原因。
 - 触屏那一层（`web/src/term/touch.ts`、`web/src/lib/tap.ts`、面板里的行）有两条**方法上**的
   硬规矩，都是用真机报的 bug 换来的：
   ① **别用合成事件验「浏览器补发的兼容鼠标事件」那一类问题** —— 合成的 `dispatchEvent` 不会派生

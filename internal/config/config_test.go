@@ -129,3 +129,48 @@ func TestPasskeyOrigins(t *testing.T) {
 		t.Error("用不了 passkey 时 origins 该是空的")
 	}
 }
+
+// 局域网直连口。三档的判据不一样，而搞错的表现都是「静默不生效」：
+// 明文口嗅探不到（mixed content），真证书对私网 IP 无效（SAN 不匹配）。
+func TestLanDirectPort(t *testing.T) {
+	cases := []struct {
+		name string
+		c    Config
+		want int
+	}{
+		{"显式配的优先", Config{LanPort: 7789, Port: 7788, TLSMode: "auto"}, 7789},
+		{"主口自签 + 听着局域网 → 就是主口", Config{Port: 7788, TLSMode: "auto"}, 7788},
+		{"自签但只听本机 → 没这条路", Config{Port: 7788, TLSMode: "auto", Loopback: true}, 0},
+		{"前置终止 TLS：主口是明文，嗅探不到", Config{Port: 7788, TLSMode: "proxy"}, 0},
+		{"真证书只对域名有效，照 IP 连是 SAN 不匹配", Config{Port: 7788, TLSMode: "files"}, 0},
+		{"明文部署", Config{Port: 7788, TLSMode: "off"}, 0},
+	}
+	for _, c := range cases {
+		if got := c.c.LanDirectPort(); got != c.want {
+			t.Errorf("%s：得到 %d，想要 %d", c.name, got, c.want)
+		}
+	}
+}
+
+// 撞口只会表现成「第二个监听起不来」的一行日志，夹在启动横幅里看不见 —— 所以直接拒绝启动。
+func TestLanPortConflict(t *testing.T) {
+	t.Setenv("HERDR_WEB_DIR", t.TempDir())
+	t.Setenv("HERDR_WEB_PORT", "7788")
+
+	t.Setenv("HERDR_WEB_LAN_PORT", "7788")
+	if _, err := Load(); err == nil {
+		t.Error("和主口撞了应当报错")
+	}
+	t.Setenv("HERDR_WEB_LAN_PORT", "7789") // 管理口
+	if _, err := Load(); err == nil {
+		t.Error("和管理口撞了应当报错")
+	}
+	t.Setenv("HERDR_WEB_LAN_PORT", "7790")
+	c, err := Load()
+	if err != nil || c.LanPort != 7790 {
+		t.Errorf("LanPort = %d (%v)", c.LanPort, err)
+	}
+	if !c.LanNeedsListener() {
+		t.Error("显式配了就该另起一个监听")
+	}
+}
