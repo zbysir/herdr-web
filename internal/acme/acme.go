@@ -52,6 +52,7 @@ type Config struct {
 	Email string
 	// DNS 是 provider 名字，见 Providers()。凭据**只从环境变量读**，不落盘 ——
 	// 落盘的话它和 TOTP 密钥是同一类问题：这台机器上的 agent 读得到。
+	// 变量名统一带 HERDR_WEB_ 前缀（`HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN` 这种），见 env.go。
 	DNS string
 	// Staging 打开就用 LE 的测试环境。**调试时一定要开**：正式环境有速率限制
 	//（同一组域名一周 5 张证书），试几次就把自己锁在外面了，而且锁的是一周。
@@ -60,7 +61,7 @@ type Config struct {
 
 // Providers 是编译进来的 DNS 服务商，以及各自要的环境变量。
 //
-// 加一家是两行：这张表加一行，newDNS 里加一个 case。
+// 加一家是三处：这张表加一行、newDNS 里加一个 case、env.go 的 dnsNamespaces 加一行。
 func Providers() []string {
 	out := make([]string, 0, len(envHint))
 	for k := range envHint {
@@ -71,18 +72,20 @@ func Providers() []string {
 }
 
 var envHint = map[string]string{
-	"cloudflare":   "CLOUDFLARE_DNS_API_TOKEN（Zone:DNS:Edit 权限）",
-	"alidns":       "ALICLOUD_ACCESS_KEY + ALICLOUD_SECRET_KEY",
-	"tencentcloud": "TENCENTCLOUD_SECRET_ID + TENCENTCLOUD_SECRET_KEY",
-	"route53":      "AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY + AWS_REGION",
-	"digitalocean": "DO_AUTH_TOKEN",
-	"huaweicloud":  "HUAWEICLOUD_ACCESS_KEY_ID + HUAWEICLOUD_SECRET_ACCESS_KEY + HUAWEICLOUD_REGION",
+	"cloudflare":   "HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN（Zone:DNS:Edit 权限）",
+	"alidns":       "HERDR_WEB_ALICLOUD_ACCESS_KEY + HERDR_WEB_ALICLOUD_SECRET_KEY",
+	"tencentcloud": "HERDR_WEB_TENCENTCLOUD_SECRET_ID + HERDR_WEB_TENCENTCLOUD_SECRET_KEY",
+	"route53":      "HERDR_WEB_AWS_ACCESS_KEY_ID + HERDR_WEB_AWS_SECRET_ACCESS_KEY + HERDR_WEB_AWS_REGION",
+	"digitalocean": "HERDR_WEB_DO_AUTH_TOKEN",
+	"huaweicloud":  "HERDR_WEB_HUAWEICLOUD_ACCESS_KEY_ID + HERDR_WEB_HUAWEICLOUD_SECRET_ACCESS_KEY + HERDR_WEB_HUAWEICLOUD_REGION",
 }
 
 // EnvHint 给错误信息用：告诉用户这家要哪几个环境变量。
 func EnvHint(name string) string { return envHint[name] }
 
 func newDNS(name string) (challenge.Provider, error) {
+	// lego 读的是光秃秃的名字，我们对外统一带 HERDR_WEB_ 前缀 —— 见 env.go
+	exportEnv(name)
 	switch name {
 	case "cloudflare":
 		return cloudflare.NewDNSProvider()

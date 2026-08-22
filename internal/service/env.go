@@ -24,6 +24,11 @@ var copyThrough = []string{
 
 // EnvSnapshot 收集要写进 unit / plist 的环境变量：当前进程里所有 HERDR_WEB_*
 // 加上上面那张白名单，再叠上 extra（一般是 --env-file 读出来的，优先级更高）。
+//
+// **云凭据靠的就是这条 HERDR_WEB_* 规则**：DNS provider 的变量名统一带了前缀
+// （`HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN`，见 internal/acme/env.go），所以在 shell 里
+// export 过就能抄进去。反过来说，那个前缀不是为了好看 —— 光秃秃的名字两头都不占，
+// 装出来的服务签不出证书，而且要等到第一次签发才炸。
 func EnvSnapshot(extra map[string]string) map[string]string {
 	out := map[string]string{}
 	for _, kv := range os.Environ() {

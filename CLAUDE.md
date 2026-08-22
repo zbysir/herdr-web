@@ -71,6 +71,14 @@
 - 注释和文档写中文，说清**为什么**（尤其是那些反直觉的取舍），别复述代码在干什么。
 - 终端那层（`web/src/term/`）是命令式的，别往 React 里搬。
 - 命令行用 [cobra](https://github.com/spf13/cobra)，配置用 [viper](https://github.com/spf13/viper) 且**只从环境变量来**（不读配置文件）。加配置项就是 `internal/config/` 里加一行 + README「配置」那节的表格加一行；别新开命令行标志，也别在别处 `os.Getenv`。
+- **所有环境变量都带 `HERDR_WEB_` 前缀，云厂商的 DNS 凭据也不例外**（`HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN`
+  这种；lego 读的是光秃秃的名字，进它之前在 `internal/acme/env.go` 里按命名空间脱前缀）。
+  前缀不是为了整齐：`service install` 抄进 plist / unit 的就是「所有 `HERDR_WEB_*` + 一张短
+  白名单」，光秃秃的名字两头都不占，抄不进去 —— 而这个失败要等到第一次签发（或者三个月后
+  第一次续期）才现形。由此来的两条：① 加一家 provider 是**三处**（`envHint` / `newDNS` /
+  `dnsNamespaces`），少了最后那个的表现是「带前缀的凭据被当成没配」；② 凭据现在跟着前缀一起
+  被 `install` 打到终端上了，所以那段输出里凭据只印星号和长度（`acme.SecretEnv`）—— 那行
+  命令常常就敲在一个跑着 agent 的 pane 里。
 - 改完跑 `make test`（Go 测试 + 前端 typecheck）。涉及 herdr 行为的改动要在真 pane 上验一遍。
 - 发版：`make release V=vX.Y.Z` 打 tag，GitHub Actions 出 Release + 发 npm（`@bysir/herdr-web`）。
   动之前 `make release-dry` 本地跑一遍。**archive 文件名有三处硬编码**要一起改：

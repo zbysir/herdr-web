@@ -28,6 +28,13 @@ func TestChildEnvDropsCredentials(t *testing.T) {
 		"HUAWEICLOUD_ACCESS_KEY_ID",
 		"HUAWEICLOUD_SECRET_ACCESS_KEY",
 		"HERDR_WEB_TOKEN", // 旧的引导 token
+		// 带前缀的写法（现在文档里就是这个，见 internal/acme/env.go）。
+		// 这几条靠 `HERDR_` 那条规则一起被清掉，列出来是为了以后有人收窄那条规则时
+		// 立刻炸掉 —— 不然凭据会悄悄回到 agent 手边。
+		"HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN",
+		"HERDR_WEB_ALICLOUD_SECRET_KEY",
+		"HERDR_WEB_AWS_SECRET_ACCESS_KEY",
+		"HERDR_WEB_DO_AUTH_TOKEN",
 	}
 	for _, k := range secrets {
 		t.Setenv(k, "SENTINEL-"+k)

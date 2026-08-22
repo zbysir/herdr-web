@@ -297,36 +297,39 @@ type provider struct {
 
 // providerHelp 是「不想手填 env」里真正烦的那部分：不知道该填什么、去哪儿建、给多大权限。
 // 凭据本身仍然由用户放进 .env —— 我们不接管保管（那样就没法用 Keychain 之类了）。
+//
+// Vars 里写的是**带 HERDR_WEB_ 前缀**的名字（见 internal/acme/env.go）：页面上那段 .env
+// 片段是直接抄走用的，写成光秃秃的名字就等于教人配一份 `service install` 抄不进去的东西。
 func providerHelp() []provider {
 	meta := map[string]provider{
 		"cloudflare": {
-			Label: "Cloudflare", Vars: []string{"CLOUDFLARE_DNS_API_TOKEN"},
+			Label: "Cloudflare", Vars: []string{"HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN"},
 			Console: "https://dash.cloudflare.com/profile/api-tokens",
 			Perm:    "用 Edit zone DNS 模板，Zone Resources 收窄到你那个域名。别用 Global API Key",
 		},
 		"alidns": {
-			Label: "阿里云 DNS", Vars: []string{"ALICLOUD_ACCESS_KEY", "ALICLOUD_SECRET_KEY"},
+			Label: "阿里云 DNS", Vars: []string{"HERDR_WEB_ALICLOUD_ACCESS_KEY", "HERDR_WEB_ALICLOUD_SECRET_KEY"},
 			Console: "https://ram.console.aliyun.com/users",
 			Perm:    "建 RAM 子用户 + AliyunDNSFullAccess。别用主账号 AccessKey",
 		},
 		"tencentcloud": {
-			Label: "腾讯云 / DNSPod", Vars: []string{"TENCENTCLOUD_SECRET_ID", "TENCENTCLOUD_SECRET_KEY"},
+			Label: "腾讯云 / DNSPod", Vars: []string{"HERDR_WEB_TENCENTCLOUD_SECRET_ID", "HERDR_WEB_TENCENTCLOUD_SECRET_KEY"},
 			Console: "https://console.cloud.tencent.com/cam/user",
 			Perm:    "建子用户 + QcloudDNSPodFullAccess",
 		},
 		"route53": {
-			Label: "AWS Route 53", Vars: []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"},
+			Label: "AWS Route 53", Vars: []string{"HERDR_WEB_AWS_ACCESS_KEY_ID", "HERDR_WEB_AWS_SECRET_ACCESS_KEY", "HERDR_WEB_AWS_REGION"},
 			Console: "https://console.aws.amazon.com/iam/home#/users",
-			Perm:    "最小策略见 DNS.md。AWS_REGION 必填（写 us-east-1 就行）",
+			Perm:    "最小策略见 DNS.md。REGION 必填（写 us-east-1 就行）",
 		},
 		"digitalocean": {
-			Label: "DigitalOcean", Vars: []string{"DO_AUTH_TOKEN"},
+			Label: "DigitalOcean", Vars: []string{"HERDR_WEB_DO_AUTH_TOKEN"},
 			Console: "https://cloud.digitalocean.com/account/api/tokens",
 			Perm:    "细粒度 token，只勾 domain 的 read + write",
 		},
 		"huaweicloud": {
 			Label:   "华为云 DNS",
-			Vars:    []string{"HUAWEICLOUD_ACCESS_KEY_ID", "HUAWEICLOUD_SECRET_ACCESS_KEY", "HUAWEICLOUD_REGION"},
+			Vars:    []string{"HERDR_WEB_HUAWEICLOUD_ACCESS_KEY_ID", "HERDR_WEB_HUAWEICLOUD_SECRET_ACCESS_KEY", "HERDR_WEB_HUAWEICLOUD_REGION"},
 			Console: "https://console.huaweicloud.com/iam/",
 			Perm:    "IAM 用户 + DNS FullAccess。REGION 必填，如 cn-north-4",
 		},

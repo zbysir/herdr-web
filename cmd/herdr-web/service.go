@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/zbysir/herdr-web/internal/acme"
 	"github.com/zbysir/herdr-web/internal/config"
 	"github.com/zbysir/herdr-web/internal/selfupdate"
 	"github.com/zbysir/herdr-web/internal/service"
@@ -20,7 +21,8 @@ func serviceCmd() *cobra.Command {
 		Short: "装成常驻服务（开机自启）",
 		Long: "把 herdr-web 装成 user 级常驻服务：macOS 用 launchd，Linux 用 systemd。\n\n" +
 			"配置是**装的那一刻**从当前 shell 里抄进 plist / unit 的（所有 HERDR_WEB_* 加上\n" +
-			"PATH / SHELL / LANG 这几个）。所以先把环境配对，再 install；改了配置要重新 install。\n" +
+			"PATH / SHELL / LANG 这几个）。DNS 凭据也带 HERDR_WEB_ 前缀，所以一起抄进去。\n" +
+			"所以先把环境配对，再 install；改了配置要重新 install。\n" +
 			"想从文件读：herdr-web service install --env-file .env",
 	}
 	root.AddCommand(serviceInstallCmd(), serviceUninstallCmd(), serviceStatusCmd(),
@@ -82,6 +84,14 @@ func serviceInstallCmd() *cobra.Command {
 				// PATH 太长，横幅上没意义，只说抄了
 				if k == "PATH" {
 					fmt.Printf("    %-24s（%d 个目录，照抄当前 shell）\n", k, 1+countColon(v))
+					continue
+				}
+				// 云凭据和引导 token 不打明文：这段输出常常就落在一个跑着 agent 的
+				// pane 里，`service install` 一敲等于把云账号密钥念给它听。
+				// 但也不能只字不提 —— 「到底抄没抄进去」是这条路最容易错的地方，
+				// 所以照样列出名字，只把值换成长度。
+				if acme.SecretEnv(k) || k == "HERDR_WEB_TOKEN" {
+					fmt.Printf("    %-24s ****（%d 字符，没打出来）\n", k, len(v))
 					continue
 				}
 				fmt.Printf("    %-24s %s\n", k, v)

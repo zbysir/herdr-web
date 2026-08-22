@@ -164,7 +164,8 @@ func (m *Manager) Install(say func(string)) error {
 // writeUnit 把 plist / unit 落盘。
 //
 // **0600**：这份文件里存着 install 那一刻抄进来的全部环境变量 —— 走 ACME 的话，
-// DNS provider 的 token（`--env-file` 里的 key 是整份进来的）就明文躺在里面。
+// DNS provider 的 token（`HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN` 这种，跟着前缀一起抄进来）
+// 就明文躺在里面。
 // 这台机器上跑着读不可信内容的 agent，磁盘上别的地方都没留能直接用的明文，
 // 这儿也不该是个例外。
 //

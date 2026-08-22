@@ -64,7 +64,7 @@ HERDR_WEB_HOST=0.0.0.0 ./herdr-web        # 自动自签证书，扫终端里的
 HERDR_WEB_HOST=0.0.0.0 \
 HERDR_WEB_HOSTNAME=herdr.example.com \
 HERDR_WEB_ACME_DNS=cloudflare \
-CLOUDFLARE_DNS_API_TOKEN=... \
+HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN=... \
 ./herdr-web
 ```
 

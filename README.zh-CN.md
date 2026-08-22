@@ -331,7 +331,9 @@ herdr-web service install --env-file .env
 
 抄进去的是所有 `HERDR_WEB_*`，加上 `PATH` / `SHELL` / `HOME` / `USER` / `LOGNAME` / `LANG` / `LC_ALL` / `TERM` / `HERDR_SOCKET_PATH`。`install` 会把这份清单全打出来 —— 以后「这台机器上服务到底在用哪套配置」只能靠 plist / unit 回答，装的时候看一眼最省事。
 
-**签证书那条路（C / D 档）必须用 `--env-file`。** DNS provider 的凭据（`CLOUDFLARE_DNS_API_TOKEN`、`ALICLOUD_ACCESS_KEY` 这些）既不带 `HERDR_WEB_` 前缀、也不在上面那张白名单里，所以**从 shell 抄不进去**：你在 `.zshrc` 里 export 得再对，装出来的服务照样签不出证书，而且要等到第一次签发才炸。`--env-file` 里的 key 是**整份**进去的（还盖过当前环境），这是唯一能把 token 交给服务的路。文件只在 `install` 那一刻读，之后不再碰。
+**DNS provider 的凭据也带 `HERDR_WEB_` 前缀**（`HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN`、`HERDR_WEB_ALICLOUD_ACCESS_KEY` 这些），所以跟着上面那条规则一起抄进去 —— shell 里 export 过就行，不用非走 `--env-file`。前缀不是为了整齐：光秃秃的 `CLOUDFLARE_DNS_API_TOKEN` 前缀和白名单两头都不占，抄不进去，而这个失败要等到第一次签发（或者三个月后第一次续期）才现形。老写法 lego 自己仍然认，但只能靠 `--env-file` 送进服务；两个都给的话带前缀的赢。各家变量名见 [DNS.md](DNS.md)。
+
+`--env-file` 里的 key 是**整份**进去的（还盖过当前环境），文件只在 `install` 那一刻读，之后不再碰。`install` 打出来的那份清单里，凭据只显示星号和长度 —— 那段输出常常就落在一个跑着 agent 的 pane 里。
 
 plist / unit 是 **0600** 的 —— 里面就是这份环境变量的明文。
 

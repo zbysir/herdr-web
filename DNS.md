@@ -9,8 +9,14 @@ herdr-web 自己签证书用的是 **DNS-01**：它需要往你的域名下临�
 HERDR_WEB_HOSTNAME=herdr.example.com
 HERDR_WEB_ACME_DNS=cloudflare
 HERDR_WEB_ACME_STAGING=1        # 第一次一定先开，见下面「先用测试环境」
-CLOUDFLARE_DNS_API_TOKEN=xxxxx
+HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN=xxxxx
 ```
+
+**变量名都带 `HERDR_WEB_` 前缀，云厂商那几个也一样。** 这不是为了整齐：
+`herdr-web service install` 抄进 plist / unit 的就是「所有 `HERDR_WEB_*` + 一张短白名单」，
+光秃秃的 `CLOUDFLARE_DNS_API_TOKEN` 两头都不占 —— 装出来的服务签不出证书，而且要等到
+第一次签发（或者三个月后第一次续期）才炸。老写法仍然认（lego 自己会读），两个都给的话
+**带前缀的赢**。
 
 ## 三条通用原则
 
@@ -21,6 +27,8 @@ CLOUDFLARE_DNS_API_TOKEN=xxxxx
 
 **二、放 `.env`，别写进 shell 的 rc。** 写进 `~/.zshrc` 的话，你在终端里跑的每个进程都能
 看到它，包括 agent。`.env` 只有 herdr-web 自己读，而且已经在 `.gitignore` 里。
+（带了前缀之后 rc 里 export 也**能**被 `service install` 抄进去 —— 能用不等于该用，
+上面这条理由一条都没少。）
 
 **三、这些变量不会漏进网页里的终端。** PTY 的子进程环境会被 `dropEnv` 清掉这一批
 （`internal/server/pty.go`）—— 否则终端里的 agent `echo` 一下就读走了。清掉不影响你自己用：
@@ -40,7 +48,7 @@ PTY 起的是登录 shell，会重新 source 你的 profile，你在 rc 里 expo
 ## Cloudflare
 
 ```bash
-CLOUDFLARE_DNS_API_TOKEN=...
+HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN=...
 ```
 
 1. 右上头像 → **My Profile** → **API Tokens** → **Create Token**
@@ -50,7 +58,8 @@ CLOUDFLARE_DNS_API_TOKEN=...
 5. 创建后 token 只显示一次
 
 ⚠️ 别用 **Global API Key**（那是账号全权限，虽然 lego 也认 `CLOUDFLARE_EMAIL` +
-`CLOUDFLARE_API_KEY`，但等于把整个 Cloudflare 账号交出去）。
+`CLOUDFLARE_API_KEY`，也就是 `HERDR_WEB_CLOUDFLARE_EMAIL` + `HERDR_WEB_CLOUDFLARE_API_KEY`，
+但等于把整个 Cloudflare 账号交出去）。
 
 ⚠️ 记录如果是**橙云**（代理状态），TLS 会在 Cloudflare 解密一次 —— 签证书不受影响，但那
 就多了一个能看到你终端内容的第三方。想端到端就调成灰云（DNS only）。
@@ -58,8 +67,8 @@ CLOUDFLARE_DNS_API_TOKEN=...
 ## 阿里云（alidns）
 
 ```bash
-ALICLOUD_ACCESS_KEY=...
-ALICLOUD_SECRET_KEY=...
+HERDR_WEB_ALICLOUD_ACCESS_KEY=...
+HERDR_WEB_ALICLOUD_SECRET_KEY=...
 ```
 
 1. 控制台 → **访问控制 RAM** → 用户 → **创建用户**，勾「使用永久 AccessKey 访问」
@@ -79,8 +88,8 @@ ALICLOUD_SECRET_KEY=...
 ## 腾讯云（tencentcloud）
 
 ```bash
-TENCENTCLOUD_SECRET_ID=...
-TENCENTCLOUD_SECRET_KEY=...
+HERDR_WEB_TENCENTCLOUD_SECRET_ID=...
+HERDR_WEB_TENCENTCLOUD_SECRET_KEY=...
 ```
 
 1. 控制台 → **访问管理 CAM** → 用户 → **新建用户** → 自定义创建，勾「编程访问」
@@ -94,9 +103,9 @@ TENCENTCLOUD_SECRET_KEY=...
 ## AWS Route 53
 
 ```bash
-AWS_ACCESS_KEY_ID=...
-AWS_SECRET_ACCESS_KEY=...
-AWS_REGION=us-east-1
+HERDR_WEB_AWS_ACCESS_KEY_ID=...
+HERDR_WEB_AWS_SECRET_ACCESS_KEY=...
+HERDR_WEB_AWS_REGION=us-east-1
 ```
 
 1. **IAM** → 用户 → 创建用户 → 给它一个内联策略：
@@ -109,16 +118,17 @@ AWS_REGION=us-east-1
    ```
 2. 创建 Access key（Security credentials 页）
 
-⚠️ `AWS_REGION` 随便填一个合法值就行 —— Route 53 是全局服务，但 SDK 一定要一个 region，
+⚠️ `HERDR_WEB_AWS_REGION` 随便填一个合法值就行 —— Route 53 是全局服务，但 SDK 一定要一个 region，
 不给会报一个不知所云的错。
 
-⚠️ 机器上本来就有 `~/.aws/credentials` 或 `AWS_PROFILE` 的话，lego 也会用它们。那就意味着
+⚠️ 机器上本来就有 `~/.aws/credentials` 或 `AWS_PROFILE` 的话，lego 也会用它们（AWS SDK
+自己那套查找链，不经过我们的前缀）。那就意味着
 **签证书用的是你日常那把全权限密钥** —— 建议还是显式给这三个变量，用专门的最小权限用户。
 
 ## DigitalOcean
 
 ```bash
-DO_AUTH_TOKEN=...
+HERDR_WEB_DO_AUTH_TOKEN=...
 ```
 
 1. 左下 **API** → **Tokens** → **Generate New Token**
@@ -128,24 +138,26 @@ DO_AUTH_TOKEN=...
 ## 华为云（huaweicloud）
 
 ```bash
-HUAWEICLOUD_ACCESS_KEY_ID=...
-HUAWEICLOUD_SECRET_ACCESS_KEY=...
-HUAWEICLOUD_REGION=cn-north-4
+HERDR_WEB_HUAWEICLOUD_ACCESS_KEY_ID=...
+HERDR_WEB_HUAWEICLOUD_SECRET_ACCESS_KEY=...
+HERDR_WEB_HUAWEICLOUD_REGION=cn-north-4
 ```
 
 1. 控制台 → **统一身份认证 IAM** → 用户 → 创建用户，访问方式选「编程访问」
 2. 授权：**DNS FullAccess**（收窄的话自定义策略只给记录集的增删查）
 3. 我的凭证 → **访问密钥** → 新增，下载那个 csv（只能下一次）
 
-⚠️ `HUAWEICLOUD_REGION` 必填，写你账号常用的那个（`cn-north-4` / `cn-east-3` …）。DNS 本身
+⚠️ `HERDR_WEB_HUAWEICLOUD_REGION` 必填，写你账号常用的那个（`cn-north-4` / `cn-east-3` …）。DNS 本身
 是全局服务，但 SDK 要 region 才能签请求。
 
 ---
 
 ## 换一家没编译进来的怎么办
 
-现在编译进来的是这六家。lego 支持一百五十多家，加一家是两行代码
-（`internal/acme/acme.go` 里 `envHint` 加一行、`newDNS` 加一个 `case`）。
+现在编译进来的是这六家。lego 支持一百五十多家，加一家是三处
+（`internal/acme/acme.go` 里 `envHint` 加一行、`newDNS` 加一个 `case`，
+`internal/acme/env.go` 里 `dnsNamespaces` 加一行 —— 少了最后那个，带前缀的凭据会被
+当成没配）。
 
 之所以不全都编译进来：那个聚合包会把一百多家的 SDK 全带上，二进制涨一个数量级
 （实测每家的边际成本只有 0.5–1.8 MB，但一百五十家就不是这个量级了）。
@@ -164,9 +176,12 @@ HERDR_WEB_TLS_KEY=/path/privkey.pem
 ## 出错了看这里
 
 - **`不认识的 DNS 服务商 "aliyun"`** → 名字是 `alidns`。错误信息里会列出全部六个。
-- **`some credentials information are missing: XXX`** → 那几个变量没读到。检查是不是写在
-  `.env` 里而不是别的地方，以及 `make run` 有没有真的读到那个文件（启动时会打一行
-  `→ 配置：./.env`）。
+- **`some credentials information are missing: XXX`** → 那几个变量没读到。**lego 报的是
+  没有前缀的名字**（`CLOUDFLARE_DNS_API_TOKEN`），我们在下一行会补一句带前缀的 ——
+  照带前缀的那个配。然后检查是不是写在 `.env` 里而不是别的地方，以及 `make run` 有没有
+  真的读到那个文件（启动时会打一行 `→ 配置：./.env`）。
+- **在终端里 export 了却不生效** → 少了 `HERDR_WEB_` 前缀。`herdr-web service install`
+  的输出里会把抄进去的变量全列出来（凭据只打星号和长度），没看到名字就是没抄进去。
 - **一直卡在 DNS 验证** → 权限不够（能查不能写），或者域名的 NS 其实不在这家。
   `dig +short TXT _acme-challenge.你的域名` 能看到那条临时记录说明写进去了。
 - **`too many certificates already issued`** → 撞上正式环境一周 5 张的限制了。只能等，

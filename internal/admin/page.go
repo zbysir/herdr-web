@@ -112,7 +112,7 @@ function dnsSection(){
     '<div class=row><div class=k>服务商</div><div class=v><select id=prov>'+opts+'</select></div></div>'+
     '<div id=provInfo></div>'+
     '<div class="msg muted">凭据我们不代管 —— 你自己粘进 <code>.env</code>。这样你还可以把它放在'+
-    '更好的地方（比如 macOS 的 Keychain：<code>CLOUDFLARE_DNS_API_TOKEN=$(security find-generic-password -s cf-dns -w)</code>），'+
+    '更好的地方（比如 macOS 的 Keychain：<code>HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN=$(security find-generic-password -s cf-dns -w)</code>），'+
     '而我们一旦接管就只能存明文。详细说明见仓库里的 <code>DNS.md</code>。</div></section>'
 }
 

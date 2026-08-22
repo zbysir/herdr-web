@@ -387,7 +387,9 @@ herdr-web service install --env-file .env
 
 What gets copied is every `HERDR_WEB_*`, plus `PATH` / `SHELL` / `HOME` / `USER` / `LOGNAME` / `LANG` / `LC_ALL` / `TERM` / `HERDR_SOCKET_PATH`. `install` prints the whole list — from then on, "which configuration is this machine's service actually using" can only be answered by the plist / unit, so it is cheapest to read it at install time.
 
-**Certificate issuance (tiers C / D) requires `--env-file`.** DNS provider credentials (`CLOUDFLARE_DNS_API_TOKEN`, `ALICLOUD_ACCESS_KEY` and friends) neither carry the `HERDR_WEB_` prefix nor appear in the allowlist above, so **they are not copied from the shell**: however correctly you exported them in `.zshrc`, the installed service still cannot get a certificate — and it only blows up at the first issuance. Keys in `--env-file` go in **wholesale** (and override the current environment), which makes it the only way to hand the token to the service. The file is read at `install` time only and never touched again.
+**DNS provider credentials carry the `HERDR_WEB_` prefix too** (`HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN`, `HERDR_WEB_ALICLOUD_ACCESS_KEY` and friends), so the rule above already copies them — exporting them in your shell is enough, no `--env-file` required. The prefix is not cosmetic: a bare `CLOUDFLARE_DNS_API_TOKEN` matches neither the prefix nor the allowlist, so it is not copied, and that failure only surfaces at the first issuance (or three months later, at the first renewal). lego still reads the bare names, but those can only reach the service through `--env-file`; when both are set, the prefixed one wins. Per-provider variable names are in [DNS.md](DNS.md).
+
+Keys in `--env-file` go in **wholesale** (and override the current environment). The file is read at `install` time only and never touched again. In the list `install` prints, credentials show up as asterisks and a length — that output often lands in a pane with an agent in it.
 
 The plist / unit is **0600** — its contents are exactly that environment in plaintext.
 
