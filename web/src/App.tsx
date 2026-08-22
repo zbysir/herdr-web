@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Maximize, Minimize } from './icons'
-import { api, filesApi, resolveBar, SESSION, UNAUTHED, type ClipResult, type FileStat, type Notice, type SoftKey, type SoftkeysResponse, type State, type TopbarResponse, type UnauthedDetail, type WhoAmI } from '@/lib/api'
+import { api, deviceKind, filesApi, resolveBar, SESSION, UNAUTHED, type ClipResult, type FileStat, type Notice, type ProfilesResponse, type SoftKey, type SoftkeysResponse, type State, type TopbarResponse, type UnauthedDetail, type WhoAmI } from '@/lib/api'
+import { applyPrefs, pushPref } from '@/lib/prefs'
 import { readClipboard, writeClipboard } from '@/lib/clipboard'
 import { Session } from '@/term/session'
 import { initialScheme, type Scheme } from '@/term/themes'
@@ -106,26 +107,43 @@ export default function App() {
     () => Number(localStorage.getItem('fontSize')) || (matchMedia('(pointer: coarse)').matches ? 11 : 13),
   )
   const [opts, setOpts] = useState<TermOpts>({
-    kitty: true, meta: true, copyOnSelect: false, sync2026: lsBool('sync2026', true),
+    // 这五个**整组**跟着 profile 走（见 lib/prefs.ts）。前三个原来压根没落盘 ——
+    // 取消勾选、刷新一次又回来了，那是个 bug，不是「只在这次会话里生效」的设计。
+    kitty: lsBool('kitty', true), meta: lsBool('meta', true), copyOnSelect: lsBool('copyOnSelect', false),
+    sync2026: lsBool('sync2026', true),
     // 默认开：只有窄屏（herdr 换成移动端布局）才有那个 switch 按钮，也就是只有手机 /
     // 平板上会碰到 —— 而在那儿 herdr 自己那张面板正是最难用的一处（多 pane 平铺读不了）。
     // 宽屏上根本没有那个按钮，这条开着也不改变任何行为。
     switchPanel: lsBool('switchPanel', true),
   })
 
-  const [settings, setSettings] = useState(false)
-  // 面板一览（跳到某个 pane 并全屏）。手机上换 pane 只有这条路走得通 —— 见 PaneSwitcher
-  const [panesOpen, setPanesOpen] = useState(false)
   /**
-   * 文件浏览。两块东西：
-   *   filesOpen  兜底的目录浏览面板（filesAt 是「打开时定位到哪儿」）
-   *   viewing    查看器（图 / 文本）。**主入口是终端里点一条路径**，那时候面板根本不开。
+   * 顶栏点出来的那几块面板：**同一时刻只开一块**。
+   *
+   * 为什么是一个「当前是哪一块」而不是三个布尔量：三块都浮在同一个角上（现在还贴着顶栏、
+   * 更高了），两块同时开就是互相遮盖。用一个字段的话，互斥是「**存不下**第二块」——
+   * 而三个布尔量要靠每个入口都记得把另外两个关掉，漏一个就是一个只在某条路径上出现的
+   * 遮挡 bug（而且入口不止顶栏：软键条的 act:、herdr 的 switch、提示卡的「更多」、
+   * 终端里点一条路径都能开）。
+   *
+   * 面板一览（panes）在手机上是换 pane 唯一走得通的路，见 PaneSwitcher。
+   */
+  const [panel, setPanel] = useState<'panes' | 'files' | 'settings' | null>(null)
+  const settings = panel === 'settings'
+  const panesOpen = panel === 'panes'
+  const filesOpen = panel === 'files'
+  /**
+   * 文件浏览的两块东西：
+   *   panel === 'files'  兜底的目录浏览面板（filesAt 是「打开时定位到哪儿」）
+   *   viewing            查看器（图 / 文本）。**主入口是终端里点一条路径**，那时候面板根本不开。
+   *
+   * viewing **不进上面那个互斥**：它是刻意压在文件面板上面的一层 —— 从面板里点开一张图，
+   * 退出来还该回到那个目录（见下面渲染那儿的注释）。
    *
    * viewing 存的是**已经 stat 过的结果**，不是一条待解析的路径：是文件还是目录得在
    * 开弹窗之前就知道（见 openPath），不然点一个目录会先摊一句「这是个目录」再让人
    * 多点一下 —— 点路径的人要的就是「打开它」。
    */
-  const [filesOpen, setFilesOpen] = useState(false)
   const [filesAt, setFilesAt] = useState<string | undefined>(undefined)
   const [viewing, setViewing] = useState<FileStat | null>(null)
   // 记住上次看的那一页
@@ -139,7 +157,8 @@ export default function App() {
    * 面板图标上那个角标（还有几条没看）画不画。**只管角标，不管弹窗** —— 有人嫌它一直挂着扎眼，
    * 而提示卡是自己会走的，两件事分开。整套提示要关在服务端（`HERDR_WEB_NOTICE_MS=0`）。
    *
-   * 存在本地：这是「这台设备上看着舒服不舒服」的偏好，不是部署的策略。
+   * 跟着**这套排布**走（见 lib/prefs.ts）：这是「这类设备上看着舒服不舒服」的偏好，不是部署
+   * 的策略。localStorage 里那份是镜像，服务端为准。
    */
   const [noticeDot, setNoticeDot] = useState(() => lsBool('noticeDot', true))
   /**
@@ -178,6 +197,13 @@ export default function App() {
    * 看着就像坏了（而且「设置」那个入口也不在，连改都没法改）。
    */
   const [topbar, setTopbar] = useState<TopbarId[]>(TOPBAR_DEFAULT)
+  /**
+   * 这台设备用哪一套排布（profile，见 internal/profiles）。
+   *
+   * 初值就是「默认」那一套，不等服务端：软键条 / 顶栏的 GET 服务端自己会按绑定算，这里这份
+   * 只用来显示名字和往 prefs 上写 —— 名字先写「默认」，报到回来再纠正，比先画一片空白好。
+   */
+  const [profile, setProfile] = useState({ id: 'default', name: '默认' })
   const [cfg, setCfg] = useState({ poll: urlNum('poll') ?? 500, push: urlNum('push') ?? 700 })
   const [state, setState] = useState<State | null>(null)
 
@@ -282,7 +308,7 @@ export default function App() {
   const openFiles = useCallback((at?: string) => {
     blurInput() // 和 openPanes 同理：键盘占着半个屏时，点面板里第一下只会收键盘
     setFilesAt(at)
-    setFilesOpen(true)
+    setPanel('files')
     void compose.loadPanes(true)
   }, [compose.loadPanes])
 
@@ -391,14 +417,19 @@ export default function App() {
     sess.current.opts = opts
     sess.current.term.options.macOptionIsMeta = opts.meta
     if (!opts.sync2026) sess.current.flushSync()
-    localStorage.setItem('sync2026', opts.sync2026 ? '1' : '0')
-    localStorage.setItem('switchPanel', opts.switchPanel ? '1' : '0')
+    // 这里**不写** localStorage：这个 effect 挂载时也跑一遍，那一下会拿本地默认值盖掉
+    // 服务端刚要下发的那份（报到的响应还在路上）—— 表现就是「这两个开关换台设备就忘」。
+    // 落盘 + 推服务端都在 setOpt 里，那儿只在人真的点了的时候跑。
   }, [opts, ready])
 
-  // 跟随系统明暗
+  // 跟随系统明暗 —— **但自己点过一次就钉住**（那一下进了 profile，见 lib/prefs.ts）。
+  // 不钉的话：系统一切换就把 profile 里存的值冲掉，下次报到又把它读回来，两边来回打。
   useEffect(() => {
     const mq = matchMedia('(prefers-color-scheme: light)')
-    const f = (e: MediaQueryListEvent) => setScheme(e.matches ? 'light' : 'dark')
+    const f = (e: MediaQueryListEvent) => {
+      if (localStorage.getItem('scheme')) return
+      setScheme(e.matches ? 'light' : 'dark')
+    }
     mq.addEventListener('change', f)
     return () => mq.removeEventListener('change', f)
   }, [])
@@ -429,10 +460,8 @@ export default function App() {
         e.stopPropagation()
         return
       }
-      if (settings || panesOpen || filesOpen) {
-        setSettings(false)
-        setPanesOpen(false)
-        setFilesOpen(false)
+      if (panel) {
+        setPanel(null)
         e.preventDefault()
         e.stopPropagation()
         return
@@ -446,7 +475,7 @@ export default function App() {
     // 挂 bubble 的话终端一聚焦就收不到事件了（「面板开着按 Esc 却发给了终端」就是这么来的）。
     addEventListener('keydown', onKey, true)
     return () => removeEventListener('keydown', onKey, true)
-  }, [settings, panesOpen, filesOpen, viewing])
+  }, [panel, viewing])
 
   // 布局变化（软键条 / 发件箱开合、顶栏收放）都要重排终端
   useEffect(() => { sess.current?.relayout() }, [showCompose, showKeys, peek])
@@ -504,6 +533,67 @@ export default function App() {
     return () => removeEventListener(UNAUTHED, onUnauthed)
   }, [])
 
+  /**
+   * 拉这台设备该用的那一套排布（软键条 + 顶栏）。
+   *
+   * 不带 `?profile=`：**哪一套由服务端按这台设备的绑定算**，前端这份 profile.id 只是显示用。
+   * 换一套之后也走这儿 —— 绑定在服务端已经改了，这一趟拿回来的就是新那一套。
+   */
+  const loadLayout = useCallback(async () => {
+    try {
+      const sk = await api.get<SoftkeysResponse>('/softkeys')
+      setBar(resolveBar(sk.lib, sk.bar))
+    } catch { /* 软键条拿不到就先空着，面板里还能改 */ }
+    try {
+      const tb = await api.get<TopbarResponse>('/topbar')
+      // 认不出的 id 直接跳过（服务端不该给，防一手 —— 新版本存的配置在旧前端上读到过）
+      setTopbar(tb.items.filter((id): id is TopbarId => TOPBAR_BY_ID.has(id as TopbarId)))
+    } catch { /* 拿不到就用出厂顺序，顶栏不能空 */ }
+  }, [])
+
+  /**
+   * 名册 / 绑定回来了：记住是哪一套，再把那一套的开关铺开。
+   *
+   * 顺序是「先盖镜像（applyPrefs），再刷 React 这侧的 state」—— 有几处是直接读
+   * localStorage 的（终端回调里的 kbdFull、提示回调里的 noticeOS），见 lib/prefs.ts。
+   * 字号还要多过一手终端那层：那是要重新算行列的，光改 state 不重排。
+   */
+  const applyProfiles = (r: ProfilesResponse) => {
+    const p = r.profiles?.find((x) => x.id === r.current)
+    setProfile({ id: r.current, name: p?.name ?? r.current })
+    applyPrefs(r.prefs)
+    setOpts({
+      kitty: lsBool('kitty', true), meta: lsBool('meta', true), copyOnSelect: lsBool('copyOnSelect', false),
+      sync2026: lsBool('sync2026', true), switchPanel: lsBool('switchPanel', true),
+    })
+    setKbdFull(lsBool('kbdFull', true))
+    setNoticeDot(lsBool('noticeDot', true))
+    setNoticeOS(lsBool('noticeOS', false))
+    setNoticeOSFg(lsBool('noticeOSFg', false))
+    setNoticeMs(Number(localStorage.getItem('noticeCardMs') ?? AUTO_MS_DEFAULT) || 0)
+    const sc = localStorage.getItem('scheme')
+    if (sc === 'dark' || sc === 'light') setScheme(sc)
+    const fs = Number(localStorage.getItem('fontSize'))
+    if (fs > 0) setFontSize(sess.current?.setFontSize(fs) ?? fs)
+  }
+
+  /**
+   * 终端那五个开关，**整组跟着 profile 走**：键盘协议 / Option 当 Meta 是「这台机器的键盘
+   * 长什么样」，选中即复制、同步输出、点 switch 开面板一览是「这类设备上怎么用」—— 都是
+   * 换台设备就该换一份的东西。
+   */
+  const setOpt = useCallback((k: keyof TermOpts, v: boolean) => {
+    setOpts((o) => ({ ...o, [k]: v }))
+    pushPref(profile.id, k, v ? '1' : '0', toast)
+  }, [profile.id, toast])
+
+  /** 明暗。点这一下就把它钉在这一套 profile 上（见上面那个 media 监听） */
+  const flipScheme = useCallback(() => {
+    const next: Scheme = scheme === 'dark' ? 'light' : 'dark'
+    setScheme(next)
+    pushPref(profile.id, 'scheme', next, toast)
+  }, [scheme, profile.id, toast])
+
   /* --------------------------------------------------------- 启动拉配置 */
   useEffect(() => {
     if (gate !== 'ok') return
@@ -517,14 +607,12 @@ export default function App() {
         })
       } catch { /* 拿不到就用默认值 */ }
       try {
-        const sk = await api.get<SoftkeysResponse>('/softkeys')
-        setBar(resolveBar(sk.lib, sk.bar))
-      } catch { /* 软键条拿不到就先空着，面板里还能改 */ }
-      try {
-        const tb = await api.get<TopbarResponse>('/topbar')
-        // 认不出的 id 直接跳过（服务端不该给，防一手 —— 新版本存的配置在旧前端上读到过）
-        setTopbar(tb.items.filter((id): id is TopbarId => TOPBAR_BY_ID.has(id as TopbarId)))
-      } catch { /* 拿不到就用出厂顺序，顶栏不能空 */ }
+        // 报到：服务端记住这台设备，第一次来的话按 kind 挑一套绑上（见 internal/profiles）。
+        // **在拉排布之前**：那两个 GET 靠这台设备的绑定算「哪一套」，顺序颠倒的话第一次
+        // 打开拿到的是默认那一套，绑好的那套要等下次刷新。
+        applyProfiles(await api.post<ProfilesResponse>('/profiles/hello', { kind: deviceKind() }))
+      } catch { /* 老版本服务端没这个口 / 写不进盘：照旧用默认那一套 */ }
+      await loadLayout()
       void compose.loadPanes(true)
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -594,6 +682,15 @@ export default function App() {
   const fullWarned = useRef(!!localStorage.getItem('kbdFullErr'))
   /** 有一次 requestFullscreen 还在路上：挡住同一下手势里的第二次请求（见 enterFull） */
   const fullPending = useRef(false)
+  /**
+   * 那把锁的**自动解锁**定时器。
+   *
+   * 必须有：安卓上见过 requestFullscreen 被静默忽略 —— 既不 resolve 也不 reject、
+   * 也不来 fullscreenchange，于是 `.finally` 永远不跑，锁一直合着。之后每次点全屏都被
+   * 那一行挡掉，表现就是**「按钮点了没反应，连提示都没有」**（用户报的）。
+   * 这把锁本来只为「同一下手势里进来两次」而设，1.5 秒之后放开不会漏掉任何去重。
+   */
+  const fullUnlock = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => {
     const d = document as FsDoc
     const sync = () => {
@@ -636,19 +733,44 @@ export default function App() {
       say('这个浏览器不给网页全屏。iPad / iPhone 上把页面「添加到主屏幕」，从主屏打开就没有地址栏了')
       return
     }
-    // 用户手势之外调用、或者被策略挡住都会 reject，别让它变成一个没人看见的报错
-    void Promise.resolve(req.call(el))
+    // 用户手势之外调用、或者被策略挡住都会 reject，别让它变成一个没人看见的报错。
+    // **同步抛也得接住**：老 webkit 那套（和安卓上一些内核）是当场 throw 而不是 reject，
+    // 抛出去的话下面那个 finally 不跑，锁就永远合着（见 fullUnlock）。
+    // 「请求发出去了但一声不响」也要有个说法：安卓上见过既不 resolve 也不 reject、
+    // fullscreenchange 也不来的情形，那时候什么都不说就是纯粹的「点了没反应」。
+    let settled = false
+    clearTimeout(fullUnlock.current)
+    fullUnlock.current = setTimeout(() => {
+      fullPending.current = false
+      if (settled || (d.fullscreenElement ?? d.webkitFullscreenElement)) return
+      say('全屏没生效：浏览器把这个请求吃掉了（既没成功也没报错）。iPad / 安卓上把页面「添加到主屏幕」，从主屏打开就没有地址栏了')
+    }, 1500)
+    let p: unknown
+    try {
+      p = req.call(el)
+    } catch (e) {
+      fullPending.current = false
+      clearTimeout(fullUnlock.current)
+      say('全屏失败：' + (e as Error).message)
+      return
+    }
+    void Promise.resolve(p)
       .then(() => {
+        settled = true
         // 成功过一次就把旧的失败记录清掉，不然设置里一直挂着一句过期的话
         localStorage.removeItem('kbdFullErr')
         fullWarned.current = false
       })
       // 被拒但**人已经在全屏里**（另一条路先成了）不算失败，别去写那条记录
       .catch((e: unknown) => {
+        settled = true
         if (d.fullscreenElement ?? d.webkitFullscreenElement) return
         say('全屏失败：' + (e as Error).message)
       })
-      .finally(() => { fullPending.current = false })
+      .finally(() => {
+        fullPending.current = false
+        clearTimeout(fullUnlock.current)
+      })
   }
 
   const toggleFull = () => {
@@ -728,7 +850,7 @@ export default function App() {
   const bumpFont = (d: number) => {
     const n = sess.current?.setFontSize(fontSize + d) ?? fontSize
     setFontSize(n)
-    localStorage.setItem('fontSize', String(n))
+    pushPref(profile.id, 'fontSize', String(n), toast)
     refocusTerm()
   }
   const toggleCompose = (v: boolean) => {
@@ -818,7 +940,7 @@ export default function App() {
 
   const openPanes = () => {
     blurInput()
-    setPanesOpen(true)
+    setPanel('panes')
     void compose.loadPanes(true)
     // 面板一览就是「看这些变化」的地方，开了就算**全部**看过：角标清零、右上角那几张收掉。
     // 点单张卡片只清那个 pane 的（见 Notices 的 onGoto）；关掉一张卡不算看过（那只是嫌它挡着）。
@@ -834,7 +956,7 @@ export default function App() {
    * 键盘被跳转顶出来最烦 —— 那时候屏幕只剩一半，还得先把它收掉才能看清跳到哪儿了。
    */
   const gotoPane = async (id: string, zoom: boolean) => {
-    setPanesOpen(false)
+    setPanel(null)
     const r = await compose.jump(id, zoom)
     if (!r) return
     refocusTerm()
@@ -877,7 +999,7 @@ export default function App() {
   }>> = {
     panes: {
       on: panesOpen,
-      run: () => (panesOpen ? setPanesOpen(false) : openPanes()),
+      run: () => (panesOpen ? setPanel(null) : openPanes()),
       // 说「条」不说「几个 agent」：同一个 agent 连着变几次就是几条，实测挂一会儿就能
       // 攒十几条，写成「10 个 agent」是假的
       title: notices.unread.length
@@ -887,7 +1009,7 @@ export default function App() {
     },
     // 文件浏览能在服务端关掉（HERDR_WEB_FILES=0）。那时候连按钮都不画 ——
     // 点开一片 404 比没有这个入口更糟。主入口其实是终端里那行路径可点。
-    files: { on: filesOpen, run: () => (filesOpen ? setFilesOpen(false) : openFiles()), hide: state?.files === false },
+    files: { on: filesOpen, run: () => (filesOpen ? setPanel(null) : openFiles()), hide: state?.files === false },
     compose: { on: showCompose, run: () => toggleCompose(!showCompose) },
     keys: { on: showKeys, run: () => toggleKeys(!showKeys) },
     // 这一下是用户手势，正好在这儿进全屏（键盘那条路见 kbdFull 的注释）
@@ -897,14 +1019,14 @@ export default function App() {
     paste: { run: () => void pastePhone() },
     'font-': { run: () => bumpFont(-1) },
     'font+': { run: () => bumpFont(1) },
-    theme: { run: () => setScheme(scheme === 'dark' ? 'light' : 'dark') },
+    theme: { run: flipScheme },
     full: {
       on: full,
       run: toggleFull,
       title: full ? '全屏：点一下退出' : '全屏：去掉地址栏和工具条，终端多几行',
       icon: full ? <Minimize className="size-4" /> : <Maximize className="size-4" />,
     },
-    settings: { on: settings, run: () => setSettings(!settings) },
+    settings: { on: settings, run: () => setPanel(settings ? null : 'settings') },
   }
 
   /**
@@ -1095,7 +1217,7 @@ export default function App() {
           <PaneSwitcher
             panes={compose.panes}
             watching={compose.watching}
-            onClose={() => setPanesOpen(false)}
+            onClose={() => setPanel(null)}
             onGoto={(id, zoom) => void gotoPane(id, zoom)}
             onReload={reloadPanes}
           />
@@ -1104,7 +1226,7 @@ export default function App() {
           <FilesPanel
             panes={compose.panes}
             start={filesAt}
-            onClose={() => setFilesOpen(false)}
+            onClose={() => setPanel(null)}
             onOpen={(p) => void openPath(p)}
           />
         )}
@@ -1123,19 +1245,19 @@ export default function App() {
           <SettingsPanel
             tab={tab}
             onTab={setTab}
-            onClose={() => setSettings(false)}
+            onClose={() => setPanel(null)}
             opts={opts}
-            setOpt={(k, v) => setOpts((o) => ({ ...o, [k]: v }))}
+            setOpt={setOpt}
             dot={noticeDot}
-            onDot={(v) => { setNoticeDot(v); localStorage.setItem('noticeDot', v ? '1' : '0') }}
+            onDot={(v) => { setNoticeDot(v); pushPref(profile.id, 'noticeDot', v ? '1' : '0', toast) }}
             os={noticeOS}
-            onOS={(v) => { setNoticeOS(v); localStorage.setItem('noticeOS', v ? '1' : '0') }}
+            onOS={(v) => { setNoticeOS(v); pushPref(profile.id, 'noticeOS', v ? '1' : '0', toast) }}
             osFg={noticeOSFg}
-            onOSFg={(v) => { setNoticeOSFg(v); localStorage.setItem('noticeOSFg', v ? '1' : '0') }}
+            onOSFg={(v) => { setNoticeOSFg(v); pushPref(profile.id, 'noticeOSFg', v ? '1' : '0', toast) }}
             cardMs={noticeMs}
-            onCardMs={(v) => { setNoticeMs(v); localStorage.setItem('noticeCardMs', String(v)) }}
+            onCardMs={(v) => { setNoticeMs(v); pushPref(profile.id, 'noticeCardMs', String(v), toast) }}
             kbdFull={kbdFull}
-            onKbdFull={(v) => { setKbdFull(v); localStorage.setItem('kbdFull', v ? '1' : '0') }}
+            onKbdFull={(v) => { setKbdFull(v); pushPref(profile.id, 'kbdFull', v ? '1' : '0', toast) }}
             heals={heals}
             onSaved={(lib, b) => setBar(resolveBar(lib, b))}
             onTopbar={setTopbar}
@@ -1144,7 +1266,10 @@ export default function App() {
             fontSize={fontSize}
             onFont={bumpFont}
             scheme={scheme}
-            onScheme={() => setScheme(scheme === 'dark' ? 'light' : 'dark')}
+            onScheme={flipScheme}
+            profile={profile}
+            // 换了一套 / 改了名 / 改了绑定：记住新的那一套，再把排布整份换过来
+            onProfiles={(r) => { applyProfiles(r); void loadLayout() }}
           />
         )}
         {pasteOpen && (
@@ -1165,7 +1290,7 @@ export default function App() {
         <Notices
           items={notices.items}
           autoMs={noticeMs}
-          hidden={panesOpen || settings || filesOpen || !!viewing}
+          hidden={!!panel || !!viewing}
           // 点卡片 = 我去看这个 agent 了：它名下的未读全消掉（角标跟着减），别的一条不动
           onGoto={(id) => { notices.seePane(id); void gotoPane(id, paneZoomPref()) }}
           onDismiss={notices.dismiss}

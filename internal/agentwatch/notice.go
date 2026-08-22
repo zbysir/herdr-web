@@ -63,6 +63,17 @@ type Notice struct {
 	Text string `json:"text"`
 }
 
+// class 把状态归成两类：**等你回答** 和 **跑完了**。
+//
+// 归类是为了「同一件事只说一次」：herdr 眼里 `idle` 和 `done` 是两个状态，可对你来说
+// 都是「它不跑了」；`done → idle` 这种收尾抖动要是被当成两件事，就会连着弹两条。
+func class(status string) string {
+	if status == "blocked" {
+		return "wait"
+	}
+	return "done"
+}
+
 // worthNotice 说这次状态变化值不值得弹一下。
 //
 // `blocked`（等你回答）和 `done`（跑完了）**不管从哪儿来都算** —— 这两个是 herdr 明确
@@ -106,6 +117,20 @@ func settled(want, cur string) string {
 	default:
 		return cur
 	}
+}
+
+// agentSeq 拉一次 `agent.list`：pane_id → state_change_seq（herdr 里每次真的状态变化
+// 才推高的全局计数）。拿不到就给空表 —— 那时候退回「按状态变化算」，顶多多弹一条。
+func (w *Watcher) agentSeq() map[string]uint64 {
+	out := map[string]uint64{}
+	ags, err := w.c.AgentList()
+	if err != nil {
+		return out
+	}
+	for _, a := range ags {
+		out[a.PaneID] = a.Seq
+	}
+	return out
 }
 
 // seed 记下「开工那一刻屏幕上最后一段话是什么」。
@@ -199,6 +224,43 @@ func (w *Watcher) collect(term string) {
 //
 // 「这一趟有没有新东西」才是真正的判据：一个字都没变，就没有什么可告诉你的。
 func (w *Watcher) emit(p herdr.Pane, status string) {
+	/*
+	 * **herdr 的状态计数没往前走，就不是新变化。**
+	 *
+	 * 这条是用出来的：每次重连进页面，都会弹出一条「跑完了」，而那个对话其实是很久以前
+	 * 完成的。原因是 herdr 重画 pane 时会把当前状态（`done` 这种）重新推一遍事件，我这边
+	 * 一看「和上次记的不一样」就当成刚刚发生。而 `pane.updated` 事件里**没有**
+	 * `state_change_seq`（实测只有 `revision`），所以只能在这儿单独问一次 `agent.list` ——
+	 * 它是「状态真的变过」的唯一硬证据（herdr 每次真的状态变化才推高它）。
+	 *
+	 * 这一下只在「准备弹了」才打，本来就稀疏，多一次调用不心疼。
+	 */
+	seq := w.agentSeq()[p.PaneID]
+	w.mu.Lock()
+	if seq != 0 && seq <= w.decided[p.TerminalID] {
+		w.mu.Unlock()
+		log.Printf("提示：%s 的状态计数没动（%d），这是重画/补发不是新变化，不弹", p.PaneID, seq)
+		return
+	}
+	/*
+	 * **同一件事只说一次：上次就是这类提示，而它中间没重新开过工，就不再说。**
+	 *
+	 * 这条是用出来的：一个 agent 停下来问你话，你切过去、正在想怎么答，它又弹了一遍
+	 * 「等你回答」—— 明明是同一个提问，你人就在那一页上。根子是 herdr 的状态识别本来
+	 * 就会抖（同一个对话框一会儿报 blocked 一会儿报 idle，HERDR-API.md 里记过），
+	 * 而你**正在打字**，屏幕内容一直变，「内容一样就不弹」那条去重也就失效了。
+	 *
+	 * 「重新开过工」（worked）才是「这是下一件事」的标志：你答完 → 它开始跑 → 再问你，
+	 * 那一条是该弹的。
+	 */
+	if w.lastClass[p.TerminalID] == class(status) && !w.worked[p.TerminalID] {
+		w.decided[p.TerminalID] = seq // 记下来，别让同一个计数反复走到这儿
+		w.mu.Unlock()
+		log.Printf("提示：%s 还是上次那件事（%s），中间没重新开过工，不弹", p.PaneID, status)
+		return
+	}
+	w.mu.Unlock()
+
 	text, err := w.c.ReadText(p.PaneID, "visible", readLines)
 	if err != nil {
 		log.Printf("提示：读 %s 的屏失败（这条提示只报状态，没有内容）: %v", p.PaneID, err)
@@ -210,6 +272,11 @@ func (w *Watcher) emit(p herdr.Pane, status string) {
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if seq != 0 {
+		w.decided[p.TerminalID] = seq // 这一条就是这个计数上的「已经处理过了」
+	}
+	w.lastClass[p.TerminalID] = class(status)
+	w.worked[p.TerminalID] = false // 下一条同类的要等它重新开过工
 	// 和上次一模一样 = 这一趟什么都没产出（多半是被 Esc 取消了），不弹。
 	// 空的不比：那是读屏失败，两次都失败不代表「没变化」。
 	if body != "" && body == w.lastText[p.TerminalID] {

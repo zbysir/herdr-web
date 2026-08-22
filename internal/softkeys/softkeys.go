@@ -3,6 +3,10 @@
 // 存服务端而不是浏览器 localStorage，是为了手机 / 平板 / 电脑共用一份 —— 和 token
 // 落盘同一个道理，改一次到处生效。
 //
+// **但「排布」是按 profile 分的**（Lib 全局、Rows/Bar 每套一份，见 internal/profiles）：
+// 定义共用一份是对的，排布共用一份是错的 —— 平板上二十个键排两行，手机竖屏上放得下五个。
+// 所以 Load / Save 都要带一个 profile ID。
+//
 // 配置分成两半，因为「这个键是什么」和「它排在哪」是两件事：
 //
 //	Lib  「我的按键」：所有按键的定义（可改名字 / 按键谱 / 宽 / 两下），每个有一个 ID
@@ -46,7 +50,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"unicode/utf8"
+
+	"github.com/zbysir/herdr-web/internal/profiles"
 )
 
 // MaxKeys 「我的按键」最多几个定义。比软键条上能放的多得多是有意的：定义只占一行
@@ -93,11 +100,26 @@ type stored struct {
 }
 
 type file struct {
-	// Rows 软键条几行（1 / 2）。0 = 老文件没这个字段，按一行算
-	Rows int      `json:"rows,omitempty"`
-	Keys []stored `json:"keys"`
-	// Bar 每行一串 ID。nil = 老文件（没有这一层），按 Keys 里的 row/off 迁移
-	Bar [][]string `json:"bar,omitempty"`
+	// Rows / Bar 是**默认那一套**的排布，同时也是「老形状」：分 profile 之前整份文件就是
+	// Rows + Keys + Bar。新版本把每一套写进 Profiles，但默认那一套**照旧往这儿也写一份**
+	// —— 降级回老版本时它只认得顶层这几个字段，不镜像的话降级看到的是「软键条恢复出厂」，
+	// 而那份配置明明还在文件里。冗余一份换这个，值。
+	Rows int        `json:"rows,omitempty"`
+	Keys []stored   `json:"keys"`
+	Bar  [][]string `json:"bar,omitempty"`
+	// Profiles 每套排布一段（键是 profiles.json 里那个 ID）。
+	// nil = 老文件，整份就是默认那一套（见 sections）。
+	Profiles map[string]lane `json:"profiles,omitempty"`
+}
+
+// lane 是一套排布：几行 + 每行一串 ID。
+//
+// 「我的按键」（Keys）**不在这儿**：定义是全局的，rows/bar 才按 profile 分 —— 平板上
+// 二十个键排两行、手机上五个键一行，但改一个按键谱两边一起变。理由见
+// internal/profiles 的包注释。
+type lane struct {
+	Rows int        `json:"rows"`
+	Bar  [][]string `json:"bar"`
 }
 
 // Config 是一整份软键条配置。
@@ -295,7 +317,12 @@ func Resolve(keys []Key) ([]Key, error) {
 	return out, nil
 }
 
-type Store struct{ Dir string }
+type Store struct {
+	Dir string
+	// 写路径全是「读整份 → 改一段 → 写回」（别的 profile 那几段要原样保住），而两台设备
+	// 各自在自己的 profile 上点保存是常事。没有这把锁就是「谁后写谁把对方那一段吃掉」。
+	mu sync.Mutex
+}
 
 func (s *Store) path() string { return filepath.Join(s.Dir, "softkeys.json") }
 
@@ -310,20 +337,64 @@ func DefaultConfig() Config {
 	return Config{Rows: 1, Lib: lib, Bar: [][]string{ids}}
 }
 
-// Load 读配置；文件不存在或存坏了都退回出厂配置。
-func (s *Store) Load() Config {
+// Load 读某一套排布（「我的按键」是全局的，每套都拿到同一份）。
+//
+// 文件不存在 / 存坏了 → 出厂配置。**引用了不存在的定义时丢掉那一个引用，不是整份作废**：
+// 「我的按键」是全局的，在平板上删掉一个定义就会打到手机那一套的条上，那时候整份退回
+// 出厂等于连带把没坏的部分也抹了。存的时候是严格的（见 Save），宽松只留给读。
+func (s *Store) Load(profile string) Config {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.load(profile)
+}
+
+func (s *Store) load(profile string) Config {
 	fallback := func() Config {
-		out, _ := resolveConfig(DefaultConfig())
+		out, _ := resolveConfig(DefaultConfig(), false)
 		return out
 	}
-	b, err := os.ReadFile(s.path())
+	f, ok := s.read()
+	if !ok {
+		return fallback()
+	}
+	lib := keysOf(f)
+	ln, has := pick(f, profile)
+	if !has {
+		// 这一套还没排过（名册里有、排布没有：手改过文件，或者复制那一步没成）。
+		// 给出厂那一排，别给一条空栏 —— 空栏看着就像坏了，而且软键条上一个键都没有时
+		// 手机上连键盘都呼不出来。
+		out, err := factory(lib)
+		if err != nil {
+			return fallback()
+		}
+		return out
+	}
+	bar := ln.Bar
+	if bar == nil {
+		bar = migrate(f.Keys, &lib)
+	}
+	out, err := resolveConfig(Config{Rows: ln.Rows, Lib: lib, Bar: bar}, true)
 	if err != nil {
 		return fallback()
 	}
+	return out
+}
+
+// read 读文件。第二个返回值是「这份文件能用吗」—— 不在、坏了、连 keys 都没有都算不能用。
+func (s *Store) read() (file, bool) {
+	b, err := os.ReadFile(s.path())
+	if err != nil {
+		return file{}, false
+	}
 	var f file
 	if err := json.Unmarshal(b, &f); err != nil || f.Keys == nil {
-		return fallback()
+		return file{}, false
 	}
+	return f, true
+}
+
+// keysOf 把落盘的定义摊成 Key（Send 这时候还是用户写的谱，resolveConfig 里才解析）。
+func keysOf(f file) []Key {
 	lib := make([]Key, len(f.Keys))
 	for i, k := range f.Keys {
 		lib[i] = Key{
@@ -331,15 +402,113 @@ func (s *Store) Load() Config {
 			Send: k.Send, Sticky: k.Sticky, Act: k.Act,
 		}
 	}
-	bar := f.Bar
-	if bar == nil {
-		bar = migrate(f.Keys, &lib)
+	return lib
+}
+
+// pick 挑这一套的排布。
+//
+// 找不到就退到**默认那一套**（老文件里默认那一套就是顶层那几个字段）—— 名册里新建的一套
+// 通常在建的时候就复制好了排布，退到默认是给「手改文件」和「复制那一步没成」兜底。
+// 两个都没有才算「这一套还没排过」。
+func pick(f file, profile string) (lane, bool) {
+	if ln, ok := f.Profiles[profile]; ok {
+		return ln, true
 	}
-	out, err := resolveConfig(Config{Rows: f.Rows, Lib: lib, Bar: bar})
-	if err != nil {
-		return fallback()
+	if ln, ok := f.Profiles[profiles.Default]; ok {
+		return ln, true
+	}
+	// f.Profiles == nil 是老文件：顶层就是默认那一套（Bar 为 nil 时更老，交给 migrate）
+	if f.Profiles == nil || f.Bar != nil {
+		return lane{Rows: f.Rows, Bar: f.Bar}, true
+	}
+	return lane{}, false
+}
+
+// sections 把文件里的排布摊成「每套一段」，并且**保证默认那一套一定在里面**：老文件的
+// 顶层字段、更老的 row+off 都在这儿收敛掉。
+//
+// 所有写路径都得先过这一下。不然「升级之后第一件事是新建第二套」会把还留在顶层、还没
+// 搬进 Profiles 的默认那一套挤掉（写回去时顶层被覆盖，而 Profiles 里没有它）。
+func sections(f file) map[string]lane {
+	out := map[string]lane{}
+	for id, ln := range f.Profiles {
+		out[id] = ln
+	}
+	if _, ok := out[profiles.Default]; !ok && f.Keys != nil {
+		bar := f.Bar
+		if bar == nil {
+			lib := keysOf(f)
+			bar = migrate(f.Keys, &lib)
+		}
+		out[profiles.Default] = normLane(lane{Rows: f.Rows, Bar: bar})
 	}
 	return out
+}
+
+// normLane 把一段排布收拾成「落盘的样子和读出来的样子一致」。
+//
+// 为什么需要：老文件没有 rows 字段（0 = 按一行算），而更老的文件里「排第几行」长在按键上
+// —— 迁过来就是「rows 说一行、条上却有两行引用」。读的时候 resolveConfig 会把第二行接到
+// 第一行末尾，所以显示是对的，但**落盘那份是自相矛盾的**，正是注释里一直在防的那种
+// 「存着、不显示」的状态（下次谁改了折叠逻辑就会冒出一批幽灵键）。
+func normLane(ln lane) lane {
+	if ln.Rows == 0 {
+		ln.Rows = 1
+	}
+	if ln.Rows == 1 && len(ln.Bar) > 1 {
+		first := append([]string{}, ln.Bar[0]...)
+		for _, row := range ln.Bar[1:] {
+			first = append(first, row...)
+		}
+		ln.Bar = [][]string{first}
+	}
+	return ln
+}
+
+// factory 出厂那一排：把出厂的键**补进**现有的「我的按键」（按名字 + 干什么认，已经有的
+// 就复用），再全摆到第一行。
+//
+// 为什么不是「整份恢复出厂」：定义是全局的，整份恢复会把别的 profile 条上引用的定义一起
+// 抹掉 —— 在手机上点一下「恢复默认」，平板上的软键条跟着少一半，这种连带损害用户完全
+// 预料不到。
+//
+// **出错就报错，绝不静默退回出厂配置**：补键会顶到 MaxKeys（库里已经有 120 个的时候），
+// 那时候退回出厂等于把用户那 120 个定义连着别的 profile 的条一起抹了 —— 一个「恢复默认」
+// 按钮不该有这种权力。读文件那条路自己兜底（见 load），写盘那条路把错报出去（见 Reset）。
+func factory(lib []Key) (Config, error) {
+	have := map[string]string{} // 签名 → ID
+	for _, k := range lib {
+		if k.ID != "" {
+			have[sigOf(k)] = k.ID
+		}
+	}
+	ids := newIDs(lib)
+	row := make([]string, 0, len(Defaults()))
+	for _, d := range Defaults() {
+		id, ok := have[sigOf(d)]
+		if !ok {
+			d.ID = ids()
+			id = d.ID
+			lib = append(lib, d)
+			have[sigOf(d)] = id
+		}
+		row = append(row, id)
+	}
+	if len(lib) > MaxKeys {
+		return Config{}, fmt.Errorf("要往「我的按键」里补几个出厂键，但已经到上限 %d 了 —— 先删几个再来", MaxKeys)
+	}
+	return resolveConfig(Config{Rows: 1, Lib: lib, Bar: [][]string{row}}, true)
+}
+
+// sigOf 「同一个键」的判定：名字 + 干什么。和前端 SoftkeysPanel 里的 sig 是同一套。
+func sigOf(k Key) string {
+	kind := "send:" + strings.TrimSpace(firstNonEmpty(k.Spec, k.Send))
+	if k.Sticky != "" {
+		kind = "sticky:" + k.Sticky
+	} else if k.Act != "" {
+		kind = "act:" + k.Act
+	}
+	return k.Label + "\x00" + kind
 }
 
 // migrate 把老文件（「排第几行」长在按键上：row / off）翻成 Lib + Bar 这一层。
@@ -367,12 +536,30 @@ func migrate(old []stored, lib *[]Key) [][]string {
 	return bar
 }
 
-// Save 先全部校验通过再落盘。
-func (s *Store) Save(c Config) (Config, error) {
-	out, err := resolveConfig(c)
+// Save 存某一套排布 + 那份全局的定义。先全部校验通过再落盘。
+//
+// 定义是全局的，所以这一下**会打到别的 profile 上**：这次删掉的定义，别的 profile 条上
+// 那些引用也一起清掉（prune）。不清的后果是别人下次读出来少一个键，而且是静默的。
+func (s *Store) Save(profile string, c Config) (Config, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.write(profile, c)
+}
+
+func (s *Store) write(profile string, c Config) (Config, error) {
+	out, err := resolveConfig(c, false)
 	if err != nil {
 		return Config{}, err
 	}
+	f, _ := s.read() // 读不出来就当从零开始（别的 profile 本来也没有）
+	secs := sections(f)
+	secs[profile] = lane{Rows: out.Rows, Bar: out.Bar}
+	live := map[string]bool{}
+	for _, k := range out.Lib {
+		live[k.ID] = true
+	}
+	prune(secs, live)
+
 	raw := make([]stored, len(out.Lib))
 	for i, k := range out.Lib {
 		raw[i] = stored{ID: k.ID, Label: k.Label, Wide: k.Wide, Confirm: k.Confirm, Sticky: k.Sticky, Act: k.Act}
@@ -380,7 +567,12 @@ func (s *Store) Save(c Config) (Config, error) {
 			raw[i].Send = strings.TrimSpace(firstNonEmpty(k.Spec, k.Send))
 		}
 	}
-	b, err := json.MarshalIndent(file{Rows: out.Rows, Keys: raw, Bar: out.Bar}, "", "  ")
+	nf := file{Keys: raw, Profiles: secs}
+	// 默认那一套镜像到顶层老字段（降级用，见 file 的注释）
+	if d, ok := secs[profiles.Default]; ok {
+		nf.Rows, nf.Bar = d.Rows, d.Bar
+	}
+	b, err := json.MarshalIndent(nf, "", "  ")
 	if err != nil {
 		return Config{}, err
 	}
@@ -391,6 +583,72 @@ func (s *Store) Save(c Config) (Config, error) {
 		return Config{}, err
 	}
 	return out, nil
+}
+
+// prune 把条上引用了已经不存在的定义的那些引用去掉（所有 profile 一起）。
+func prune(secs map[string]lane, live map[string]bool) {
+	for id, ln := range secs {
+		bar := make([][]string, 0, len(ln.Bar))
+		for _, row := range ln.Bar {
+			keep := make([]string, 0, len(row))
+			for _, k := range row {
+				if live[k] {
+					keep = append(keep, k)
+				}
+			}
+			bar = append(bar, keep)
+		}
+		secs[id] = lane{Rows: ln.Rows, Bar: bar}
+	}
+}
+
+// Reset 「这一套恢复默认」：出厂那一排回到条上，「我的按键」里缺的那几个补上，
+// **别的定义、别的 profile 一个都不动**（理由见 factory）。
+func (s *Store) Reset(profile string) (Config, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, err := factory(s.load(profile).Lib)
+	if err != nil {
+		return Config{}, err
+	}
+	return s.write(profile, c)
+}
+
+// Copy 把一套排布复制成另一套（新建时用）。from 没排过就复制它读出来的那一份。
+func (s *Store) Copy(from, to string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := s.load(from)
+	_, err := s.write(to, c)
+	return err
+}
+
+// Drop 删掉一套排布那一段（profile 删掉之后清场）。默认那一套删不掉 —— 它是所有
+// 兜底的落点，见 internal/profiles。
+func (s *Store) Drop(profile string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if profile == profiles.Default {
+		return fmt.Errorf("默认那一套的软键条删不掉")
+	}
+	f, ok := s.read()
+	if !ok {
+		return nil
+	}
+	secs := sections(f)
+	if _, has := secs[profile]; !has {
+		return nil
+	}
+	delete(secs, profile)
+	f.Profiles = secs
+	if d, ok := secs[profiles.Default]; ok {
+		f.Rows, f.Bar = d.Rows, d.Bar
+	}
+	b, err := json.MarshalIndent(f, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.path(), append(b, '\n'), 0o600)
 }
 
 // newIDs 发 ID：k1、k2……跳过已经用掉的号。
@@ -421,7 +679,10 @@ func newIDs(lib []Key) func() string {
 //
 // Rows 是 1 的时候把第二行的引用**接到第一行末尾**，而不是留着不显示 —— 界面上看不见
 // 的键是最烦人的一种状态（存着、不显示、下次改行数又冒出来）。所见即所得。
-func resolveConfig(c Config) (Config, error) {
+// dropUnknown 为真时，条上引用了不存在的定义就**丢掉那个引用**（读文件走这条：定义是
+// 全局的，别的 profile 删过定义）；为假时报错（存盘走这条：编辑器该自己把引用清掉，
+// 静默丢只会变成「保存完少了个键」）。
+func resolveConfig(c Config, dropUnknown bool) (Config, error) {
 	rows := c.Rows
 	if rows == 0 {
 		rows = 1
@@ -461,7 +722,9 @@ func resolveConfig(c Config) (Config, error) {
 		}
 		for _, id := range row {
 			if !seen[id] {
-				// 不静默丢掉：前端删定义时该把引用一起清掉，丢了只会变成「保存完少了个键」
+				if dropUnknown {
+					continue
+				}
 				return Config{}, fmt.Errorf("第 %d 行引用了不存在的按键（%s）", i+1, id)
 			}
 			bar[i] = append(bar[i], id)

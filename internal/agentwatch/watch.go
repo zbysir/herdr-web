@@ -91,8 +91,16 @@ type Watcher struct {
 	// 「投了又按 Esc 取消」在状态上和「跑完了」一模一样，只能靠内容分辨）。
 	lastText map[string]string
 	seeding  map[string]bool // 正在垫底读屏，别重复读
-	notes    []Notice
-	seq      uint64
+	// decided：这个终端上「已经处理过」的 state_change_seq。herdr 重画 pane 时会把
+	// 当前状态重新推一遍，只有这个计数往前走了才算新变化（见 notice.go 的 emit）。
+	decided map[string]uint64
+	// lastClass：上次为这个终端弹的是哪一类（等你回答 / 跑完了）；
+	// worked：从那以后它有没有**重新开过工**。两个一起用来做「同一件事只说一次」，
+	// 见 notice.go 的 emit。
+	lastClass map[string]string
+	worked    map[string]bool
+	notes     []Notice
+	seq       uint64
 }
 
 // New：file 是存时间的 JSON（传空字符串就只在内存里）。
@@ -101,7 +109,8 @@ func New(socket, file string) *Watcher {
 		c: herdr.New(socket), file: file,
 		term: map[string]string{}, status: map[string]string{}, at: map[string]int64{},
 		pane: map[string]herdr.Pane{}, pend: map[string]string{}, busy: map[string]bool{},
-		lastText: map[string]string{}, seeding: map[string]bool{},
+		lastText: map[string]string{}, seeding: map[string]bool{}, decided: map[string]uint64{},
+		lastClass: map[string]string{}, worked: map[string]bool{},
 	}
 	w.load()
 	return w
@@ -149,6 +158,16 @@ func (w *Watcher) poller(ctx context.Context) {
 			stale = true // 断过一次，回来那一拍只对底
 			continue
 		}
+		// 第一次见到的终端，把它当下的状态计数记成「已处理」——否则重连进来时 herdr
+		// 补推的那些旧状态会被当成刚发生的（见 notice.go 的 emit）。
+		seq := w.agentSeq()
+		w.mu.Lock()
+		for _, p := range cur {
+			if _, ok := w.decided[p.TerminalID]; !ok {
+				w.decided[p.TerminalID] = seq[p.PaneID]
+			}
+		}
+		w.mu.Unlock()
 		for _, p := range cur {
 			if stale {
 				w.observe(p)
@@ -260,6 +279,9 @@ func (w *Watcher) observe(p herdr.Pane) (bool, string) {
 	defer w.mu.Unlock()
 	w.term[p.PaneID] = p.TerminalID
 	w.pane[p.TerminalID] = p
+	if p.AgentStatus == "working" {
+		w.worked[p.TerminalID] = true // 重新开工了：下一条同类提示就是「下一件事」
+	}
 	old, ok := w.status[p.TerminalID]
 	w.status[p.TerminalID] = p.AgentStatus
 	if ok && old != p.AgentStatus {

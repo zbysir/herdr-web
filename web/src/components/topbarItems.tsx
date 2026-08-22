@@ -5,7 +5,8 @@ import { AArrowDown, AArrowUp, CircleHalf, ClipGet, ClipPut, Files, Gear, Ime, I
  * 顶栏上能放哪些按钮 —— **唯一一份清单**。
  *
  * 顶栏和软键条一样是可配置的：「放哪几个、什么顺序」存在服务端（`~/.herdr-web/topbar.json`，
- * 见 internal/topbar），在设置 →「顶栏」页里拖。这里存的是「按钮长什么样」（图标、名字、
+ * 见 internal/topbar），**按「排布」分套存**（平板八个图标、手机竖屏三个，见
+ * internal/profiles），在设置 →「顶栏」页里拖。这里存的是「按钮长什么样」（图标、名字、
  * 一句说明），点了干什么在 App 里（那些动作要用 App 的状态，搬不出来）。
  *
  * 服务端那份白名单（`topbar.Actions`）要和这份**一字不差、顺序也一样**，有测试盯着

@@ -2,10 +2,13 @@ package softkeys
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/zbysir/herdr-web/internal/profiles"
 )
 
 func mustParse(t *testing.T, spec string) string {
@@ -297,14 +300,14 @@ func TestStoreRoundTrip(t *testing.T) {
 	s := &Store{Dir: dir}
 
 	// 没有文件时退回出厂配置：键全在库里，也全摆在第一行
-	if got, want := len(s.Load().Lib), len(Defaults()); got != want {
+	if got, want := len(s.Load(profiles.Default).Lib), len(Defaults()); got != want {
 		t.Errorf("空目录应当退回出厂 %d 条，得到 %d", want, got)
 	}
-	if c := s.Load(); c.Rows != 1 || len(c.Bar) != 1 || len(c.Bar[0]) != len(Defaults()) {
+	if c := s.Load(profiles.Default); c.Rows != 1 || len(c.Bar) != 1 || len(c.Bar[0]) != len(Defaults()) {
 		t.Errorf("出厂应当是一行、键全在条上: rows=%d bar=%v", c.Rows, c.Bar)
 	}
 
-	cfg, err := s.Save(Config{Lib: []Key{
+	cfg, err := s.Save(profiles.Default, Config{Lib: []Key{
 		{Label: "放大", Send: "ctrl+b z"},
 		{Label: "Ctrl", Sticky: "ctrl"},
 		{Label: "关 pane", Send: "ctrl+b x", Confirm: true},
@@ -328,7 +331,7 @@ func TestStoreRoundTrip(t *testing.T) {
 	if !saved[2].Confirm {
 		t.Error("保存后返回的 confirm 丢了")
 	}
-	back := s.Load().Lib
+	back := s.Load(profiles.Default).Lib
 	if len(back) != 3 || back[0].Send != "\x02z" || back[0].Spec != "ctrl+b z" || back[1].Sticky != "ctrl" {
 		t.Errorf("读回来不对: %+v", back)
 	}
@@ -340,7 +343,7 @@ func TestStoreRoundTrip(t *testing.T) {
 	/* ---------------------------------------------------- 条上的引用 */
 
 	// 同一个键**能在两行里各放一个**：条上存的是引用，不是定义
-	two, err := s.Save(Config{Rows: 2, Lib: []Key{
+	two, err := s.Save(profiles.Default, Config{Rows: 2, Lib: []Key{
 		{ID: "a", Label: "⌨", Act: "kbd"},
 		{ID: "b", Label: "Esc", Send: "esc"},
 	}, Bar: [][]string{{"a", "b"}, {"b"}}})
@@ -350,19 +353,19 @@ func TestStoreRoundTrip(t *testing.T) {
 	if len(two.Bar) != 2 || len(two.Bar[0]) != 2 || len(two.Bar[1]) != 1 || two.Bar[1][0] != "b" {
 		t.Errorf("重复引用没存住: %v", two.Bar)
 	}
-	if c := s.Load(); len(c.Bar) != 2 || c.Bar[1][0] != "b" || len(c.Lib) != 2 {
+	if c := s.Load(profiles.Default); len(c.Bar) != 2 || c.Bar[1][0] != "b" || len(c.Lib) != 2 {
 		t.Errorf("引用读回来不对: %+v", c)
 	}
 
 	// 引用了不存在的键要报错，不能静默丢（丢了就是「保存完少了个键」）
-	if _, err := s.Save(Config{Rows: 1, Lib: []Key{{ID: "a", Label: "x", Send: "esc"}}, Bar: [][]string{{"nope"}}}); err == nil {
+	if _, err := s.Save(profiles.Default, Config{Rows: 1, Lib: []Key{{ID: "a", Label: "x", Send: "esc"}}, Bar: [][]string{{"nope"}}}); err == nil {
 		t.Error("引用不存在的 ID 应当被拒")
 	}
-	if _, err := s.Save(Config{Rows: 3, Lib: []Key{{Label: "x", Send: "esc"}}}); err == nil {
+	if _, err := s.Save(profiles.Default, Config{Rows: 3, Lib: []Key{{Label: "x", Send: "esc"}}}); err == nil {
 		t.Error("rows=3 应当被拒")
 	}
 	// rows=1 时第二行的引用要接到第一行末尾，不能留着「存着但不显示」
-	one, err := s.Save(Config{Rows: 1, Lib: []Key{
+	one, err := s.Save(profiles.Default, Config{Rows: 1, Lib: []Key{
 		{ID: "a", Label: "a", Send: "esc"},
 		{ID: "b", Label: "b", Send: "tab"},
 	}, Bar: [][]string{{"a"}, {"b"}}})
@@ -373,7 +376,7 @@ func TestStoreRoundTrip(t *testing.T) {
 		t.Errorf("rows=1 时第二行应当接到第一行末尾: %v", one.Bar)
 	}
 	// 库里留着、条上没引用 = 「我的按键」里有但没上条，完全合法
-	off, err := s.Save(Config{Rows: 1, Lib: []Key{
+	off, err := s.Save(profiles.Default, Config{Rows: 1, Lib: []Key{
 		{ID: "a", Label: "上条的", Send: "esc"},
 		{ID: "b", Label: "没上条", Send: "tab"},
 	}, Bar: [][]string{{"a"}}})
@@ -386,21 +389,21 @@ func TestStoreRoundTrip(t *testing.T) {
 
 	// **读出来原样存回去**必须能过：编辑器就是这么干的（两个字段都回传，Send 是
 	// 上次解析出的字节）。拿 Send 当谱重解一次的话 Tab 的 "\t" 会变成「谱是空的」
-	if _, err := s.Save(DefaultConfig()); err != nil {
+	if _, err := s.Save(profiles.Default, DefaultConfig()); err != nil {
 		t.Fatal(err)
 	}
-	round := s.Load()
-	if _, err := s.Save(round); err != nil {
+	round := s.Load(profiles.Default)
+	if _, err := s.Save(profiles.Default, round); err != nil {
 		t.Fatalf("读出来原样存回去应当能过: %v", err)
 	}
-	if back := s.Load(); len(back.Lib) != len(round.Lib) || back.Lib[5].Spec != round.Lib[5].Spec {
+	if back := s.Load(profiles.Default); len(back.Lib) != len(round.Lib) || back.Lib[5].Spec != round.Lib[5].Spec {
 		t.Errorf("原样存回去之后变了: %+v vs %+v", back.Lib[5], round.Lib[5])
 	}
 
 	// 老文件（row / off 长在按键上、没有 bar）要能迁过来
 	oldFile := `{"keys":[{"label":"⌨","act":"kbd"},{"label":"Esc","send":"esc","row":2},{"label":"库里","send":"tab","off":true}],"rows":2}`
 	_ = os.WriteFile(s.path(), []byte(oldFile), 0o600)
-	mig := s.Load()
+	mig := s.Load(profiles.Default)
 	if len(mig.Lib) != 3 || len(mig.Bar) != 2 || len(mig.Bar[0]) != 1 || len(mig.Bar[1]) != 1 {
 		t.Errorf("老文件没迁对: %+v", mig)
 	}
@@ -409,9 +412,9 @@ func TestStoreRoundTrip(t *testing.T) {
 	}
 
 	// 非法配置不该落盘
-	_, _ = s.Save(Config{Rows: 1, Lib: []Key{{Label: "ok", Send: "esc"}}})
+	_, _ = s.Save(profiles.Default, Config{Rows: 1, Lib: []Key{{Label: "ok", Send: "esc"}}})
 	before, _ := os.ReadFile(s.path())
-	if _, err := s.Save(Config{Lib: []Key{{Label: "x", Send: "乱写"}}}); err == nil {
+	if _, err := s.Save(profiles.Default, Config{Lib: []Key{{Label: "x", Send: "乱写"}}}); err == nil {
 		t.Error("非法按键谱应当被拒")
 	}
 	after, _ := os.ReadFile(s.path())
@@ -421,7 +424,173 @@ func TestStoreRoundTrip(t *testing.T) {
 
 	// 存坏了要退回出厂而不是崩
 	_ = os.WriteFile(s.path(), []byte("{ 这不是 json"), 0o600)
-	if got, want := len(s.Load().Lib), len(Defaults()); got != want {
+	if got, want := len(s.Load(profiles.Default).Lib), len(Defaults()); got != want {
 		t.Errorf("坏文件应当退回出厂 %d 条，得到 %d", want, got)
+	}
+}
+
+// TestProfilesSplit 分 profile 之后的那几条：定义全局、排布各一份、老文件照旧。
+func TestProfilesSplit(t *testing.T) {
+	dir := t.TempDir()
+	s := &Store{Dir: dir}
+
+	// 老文件的样子：顶层 rows/keys/bar，没有 profiles 那一层
+	old := `{"rows":1,"keys":[{"id":"k1","label":"Esc","send":"esc"},{"id":"k2","label":"Tab","send":"tab"}],
+	         "bar":[["k1","k2"]]}`
+	if err := os.WriteFile(filepath.Join(dir, "softkeys.json"), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// 升级之后默认那一套一点没变
+	if c := s.Load(profiles.Default); len(c.Bar[0]) != 2 || c.Bar[0][0] != "k1" {
+		t.Fatalf("老文件的默认那一套该原样读出来: %+v", c.Bar)
+	}
+	// 还没排过的那一套：退到默认那一套（不是一条空栏）
+	if c := s.Load("p2"); len(c.Bar[0]) != 2 {
+		t.Fatalf("没排过的一套该退到默认那一份: %+v", c.Bar)
+	}
+
+	/* ---------------------------------------------- 各存一份，互不影响 */
+
+	// 在 p2 上只留一个键（模拟手机那套）
+	if _, err := s.Save("p2", Config{Rows: 1, Lib: []Key{
+		{ID: "k1", Label: "Esc", Send: "esc"},
+		{ID: "k2", Label: "Tab", Send: "tab"},
+	}, Bar: [][]string{{"k1"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if c := s.Load("p2"); len(c.Bar[0]) != 1 {
+		t.Errorf("p2 该只有一个键: %+v", c.Bar)
+	}
+	// **默认那一套不能被带走**：老文件的顶层字段要在写盘时收敛进 profiles，不是被挤掉
+	if c := s.Load(profiles.Default); len(c.Bar[0]) != 2 {
+		t.Fatalf("存 p2 不该动默认那一套: %+v", c.Bar)
+	}
+	// 顶层老字段是默认那一套的镜像（降级回老版本读的是它）
+	b, _ := os.ReadFile(filepath.Join(dir, "softkeys.json"))
+	var f file
+	if err := json.Unmarshal(b, &f); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Bar) != 1 || len(f.Bar[0]) != 2 {
+		t.Errorf("顶层该镜像默认那一套（降级用）:\n%s", b)
+	}
+	if len(f.Profiles) != 2 {
+		t.Errorf("两套都该在 profiles 里:\n%s", b)
+	}
+
+	/* ---------------------------------------------- 定义是全局的 */
+
+	// 在 p2 上删掉 k2 这个定义 → 默认那一套条上那个引用也得一起清掉，
+	// 不然默认那套下次读出来少一个键，而且是静默的
+	if _, err := s.Save("p2", Config{Rows: 1, Lib: []Key{
+		{ID: "k1", Label: "Esc", Send: "esc"},
+	}, Bar: [][]string{{"k1"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if c := s.Load(profiles.Default); len(c.Bar[0]) != 1 || c.Bar[0][0] != "k1" {
+		t.Errorf("删掉的定义该从所有 profile 的条上清掉: %+v", c.Bar)
+	}
+
+	/* ---------------------------------------------- 读得宽松 */
+
+	// 手改文件让 p2 引用一个不存在的 id：丢那一个引用，不是整份退回出厂
+	bad := `{"keys":[{"id":"k1","label":"Esc","send":"esc"}],
+	         "profiles":{"default":{"rows":1,"bar":[["k1"]]},"p2":{"rows":1,"bar":[["k1","gone"]]}}}`
+	if err := os.WriteFile(filepath.Join(dir, "softkeys.json"), []byte(bad), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if c := s.Load("p2"); len(c.Bar[0]) != 1 || c.Bar[0][0] != "k1" {
+		t.Errorf("认不出的引用该丢掉、别的照用: %+v", c.Bar)
+	}
+	// 存的时候还是严格的
+	if _, err := s.Save("p2", Config{Rows: 1, Lib: []Key{{ID: "k1", Label: "Esc", Send: "esc"}},
+		Bar: [][]string{{"gone"}}}); err == nil {
+		t.Error("存的时候引用不存在的定义该报错")
+	}
+}
+
+func TestResetCopyDrop(t *testing.T) {
+	dir := t.TempDir()
+	s := &Store{Dir: dir}
+
+	// 自己攒一套：一个自定义键 + 出厂里也有的 Esc
+	if _, err := s.Save(profiles.Default, Config{Rows: 1, Lib: []Key{
+		{ID: "k1", Label: "我的", Send: "ctrl+b z"},
+		{ID: "k2", Label: "Esc", Send: "esc"},
+	}, Bar: [][]string{{"k1"}}}); err != nil {
+		t.Fatal(err)
+	}
+	// 复制给 p2
+	if err := s.Copy(profiles.Default, "p2"); err != nil {
+		t.Fatal(err)
+	}
+	if c := s.Load("p2"); len(c.Bar[0]) != 1 || c.Bar[0][0] != "k1" {
+		t.Fatalf("复制过来的排布不对: %+v", c.Bar)
+	}
+
+	// 「这一套恢复默认」：出厂那一排回到 p2 的条上，
+	// 但**自己那个定义还在库里**，默认那一套也一点不动
+	c, err := s.Reset("p2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Bar[0]) != len(Defaults()) {
+		t.Errorf("恢复默认该把出厂那一排放上条: %+v", c.Bar)
+	}
+	found := false
+	for _, k := range c.Lib {
+		if k.ID == "k1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("恢复默认不该删掉自己的定义（定义是全局的，会连带打到别的 profile）")
+	}
+	// 出厂里本来就有的 Esc 该复用现成那个定义，不是又加一条重的
+	esc := 0
+	for _, k := range c.Lib {
+		if k.Label == "Esc" {
+			esc++
+		}
+	}
+	if esc != 1 {
+		t.Errorf("出厂键该按「名字 + 干什么」复用现成的定义，Esc 有 %d 条", esc)
+	}
+	if d := s.Load(profiles.Default); len(d.Bar[0]) != 1 || d.Bar[0][0] != "k1" {
+		t.Errorf("恢复 p2 不该动默认那一套: %+v", d.Bar)
+	}
+
+	// 删掉 p2 那一段之后，读它退回默认那一套
+	if err := s.Drop("p2"); err != nil {
+		t.Fatal(err)
+	}
+	if c := s.Load("p2"); len(c.Bar[0]) != 1 || c.Bar[0][0] != "k1" {
+		t.Errorf("删掉那一段之后该退到默认: %+v", c.Bar)
+	}
+	if err := s.Drop(profiles.Default); err == nil {
+		t.Error("默认那一段删不掉")
+	}
+}
+
+// TestResetRefusesWhenLibFull 「恢复默认」补不进键时要**报错**，不能静默退回出厂 ——
+// 那样会把用户满库的定义连着别的 profile 的条一起抹掉（定义是全局的）。
+func TestResetRefusesWhenLibFull(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	lib := make([]Key, 0, MaxKeys)
+	bar := make([]string, 0, MaxKeys)
+	for i := 0; i < MaxKeys; i++ {
+		id := fmt.Sprintf("x%d", i)
+		lib = append(lib, Key{ID: id, Label: fmt.Sprintf("k%d", i), Send: "esc"})
+		bar = append(bar, id)
+	}
+	if _, err := s.Save(profiles.Default, Config{Rows: 1, Lib: lib, Bar: [][]string{bar[:MaxBar]}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Reset(profiles.Default); err == nil {
+		t.Fatal("库满了还能「恢复默认」= 那 120 个定义被静默抹掉")
+	}
+	// 报错之后原来那份必须一个字没动
+	if c := s.Load(profiles.Default); len(c.Lib) != MaxKeys {
+		t.Fatalf("报错之后库被改了：%d 个", len(c.Lib))
 	}
 }

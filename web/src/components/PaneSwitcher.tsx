@@ -264,8 +264,9 @@ export function PaneSwitcher({
   return (
     <Panel
       onClose={onClose}
-      // 一览是要扫的，比设置面板高一档、宽一档；手机上几乎铺满（几十个 pane 得能滚起来）
-      className="w-[520px] max-h-[calc(100%-24px)] max-md:inset-x-2 max-md:top-3 max-md:w-auto"
+      // 一览是要扫的，比设置面板宽一档；手机上几乎铺满（几十个 pane 得能滚起来）。
+      // 高度和「贴着顶栏」现在都是 Panel 的默认，这儿不再各说一遍
+      className="w-[520px] max-md:inset-x-2 max-md:w-auto"
     >
       {/* 这一排粘在顶上：滚到第三个 workspace 还得能改筛选（-top-2/-mt-2/pt-2 那三个一套，
           和设置面板的分页条同理 —— 外层滚动容器有 pt-2，只写 top-0 会漏一条缝） */}

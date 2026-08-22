@@ -27,5 +27,15 @@ export const THEMES: Record<Scheme, ITheme> = {
   },
 }
 
-export const initialScheme = (): Scheme =>
-  matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+/**
+ * 开页面时是亮还是暗：**自己点过就照自己点的**（那一下进了 profile，见 lib/prefs.ts），
+ * 没点过才跟系统走。
+ *
+ * 读的是 localStorage 那份镜像而不是等服务端：主题得在第一帧就定下来，晚一拍就是白底
+ * 闪一下再变黑。
+ */
+export const initialScheme = (): Scheme => {
+  const own = localStorage.getItem('scheme')
+  if (own === 'dark' || own === 'light') return own
+  return matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+}

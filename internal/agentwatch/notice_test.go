@@ -178,6 +178,74 @@ func TestNoticeSkipsSameTextTwice(t *testing.T) {
 	}
 }
 
+// **重连进来时 herdr 补推的旧状态不该弹。**
+//
+// 这条是用出来的：每次重连进页面都会冒出一条「跑完了」，而那个对话其实是很久以前完成的。
+// herdr 重画 pane 时会把当前状态（`done` 这种）**重新推一遍事件**，而 `pane.updated` 里
+// 没有 `state_change_seq`（实测只有 `revision`）—— 只看「和上次记的不一样」就会把补推当成
+// 刚发生。判据是 herdr 那个全局计数有没有往前走。
+func TestNoticeSkipsStaleStatusOnReconnect(t *testing.T) {
+	f := newFake(t, screenAnswer)
+	f.mute = true          // 事件那条路不推，全靠轮询（和重连时的形状一致）
+	f.setStatus("working") // 计数 = 1
+	w := f.watch(t)
+
+	time.Sleep(10 * pollAgents) // 让 watcher 把「计数 1」记成已处理
+	f.pushStale("done")         // 状态变了但**计数没动** = 补推
+
+	time.Sleep(20 * settleNotice)
+	if got, _ := w.Notices(0); len(got) != 0 {
+		t.Errorf("计数没动的补发不该弹，got %d 条：%+v", len(got), got)
+	}
+
+	// 计数往前走了才是真的变化（用 blocked：done → idle 本来就不算「跑完了」）
+	f.setStatus("blocked")
+	n := waitNotice(t, w, 1)[0]
+	if n.Status != "blocked" {
+		t.Errorf("真变化该弹，got %+v", n)
+	}
+}
+
+// **同一个提问不该反复弹。**
+//
+// 用出来的：agent 停下来问你话，你切过去正在想怎么答，它又弹一遍「等你回答」。根子是
+// herdr 的状态识别会抖（同一个对话框一会儿 blocked 一会儿 idle），而你正在打字、屏幕内容
+// 一直在变，「内容一样就不弹」那条去重也失效了。判据是**中间有没有重新开过工**。
+func TestNoticeSkipsSameThingUntilItWorksAgain(t *testing.T) {
+	f := newFake(t, screenAsk)
+	f.mute = true
+	f.setStatus("working")
+	w := f.watch(t)
+	time.Sleep(10 * pollAgents)
+
+	f.setStatus("blocked") // 它问你话
+	first := waitNotice(t, w, 1)[0]
+	if first.Status != "blocked" {
+		t.Fatalf("第一条该是 blocked，got %+v", first)
+	}
+
+	// 你正在打字：屏幕变了（连内容去重都躲不掉），herdr 的状态又抖了一下
+	f.screen = screenAsk + "\n你已经打了半句话"
+	f.setStatus("idle")
+	time.Sleep(4 * settleNotice)
+	f.setStatus("blocked")
+	time.Sleep(20 * settleNotice)
+
+	if got, _ := w.Notices(0); len(got) != 1 {
+		t.Errorf("同一个提问不该再弹，got %d 条：%+v", len(got), got)
+	}
+
+	// 你答完了、它跑起来、**换了个问题**再来问你 —— 这一条是该弹的
+	f.setStatus("working")
+	time.Sleep(4 * pollAgents)
+	f.screen = strings.ReplaceAll(screenAsk, "Do you want to proceed?", "换一个问题：要不要顺手把测试也跑了？")
+	f.setStatus("blocked")
+	got := waitNotice(t, w, 2)
+	if len(got) != 2 {
+		t.Errorf("重新开过工之后的提问该弹，got %d 条", len(got))
+	}
+}
+
 // 对底那条路（重新订上时的 pane.list）**不弹**：那些变化可能是 herdr 停机期间发生的，
 // 当场弹一片「刚刚跑完了」就是在编时间。
 func TestNoticeNotFromReconcile(t *testing.T) {
@@ -198,6 +266,8 @@ func TestNoticeNotFromReconcile(t *testing.T) {
 func TestNoticeRingKeepsNewest(t *testing.T) {
 	w := New("/nonexistent.sock", "")
 	for i := 0; i < keepNotices+5; i++ {
+		// 每条之间都「重新开过工」：不然同类去重会把后面的全挡掉（那条规则见 emit）
+		w.observe(pane("w1:pA", "term_A", "working"))
 		w.emit(pane("w1:pA", "term_A", "idle"), "idle")
 	}
 	got, seq := w.Notices(0)
@@ -246,13 +316,33 @@ type fake struct {
 	// 真机上背景 pane 的变化就只能这么看见（herdr 不给它们推事件）。
 	mu   sync.Mutex
 	list string
-	mute bool // true = 订上之后一条事件都不推（模拟「看不见的 pane」）
+	seq  uint64 // agent.list 的 state_change_seq：herdr 每次**真的**状态变化才推高
+	mute bool   // true = 订上之后一条事件都不推（模拟「看不见的 pane」）
 }
 
+// setStatus 换状态并推高计数 —— 真 herdr 就是这样。
 func (f *fake) setStatus(st string) {
 	f.mu.Lock()
 	f.list = st
+	f.seq++
 	f.mu.Unlock()
+}
+
+// pushStale 只换状态**不推计数**：herdr 重画 pane 时把当前状态重新推一遍就是这样，
+// 「重连进来弹出一条很久以前的『跑完了』」就是这么来的。
+func (f *fake) pushStale(st string) {
+	f.mu.Lock()
+	f.list = st
+	f.mu.Unlock()
+}
+
+func (f *fake) stateSeq() uint64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.seq == 0 {
+		return 1
+	}
+	return f.seq
 }
 
 func (f *fake) status() string {
@@ -341,6 +431,13 @@ func (f *fake) serve(conn net.Conn) {
 		send(map[string]any{"id": req.ID, "result": map[string]any{
 			"panes": []any{paneObj(f.status())},
 		}})
+	case "agent.list":
+		send(map[string]any{"id": req.ID, "result": map[string]any{
+			"agents": []any{map[string]any{
+				"pane_id": "w1:pA", "agent": "claude",
+				"agent_status": f.status(), "state_change_seq": f.stateSeq(),
+			}},
+		}})
 	case "pane.read":
 		text := f.screen
 		if f.status() == "working" && f.working != "" {
@@ -355,6 +452,10 @@ func (f *fake) serve(conn net.Conn) {
 			time.Sleep(10 * time.Second) // 一条都不推：模拟背景 pane
 			return
 		}
+		// 先让 watcher 轮一拍，把这个终端**当下**的状态计数记成「已处理」——真机上
+		// 它是进程起来时就记下的，测试里得给这一拍留出时间，否则第一次状态变化会被
+		// 当成「计数没动」（那条判据见 notice.go 的 emit）。
+		time.Sleep(8 * pollAgents)
 		for _, st := range f.states {
 			// 轮询那条路（pane.list）要跟着一起变 —— 真机上两条路看到的是同一个 herdr，
 			// 只让事件动的话，轮询会拿旧状态把刚判掉的抖动又「纠正」回来。

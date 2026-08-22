@@ -24,11 +24,13 @@ type Zone = 'bar' | 'lib'
 type At = ChipAt<Zone>
 
 export function TopbarPanel({
-  onSaved, toast,
+  onSaved, toast, profile,
 }: {
   /** 存好之后把新顺序交回去，顶栏立刻跟着变（不用刷新页面） */
   onSaved: (items: TopbarId[]) => void
   toast: (m: string) => void
+  /** 改**哪一套**（见 internal/profiles 和 SoftkeysPanel 里同一个 prop 的注释） */
+  profile: { id: string; name: string }
 }) {
   const [items, setItems] = useState<TopbarId[]>([])
   const [pinned, setPinned] = useState<string[]>(['settings'])
@@ -46,12 +48,13 @@ export function TopbarPanel({
   useEffect(() => {
     void (async () => {
       try {
-        take(await api.get<TopbarResponse>('/topbar'))
+        take(await api.get<TopbarResponse>(`/topbar?profile=${encodeURIComponent(profile.id)}`))
       } catch (e) {
         setErr((e as Error).message)
       }
     })()
-  }, [])
+    // 换了一套就整份重读（上面那一行就在同一块面板里，开着也能换）
+  }, [profile.id])
 
   /** 库 = 还没上栏的，按内置目录的顺序（不是用户排的顺序，库里要好找） */
   const lib = TOPBAR_ITEMS.filter((it) => !items.includes(it.id))
@@ -133,10 +136,10 @@ export function TopbarPanel({
   const save = async () => {
     setErr('')
     try {
-      const r = await api.put<TopbarResponse>('/topbar', { items })
+      const r = await api.put<TopbarResponse>(`/topbar?profile=${encodeURIComponent(profile.id)}`, { items })
       take(r)
       onSaved(r.items.filter((id): id is TopbarId => TOPBAR_BY_ID.has(id as TopbarId)))
-      toast('顶栏已保存')
+      toast(`「${profile.name}」的顶栏已保存`)
     } catch (e) {
       setErr((e as Error).message)
     }
@@ -145,7 +148,7 @@ export function TopbarPanel({
   const reset = async () => {
     setErr('')
     try {
-      const r = await api.del<TopbarResponse>('/topbar')
+      const r = await api.del<TopbarResponse>(`/topbar?profile=${encodeURIComponent(profile.id)}`)
       take(r)
       onSaved(r.items.filter((id): id is TopbarId => TOPBAR_BY_ID.has(id as TopbarId)))
       toast('已恢复默认')
@@ -220,6 +223,8 @@ export function TopbarPanel({
     <div className="flex flex-col gap-2.5">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-[13px] font-medium">顶栏</span>
+        {/* 在改哪一套 —— 和软键条那页同一个位置、同一个样子 */}
+        <span className="rounded border border-line bg-ctl px-1.5 py-0.5 text-xs text-muted">{profile.name}</span>
         <span className="text-xs text-faint">{items.length} / {max}</span>
         <div className="ml-auto flex items-center gap-2">
           <Button size="tiny" variant="primary" onClick={() => void save()} disabled={!dirty}>
@@ -241,8 +246,9 @@ export function TopbarPanel({
         <br />
         顶栏放不下会<strong className="font-medium text-fg">自己横滑</strong>，不换行、也不会藏起来
         （原来字号 ± / 明暗在手机竖屏是 CSS 藏掉的）。
-        这份配置存在服务端（<code className="rounded border border-line bg-ctl px-1 py-px font-mono text-[11px]">~/.herdr-web/topbar.json</code>），
-        手机 / 平板 / 电脑共用一份。
+        这一份是<strong className="font-medium text-fg">「{profile.name}」这一套</strong>的，
+        存在服务端（<code className="rounded border border-line bg-ctl px-1 py-px font-mono text-[11px]">~/.herdr-web/topbar.json</code>）——
+        平板放八个图标、手机竖屏放三个，各存一份互不影响；换一套在上面那一行。
       </p>
 
       {/* 跟着手指走的残影。fixed + pointer-events-none：它自己不能挡住命中判定 */}

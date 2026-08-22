@@ -243,8 +243,14 @@ When an agent stops to wait for you (or has just finished), a card appears in th
 | → `working` | No | That is almost always what you just posted — an echo |
 | `blocked` → `idle` | No | You just answered and it is about to start; reporting "finished" would be a lie |
 | Posted something and hit **Esc to cancel** | No | See below — herdr sees a clean `working → idle`, so it is told apart by content |
+| herdr re-pushing a pane's state on redraw (reconnect) | No | See below — `state_change_seq` has not moved, so it is not a new change |
+| The same question again while you are typing an answer | No | See below — same kind of notice, and it has not gone back to work in between |
 
 **`done` fires no matter where it came from — requiring `working` first was a bug.** On a real device, poking an agent with a one-line "say hi" gives `idle → done` with **no `working` in between** (herdr's screen detection is conservative and a short task never registers as running). The first version required `working → done`, so short tasks produced no notice at all — every unit test stayed green and only the end-to-end poke found it.
+
+**herdr's state counter has to move.** Reported from real use: every reconnect popped a "finished" card for a conversation that had ended long ago. herdr **re-pushes the current state** of a pane when it redraws it, and `pane.updated` carries no `state_change_seq` (measured — only `revision`), so "different from what I last recorded" mistakes a redraw for a fresh change. `agent.list` is the only place that counter lives, so a notice about to fire asks for it once and drops itself if the counter has not moved since the last decision about that terminal. The counter of every terminal is recorded the first time it is seen, so a restart or a reconnect starts from "already handled".
+
+**The same thing is only said once.** Reported from real use: an agent stops to ask something, you jump over, and while you are working out how to answer it announces "waiting on you" again — same question, and you are already on that page. herdr's state detection flickers (the same dialog reports `blocked` once and `idle` the next time, see [HERDR-API.md](HERDR-API.md)), and because you are **typing**, the screen keeps changing, so the "identical text" check below cannot catch it either. The test that works is **whether it went back to work in between**: `idle` and `done` count as one kind ("finished") and `blocked` as the other, and a second notice of the same kind is dropped until that terminal has been seen `working` again. You answer → it works → it asks again: that one fires.
 
 **Nothing new on screen means nothing is announced.** Post a line and hit **Esc**, and herdr reports a clean `working → idle` — identical to finishing. claude leaves **no "interrupted" marker on screen** either (captured on a real device, `testdata/idle-interrupted.txt`: the last `⏺` block is still the previous answer and your line is put back in the composer). So the first version announced a **stale answer** labelled "finished". The test that actually works is "did anything new appear": the scraped text is compared with the last one for that terminal and an identical one is dropped. When a terminal has no previous text (herdr-web just started), the first `→ working` reads one screen to seed the comparison — once per terminal, so the 100ms `working↔idle` flicker cannot make it read repeatedly.
 
@@ -372,11 +378,42 @@ None is optional, because what comes out is **a file the agent wrote**:
 
 ## Settings panel
 
-The ⚙ at the right end of the top bar holds everything, in four pages: **Terminal** (font size / light-dark, kitty protocol / Option as Meta / copy on select / synchronized output, tapping herdr's switch opens the pane list, fullscreen when the keyboard comes up, the badge on the panel icon, system notifications, how long notice cards stay, plus a line of backend environment), **Top bar** (next section), **Soft keys** (the one after), and **Devices** (who has paired, sign out, kick).
+Above the tabs sits one row: **which layout profile this device uses** (next section) — and everything on the Terminal page belongs to that profile. The ⚙ at the right end of the top bar holds everything, in four pages: **Terminal** (font size / light-dark, kitty protocol / Option as Meta / copy on select / synchronized output, tapping herdr's switch opens the pane list, fullscreen when the keyboard comes up, the badge on the panel icon, system notifications, how long notice cards stay, plus a line of backend environment), **Top bar** (next section), **Soft keys** (the one after), and **Devices** (who has paired, sign out, kick).
 
 The font size / light-dark controls at the top of the Terminal page are the same actions as the matching icons in the top bar, not a second copy of the state — and those icons can be dragged off the bar, in which case this page is where they still live.
 
+This panel has **no title row**: the ✕ sits at the right end of the tab bar instead. That bar is sticky, so closing is in reach wherever you have scrolled to, and the 44px a "Settings" heading would take is worth more to the soft key editor. All panels opened from the top bar sit **6px under it** rather than 44 (100 on a narrow screen) — the gap showed nothing and cost height on exactly the two pages that are short of it.
+
+The three of them (pane list / files / settings) are **mutually exclusive**: they all float in the same corner, so two at once is just one covering the other. That is one `panel` field holding "which one", not three booleans — with a single field the second one *cannot be stored*, whereas three booleans rely on every entry point remembering to close the other two, and the entry points are not just the top bar (soft keys `act:`, herdr's switch button, a notice card's "more", tapping a path in the terminal). The file **viewer** is the one deliberate exception: it stacks on top of the file panel, so closing it puts you back in the directory you came from.
+
 This used to be three independent little panels with three icons in the top bar — which is crowded on a tablet, and "settings" split three ways means finding anything depends on remembering which icon is which. **The ⚙ that used to sit in the bottom right of the soft key bar (a shortcut to the Soft keys page) is gone too**: it lived permanently at the end of the key row competing for space (especially in portrait), while editing keys is a thing you do once — going through the top bar is not a burden.
+
+### Layout profiles (one set per kind of device)
+
+**Arrangement is per profile; definitions are shared.** The soft key bar and the top bar live on the server so that they travel with you — but *arrangement* is exactly what every kind of device wants differently: twenty keys over two rows on a tablet, five in one row on a phone in portrait. A single shared arrangement means the tablet and the phone spend their time undoing each other's work.
+
+So there are three layers (`internal/profiles`, stored in `~/.herdr-web/profiles.json`):
+
+| layer | what | how many |
+|---|---|---|
+| global | the soft key **definitions** ("My keys") | one — change a key spec and every profile follows |
+| profile | soft keys `rows` / `bar`, top bar `items`, and **everything on the Terminal page of Settings** — font size, light/dark, the five terminal switches, keyboard-fullscreen, and the notice switches | one per profile |
+| device-local | why fullscreen failed last time, panel geometry (also split by orientation), unread cursor, which pane the outbox aims at, whether the outbox / soft key bar are shown | `localStorage`, never synced |
+
+The global layer is deliberate. If every profile carried its own definitions you would get "the ⌃B key on the phone still has the old spec" — the hardest kind of bug to find, because you verified the change on the tablet and it was right there.
+
+The system-notification switch travels too, even though the permission itself is per-browser: the checkbox is drawn as "wanted" AND "permission granted", and `showNotify` asks the browser again before firing, so a synced-on switch cannot turn into "shows as on, never fires". Light/dark follows the system **until you toggle it once** — after that this profile pins it, otherwise a system change would overwrite what the profile stores and the next check-in would put it back, forever. Whether the outbox and soft key bar are *shown* stays local: those get toggled a dozen times a session from the top bar, and a server write per tap is not worth it.
+
+The picker sits **above** the tab bar in Settings, not in a fifth page: the Top bar and Soft keys pages edit the profile it names, so it has to stay visible while you work in them. **New** copies the current profile — starting from your tablet set and deleting a few keys beats dragging from nothing, and it is the most common thing anyone does here. Deleting a profile drops the devices bound to it back to the default one, which is why that one cannot be deleted.
+
+**Binding is explicit, never by screen width.** Split screen, rotation and an external display all make the width jump, and what a profile holds is precisely the soft key bar — the one thing that must not move under your thumb. The device class (coarse pointer plus the short side of `screen`) is used **once**: when a browser turns up for the first time with nothing bound, to pick a starting profile. That choice is written down and never guessed again. Landscape versus portrait stays a separate axis, handled locally per device (`web/src/lib/oriented.ts`) — folding it in here would double the number of profiles to describe something the page can just measure.
+
+**What identifies "this device" is an installId the browser generates for itself**, not the paired-device id from `auth`: a loopback session has no device id at all, and that is the common case on a desktop. It is not a credential and the server makes no access decision with it — the most it can say is "I am that tablet", and get that tablet's key arrangement back. Clearing `localStorage` loses the binding; then the class guess runs once more and one tap in Settings fixes it. Settings → Devices lists every browser that has shown up along with the profile it uses, so you can **fix the phone from the tablet** — the device whose arrangement is broken is the worst one to operate.
+
+Two things about the file format, both about not losing configuration:
+
+- `softkeys.json` / `topbar.json` keep every profile under `profiles` and **mirror the default one into the old top-level fields**. An older herdr-web only reads the top level, so without the mirror a downgrade reads as "my soft keys reset themselves" while the configuration is still sitting in the file. One copy of redundancy buys that.
+- **Reads are lenient, writes are strict.** Because definitions are global, deleting one on the tablet can leave a dangling reference on the phone's bar: saving prunes those references from *every* profile, and loading drops references it cannot resolve instead of failing the whole file back to factory settings (which would take the intact half with it).
 
 ## Top bar (drag the buttons you want)
 
@@ -384,7 +421,7 @@ This used to be three independent little panels with three icons in the top bar 
 
 Same shape as the soft key bar (**library below, bar above, drag into it**) and the same gesture code (`web/src/lib/chipdrag.ts` — two arrangement editors each with their own drag implementation is how one action ends up with two different feels). On touch it takes a 250ms press to pick a chip up: the page has to scroll, and the chip itself is the handle, so without the press there is no way to tell "scroll the page" from "drag this".
 
-It lives **on the server** (`~/.herdr-web/topbar.json`, see `internal/topbar`), so phone / tablet / desktop share one bar — same reasoning as the soft keys. What is stored is **a list of button ids**, not button definitions: what a button looks like (icon, name) is built in (`web/src/components/topbarItems.tsx`). The server keeps a whitelist that has to match that catalogue exactly, with a test watching both (`TestActionsMatchJS` in `internal/topbar`) — adding a button on only one side fails in a way that is hard to trace: it drags fine in the editor and the save reports "unknown button", or it saves fine and the bar cannot draw it.
+It lives **on the server** (`~/.herdr-web/topbar.json`, see `internal/topbar`) so it travels with you rather than being set up device by device — but **which buttons is per profile** (previous section): eight icons on a tablet, three on a phone in portrait, one section per profile in the same file. What is stored is **a list of button ids**, not button definitions: what a button looks like (icon, name) is built in (`web/src/components/topbarItems.tsx`). The server keeps a whitelist that has to match that catalogue exactly, with a test watching both (`TestActionsMatchJS` in `internal/topbar`) — adding a button on only one side fails in a way that is hard to trace: it drags fine in the editor and the save reports "unknown button", or it saves fine and the bar cannot draw it.
 
 **What you can put there**: pane list / files / outbox / soft key bar / system keyboard / upload image / pull clipboard / paste into terminal / smaller font / bigger font / light-dark / fullscreen / settings. The four in the middle used to be soft-key-only (the `act:` ones); they work in either bar now, and the two bars are separate configs.
 
@@ -396,9 +433,9 @@ Three edges:
 
 ## Soft key bar
 
-Phones have no Ctrl key, and herdr's `ctrl+b` prefix depends on one. The keys live **on the server** (`~/.herdr-web/softkeys.json`), so phone / tablet / desktop share one set, edited in Settings → Soft keys.
+Phones have no Ctrl key, and herdr's `ctrl+b` prefix depends on one. The keys live **on the server** (`~/.herdr-web/softkeys.json`), edited in Settings → Soft keys: the **definitions** are shared by every device, while **how many rows and which keys are on the bar is per profile** (see [Layout profiles](#layout-profiles-one-set-per-kind-of-device)).
 
-**One row or two is a setting** (server-side, travelling with the config), not a guess based on "is the second row empty" — an empty second row and "I only want one row" are different things. The two rows **scroll horizontally independently**: a phone fits four or five keys per row, so put the common ones on the first row and the rest on the second; that beats a dozen keys in one long queue, because your finger knows which row it is on and scrolling one does not drag the other. Switching back to one row **appends the second row's keys to the end of the first** (the server computes it the same way; "stored but not shown" is the most annoying state there is).
+**One row or two is a setting** (server-side, part of the profile), not a guess based on "is the second row empty" — an empty second row and "I only want one row" are different things. The two rows **scroll horizontally independently**: a phone fits four or five keys per row, so put the common ones on the first row and the rest on the second; that beats a dozen keys in one long queue, because your finger knows which row it is on and scrolling one does not drag the other. Switching back to one row **appends the second row's keys to the end of the first** (the server computes it the same way; "stored but not shown" is the most annoying state there is).
 
 The editor has two layers, and so does what gets persisted (`{rows, keys, bar}`):
 
@@ -629,6 +666,9 @@ internal/
   topbar/             which buttons sit in the top bar (a list of ids + a whitelist). **Separate
                       file, separate endpoint** from the soft keys: sharing one would mean partial
                       update semantics, which is how configuration gets silently dropped
+  profiles/           "which layout does this device use": the roster, the per-browser binding and
+                      the handful of switches that travel with a profile. Definitions stay global,
+                      arrangement is per profile — the reasoning is in the package doc
   uploads/            image storage (type by magic number)
   files/              file browsing: starting points / directory listing / type by magic number /
                       short-lived signed links (sign.go). No boundary by default — FILE_ROOTS is
@@ -662,9 +702,12 @@ web/                  Vite + React + TS + Tailwind v4 + shadcn-style components
                       (flood-fill by background colour) — the test behind "tap it, get our pane list"
   src/hooks/          useCompose (outbox state machine), useNotices (notice polling + unread badge),
                       useViewportHeight
-  src/lib/            api.ts (fetch + CSRF), chipdrag.ts (the "library below, bar above, drag into
-                      it" gesture, shared by the top bar and soft key editors), tap.ts (synthesizes
-                      the click when the browser loses it)
+  src/lib/            api.ts (fetch + CSRF, and the installId that says which device this is),
+                      prefs.ts (the switches that follow a profile: server is the truth,
+                      localStorage is a mirror because some readers are synchronous),
+                      chipdrag.ts (the "library below, bar above, drag into it" gesture, shared by
+                      the top bar and soft key editors), oriented.ts (landscape / portrait each get
+                      their own local copy), tap.ts (synthesizes the click when the browser loses it)
   src/components/     Dock.tsx is the bottom dock shell (border / width / height shared by the
                       outbox and the soft key bar)
                       Notices.tsx is the stack of cards in the top right
@@ -672,7 +715,8 @@ web/                  Vite + React + TS + Tailwind v4 + shadcn-style components
                       FileViewer.tsx shows one file (image / text), full screen
                       Pairing.tsx is the pairing page (the only thing rendered when unpaired)
                       SettingsPanel.tsx is the settings panel; the top bar editor, the soft key
-                      editor and device management are three of its pages
+                      editor and device management are three of its pages, and
+                      ProfilePicker.tsx is the "which layout does this device use" row above them
                       TopbarPanel.tsx is the top bar editor; topbarItems.tsx is the single
                       catalogue of which buttons exist (the server whitelist must match it,
                       and a test watches that)

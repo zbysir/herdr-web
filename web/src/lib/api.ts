@@ -32,13 +32,54 @@ export const SESSION = (() => {
   return /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/.test(seg) && !seg.includes('..') ? seg : ''
 })()
 
+/**
+ * installId：**这一个浏览器**的标识，只为「这台设备用哪一套排布」服务（profile，见
+ * internal/profiles 的包注释）。
+ *
+ * 为什么不用 auth 那个设备 ID：本机直连（loopback / 旧 token）压根没有设备 ID，而那正是
+ * 桌面上最常见的情形。为什么不放 cookie：它不是凭据，服务端也不拿它做任何权限判断 ——
+ * 拿到它最多只能说「我是那台平板」，然后读到那台平板的软键条排布。
+ *
+ * 清掉 localStorage 就丢了绑定：那时候服务端按 deviceKind() 重新猜一套，人在设置里再点
+ * 一下就好（比把它塞进凭据、再为它做一套过期 / 撤销强得多）。
+ */
+const INSTALL_KEY = 'installId'
+export const INSTALL = (() => {
+  const cur = localStorage.getItem(INSTALL_KEY)
+  if (cur && /^[A-Za-z0-9_-]{6,64}$/.test(cur)) return cur
+  // getRandomValues 在非安全上下文里也有（randomUUID 没有 —— 局域网 http 上就是它）
+  const b = new Uint8Array(12)
+  crypto.getRandomValues(b)
+  const v = [...b].map((n) => n.toString(16).padStart(2, '0')).join('')
+  localStorage.setItem(INSTALL_KEY, v)
+  return v
+})()
+
+export type DeviceKind = 'phone' | 'tablet' | 'desktop'
+
+/**
+ * 这台设备是什么。**只在「这个浏览器第一次来、还没绑过」那一下用得上**：服务端拿它挑一套
+ * 默认的 profile，挑完就落盘，之后再也不猜（见 internal/profiles 的包注释）。
+ *
+ * 用 screen 的**短边**而不是 innerWidth：分屏、转屏、开着开发者工具都会让 innerWidth 变，
+ * 而这个判断该反映的是「这是台什么机器」。
+ */
+export const deviceKind = (): DeviceKind => {
+  if (!matchMedia('(pointer: coarse)').matches) return 'desktop'
+  return Math.min(screen.width, screen.height) < 480 ? 'phone' : 'tablet'
+}
+
 // session 挂在**每个** /api 请求上，不是只挂发件箱那几个：漏一个的表现是「这一个口
 // 悄悄读了默认 session」，而漏没漏只能一个调用点一个调用点去看。用不上的口（softkeys、
 // auth）服务端直接忽略这个参数。
+//
+// install 同理挂在每个请求上：软键条 / 顶栏的 GET 靠它算出「这台设备用哪一套」，不带
+// 就一律给默认那一套 —— 漏了的表现是「平板上打开是手机那套排布」。
 function url(path: string) {
   const extra = new URLSearchParams()
   if (TOKEN) extra.set('token', TOKEN)
   if (SESSION) extra.set('session', SESSION)
+  extra.set('install', INSTALL)
   const q = extra.toString()
   if (!q) return `/api${path}`
   return `/api${path}${path.includes('?') ? '&' : '?'}${q}`
@@ -337,7 +378,13 @@ export interface PresetGroup { group: string; items: SoftKey[] }
  * `lib` 是「我的按键」的定义，`bar` 每行是一串指向 lib 的 **id**。
  * 存 id 才能做到「同一个键两行各放一个」「改一处定义条上全变」。
  */
-export interface SoftkeysConfig { rows: 1 | 2; lib: SoftKey[]; bar: string[][] }
+export interface SoftkeysConfig {
+  rows: 1 | 2
+  lib: SoftKey[]
+  bar: string[][]
+  /** 这一份是**哪一套**排布的（服务端算出来的，不是请求里那个）—— 编辑器照它写标题 */
+  profile?: string
+}
 export interface SoftkeysResponse extends SoftkeysConfig { max: number; maxBar: number; presets: PresetGroup[] }
 
 /**
@@ -345,7 +392,28 @@ export interface SoftkeysResponse extends SoftkeysConfig { max: number; maxBar: 
  * `components/topbarItems.tsx`。`actions` 是服务端认的全部 id、`pinned` 是不能删的那几个
  * （设置 ⚙ —— 删了就没路回来改配置了），`max` 是上限。
  */
-export interface TopbarResponse { items: string[]; actions: string[]; pinned: string[]; max: number }
+export interface TopbarResponse { items: string[]; actions: string[]; pinned: string[]; max: number; profile?: string }
+
+/**
+ * 一套排布（profile）。**装的是「这类设备上怎么排」**：软键条几行 / 哪些键、顶栏放哪几个、
+ * 外加几个小开关（见 lib/prefs.ts）。「我的按键」那些定义是全局的，不在这里面 ——
+ * 理由见 internal/profiles 的包注释。
+ */
+export interface Profile { id: string; name: string; kind?: DeviceKind; prefs?: Record<string, string> }
+
+/** 一个浏览器（一台设备上的一个浏览器）绑在哪一套上。label 是服务端从 UA 猜的 */
+export interface ProfileInstall { id: string; label?: string; profile: string; lastSeen?: string; me?: boolean }
+
+export interface ProfilesResponse {
+  profiles: Profile[]
+  /** 这台设备该用哪一套 */
+  current: string
+  /** current 那一套的开关（键在 lib/prefs.ts 的 PREF_KEYS 里） */
+  prefs?: Record<string, string>
+  installs: ProfileInstall[]
+  max: number
+  maxName: number
+}
 
 /** 把 bar 里的 id 换成真的按键定义。认不出的 id 直接跳过（服务端不该给出这种，防一手） */
 export function resolveBar(lib: SoftKey[], bar: string[][]): SoftKey[][] {

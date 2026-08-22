@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"log"
@@ -26,6 +27,7 @@ import (
 	"github.com/zbysir/herdr-web/internal/files"
 	"github.com/zbysir/herdr-web/internal/herdr"
 	"github.com/zbysir/herdr-web/internal/outbox"
+	"github.com/zbysir/herdr-web/internal/profiles"
 	"github.com/zbysir/herdr-web/internal/selfupdate"
 	"github.com/zbysir/herdr-web/internal/softkeys"
 	"github.com/zbysir/herdr-web/internal/topbar"
@@ -39,6 +41,9 @@ type Server struct {
 	Outbox   *outbox.Outbox
 	Softkeys *softkeys.Store
 	Topbar   *topbar.Store
+	// Profiles 「这台设备用哪一套排布」的名册 + 绑定。软键条 / 顶栏的每个请求都要先过它
+	// 算出 profile（见 profileOf）。
+	Profiles *profiles.Store
 	Uploads  *uploads.Store
 	Web      fs.FS // 前端产物（嵌进二进制，或 -web 指向的目录）
 
@@ -103,6 +108,7 @@ func New(cfg *config.Config, web fs.FS, a *auth.Store, g *auth.Gate, opt Options
 		Outbox:   ob,
 		Softkeys: &softkeys.Store{Dir: cfg.Dir},
 		Topbar:   &topbar.Store{Dir: cfg.Dir},
+		Profiles: &profiles.Store{Dir: cfg.Dir},
 		Uploads:  &uploads.Store{Dir: cfg.Dir},
 		Files: &files.Browser{
 			Enabled: cfg.Files,
@@ -243,6 +249,8 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 		s.apiSoftkeys(w, r)
 	case "topbar":
 		s.apiTopbar(w, r)
+	case "profiles":
+		s.apiProfiles(w, r, seg)
 	case "clip":
 		s.apiClip(w, r)
 	case "herdr":
@@ -330,34 +338,53 @@ func (s *Server) apiClip(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"text": text, "bytes": len(text)})
 }
 
+// apiSoftkeys 是软键条：rows / lib / bar。
+//
+// **哪一套**由 profileOf 决定（`?profile=` 显式指定，否则按这台设备的绑定算）。
+// 响应里回一句 profile，前端好在编辑器上写「正在改：平板」—— 存到别的地方去是这个功能
+// 最容易出的错，而它完全静默。
 func (s *Server) apiSoftkeys(w http.ResponseWriter, r *http.Request) {
 	// rows / lib / bar 一起进出一个请求：行数变了往往就是为了把某几个键挪到第二行，
 	// 分几次存的话中间那一下必然是个自相矛盾的状态（两行的引用 + 一行的设置）
+	prof := s.profileOf(r)
 	out := func(c softkeys.Config) {
 		writeJSON(w, 200, map[string]any{"lib": c.Lib, "bar": c.Bar, "rows": c.Rows,
-			"max": softkeys.MaxKeys, "maxBar": softkeys.MaxBar})
+			"max": softkeys.MaxKeys, "maxBar": softkeys.MaxBar, "profile": prof})
 	}
 	switch r.Method {
 	case http.MethodGet:
-		c := s.Softkeys.Load()
+		// GET 不挑食：`?profile=` 指到一套已经被别的设备删掉的排布时，退回这台设备该用
+		// 的那一套并在响应里说清是哪一套（前端照着改标题）。写才严格，见下面。
+		c := s.Softkeys.Load(prof)
 		writeJSON(w, 200, map[string]any{
-			"lib": c.Lib, "bar": c.Bar, "rows": c.Rows,
+			"lib": c.Lib, "bar": c.Bar, "rows": c.Rows, "profile": prof,
 			"max": softkeys.MaxKeys, "maxBar": softkeys.MaxBar, "presets": softkeys.Presets(),
 		})
 	case http.MethodPut:
+		if err := s.mustProfile(prof); err != nil {
+			fail(w, 404, err)
+			return
+		}
 		var body softkeys.Config
 		if err := readJSON(r, &body); err != nil {
 			fail(w, 400, err)
 			return
 		}
-		c, err := s.Softkeys.Save(body)
+		c, err := s.Softkeys.Save(prof, body)
 		if err != nil {
 			fail(w, 400, err)
 			return
 		}
 		out(c)
 	case http.MethodDelete:
-		c, err := s.Softkeys.Save(softkeys.DefaultConfig())
+		if err := s.mustProfile(prof); err != nil {
+			fail(w, 404, err)
+			return
+		}
+		// 「恢复默认」只管**这一套**的排布：出厂那一排回到条上，「我的按键」里缺的补上。
+		// 不整份恢复出厂 —— 定义是全局的，那样会把别的 profile 条上引用的定义一起抹掉
+		// （在手机上点一下，平板上的软键条少一半）。见 softkeys.Store.Reset。
+		c, err := s.Softkeys.Reset(prof)
 		if err != nil {
 			fail(w, 400, err)
 			return
@@ -368,6 +395,15 @@ func (s *Server) apiSoftkeys(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// mustProfile 写操作前确认这一套还在：另一台设备可能刚把它删了，而这边的编辑器还开着。
+// 静默存到别的地方去是这里最坏的结果 —— 排布看着「保存成功」，回头一看没变。
+func (s *Server) mustProfile(id string) error {
+	if s.Profiles.Load().Has(id) {
+		return nil
+	}
+	return fmt.Errorf("没有这一套排布（%s）—— 可能在别的设备上删掉了，重开一下设置", id)
+}
+
 // apiTopbar 是顶栏那排图标按钮「放哪几个、什么顺序」。
 //
 // 和软键条**分成两个口**：各自一个 PUT 收自己那一整份。混在一个口里的话两个编辑器都在
@@ -376,28 +412,38 @@ func (s *Server) apiSoftkeys(w http.ResponseWriter, r *http.Request) {
 // GET 顺带把白名单和上限也给出去：编辑器要拿它和自己那份按钮目录对一遍，服务端不认的
 // 就别画出来让人拖 —— 拖得上去、一存报错是最难受的那种交互。
 func (s *Server) apiTopbar(w http.ResponseWriter, r *http.Request) {
+	prof := s.profileOf(r)
 	out := func(c topbar.Config) {
 		writeJSON(w, 200, map[string]any{
-			"items": c.Items, "actions": topbar.Actions, "pinned": topbar.Pinned, "max": topbar.MaxItems,
+			"items": c.Items, "actions": topbar.Actions, "pinned": topbar.Pinned,
+			"max": topbar.MaxItems, "profile": prof,
 		})
 	}
 	switch r.Method {
 	case http.MethodGet:
-		out(s.Topbar.Load())
+		out(s.Topbar.Load(prof))
 	case http.MethodPut:
+		if err := s.mustProfile(prof); err != nil {
+			fail(w, 404, err)
+			return
+		}
 		var body topbar.Config
 		if err := readJSON(r, &body); err != nil {
 			fail(w, 400, err)
 			return
 		}
-		c, err := s.Topbar.Save(body)
+		c, err := s.Topbar.Save(prof, body)
 		if err != nil {
 			fail(w, 400, err)
 			return
 		}
 		out(c)
 	case http.MethodDelete:
-		c, err := s.Topbar.Save(topbar.DefaultConfig())
+		if err := s.mustProfile(prof); err != nil {
+			fail(w, 404, err)
+			return
+		}
+		c, err := s.Topbar.Save(prof, topbar.DefaultConfig())
 		if err != nil {
 			fail(w, 400, err)
 			return

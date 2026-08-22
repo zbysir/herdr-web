@@ -65,12 +65,18 @@ function minter(lib: SoftKey[]) {
  * 而平板 / 手机是这个项目的主设备。
  */
 export function SoftkeysPanel({
-  onClose, onSaved, toast, embedded,
+  onClose, onSaved, toast, embedded, profile,
 }: {
   onClose?: () => void
   onSaved: (lib: SoftKey[], bar: string[][]) => void
   toast: (m: string) => void
   embedded?: boolean
+  /**
+   * 改**哪一套**排布（见 internal/profiles）。id 一路带到 GET 和 PUT 上：
+   * 存的时候原样带回去，中间要是有人在别的设备上改了这台的绑定，也不会静默存到另一套上。
+   * 名字只是显示用 —— 「我在改哪一套」得一直看得见，这一页能拖十分钟。
+   */
+  profile: { id: string; name: string }
 }) {
   const [lib, setLib] = useState<SoftKey[]>([])
   const [bar, setBar] = useState<string[][]>([[]])
@@ -94,7 +100,7 @@ export function SoftkeysPanel({
   useEffect(() => {
     void (async () => {
       try {
-        const r = await api.get<SoftkeysResponse>('/softkeys')
+        const r = await api.get<SoftkeysResponse>(`/softkeys?profile=${encodeURIComponent(profile.id)}`)
         take(r)
         setPresets(r.presets)
         setMax(r.max || 120)
@@ -103,7 +109,8 @@ export function SoftkeysPanel({
         setErr((e as Error).message)
       }
     })()
-  }, [])
+    // 换了一套就整份重读（面板开着的时候也能换，上面那一行就在同一块面板里）
+  }, [profile.id])
 
   const byId = new Map(lib.map((k) => [k.id, k]))
   /** 某个筐里第 i 个是哪个键（认不出就当空，正常不会有） */
@@ -235,11 +242,13 @@ export function SoftkeysPanel({
   const save = async () => {
     setErr('')
     try {
-      const r = await api.put<SoftkeysConfig>('/softkeys', { rows, lib, bar })
+      const r = await api.put<SoftkeysConfig>(
+        `/softkeys?profile=${encodeURIComponent(profile.id)}`, { rows, lib, bar },
+      )
       take(r)
       onSaved(r.lib, r.bar)
       setSelId(null)
-      toast('软键条已保存')
+      toast(`「${profile.name}」的软键条已保存`)
     } catch (e) {
       setErr((e as Error).message)   // 服务端会指出是第几个按键、哪里不认
     }
@@ -248,7 +257,7 @@ export function SoftkeysPanel({
   const reset = async () => {
     setErr('')
     try {
-      const r = await api.del<SoftkeysConfig>('/softkeys')
+      const r = await api.del<SoftkeysConfig>(`/softkeys?profile=${encodeURIComponent(profile.id)}`)
       take(r)
       onSaved(r.lib, r.bar)
       setSelId(null)
@@ -332,6 +341,8 @@ export function SoftkeysPanel({
       {/* 行数 + 存盘。行数放最前面：它决定下面画一栏还是两栏 */}
       <div className="mb-2.5 flex flex-wrap items-center gap-2">
         <span className="text-[13px] font-medium">软键条</span>
+        {/* 「在改哪一套」要一直看得见：这一页能拖十分钟，改错了套还得重来一遍 */}
+        <span className="rounded border border-line bg-ctl px-1.5 py-0.5 text-xs text-muted">{profile.name}</span>
         {/* 「一行 / 两行」是二选一，贴成一个分段控件 —— 两个独立按钮并排时看不出
             它们是同一个选择（原来就是两个按钮，谁开着全靠颜色深浅去猜） */}
         <div className="flex overflow-hidden rounded-md border border-line">
@@ -349,7 +360,14 @@ export function SoftkeysPanel({
           </Button>
         </div>
         <span className="ml-auto text-xs text-faint tabular-nums">{bar.reduce((n, r) => n + r.length, 0)} 个在条上</span>
-        <Button size="tiny" variant="danger" onClick={reset}>恢复默认</Button>
+        <Button
+          size="tiny"
+          variant="danger"
+          title="只把这一套的条恢复成出厂那一排（「我的按键」里缺的补上，别的定义和别的套都不动）"
+          onClick={reset}
+        >
+          恢复默认
+        </Button>
         <Button size="tiny" variant="primary" onClick={save}>保存</Button>
       </div>
 
@@ -434,7 +452,11 @@ export function SoftkeysPanel({
         <code>Ctrl</code> / <code>Alt</code> 这种粘滞修饰键写 <code>sticky:ctrl</code> / <code>sticky:alt</code>，
         呼出键盘写 <code>act:kbd</code>、传图写 <code>act:img</code>（这两个是网页端自己处理，不发字节）。<br />
         勾上<strong>「两下」</strong>就是要点两次才真发出去：第一下只是举起来（键变红），
-        3 秒不点就自己放下 —— 关 pane / 关标签这种误触没法撤销的键值得勾上。
+        3 秒不点就自己放下 —— 关 pane / 关标签这种误触没法撤销的键值得勾上。<br />
+        <strong>几行、哪个键在条上是这一套（{profile.name}）自己的</strong>，换一套就整条换掉；
+        而<strong>「我的按键」里的定义是所有套共用的</strong> —— 改一个按键谱，平板和手机一起变，
+        在这儿<strong>删掉</strong>一个定义，别的套条上那些引用也会一起消失。
+        「恢复默认」只管这一套的条，不碰别的套。
       </p>
 
       {/* 跟着手指走的残影。fixed + pointer-events-none：它自己不能挡住命中判定 */}

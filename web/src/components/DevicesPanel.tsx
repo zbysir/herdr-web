@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, type Device } from '@/lib/api'
+import { api, INSTALL, type Device, type Profile, type ProfileInstall, type ProfilesResponse } from '@/lib/api'
 import { isCancel, passkeySupported, registerPasskey, type PasskeyInfo } from '@/lib/passkey'
 import { Panel } from './ui/panel'
 import { Button } from './ui/button'
+import { Select } from './ui/select'
 
 function ago(iso: string) {
   const d = (Date.now() - new Date(iso).getTime()) / 1000
@@ -23,15 +24,32 @@ function expiry(iso: string) {
  *
  * 「踢掉」和「全部踢掉」都要点两下才生效 —— 和软键条那套防误触一个道理：撤销之后
  * 那台设备下一个请求就 401，人不在机器前的话得重新配对，误触代价不小。
+ *
+ * 底下还有一节「哪台设备用哪一套排布」。为什么摆在这一页而不是另开一页：那就是**一张
+ * 设备表**，人找它的时候想的是「设备」。而它最值钱的用法恰恰是改**别人**那台 ——
+ * 手机上软键条排布调坏了的时候，那台手机自己反而是最难操作的一台。
+ *
+ * 注意这一节里的「设备」和上面那张表**不是同一个东西**：上面是配过对的凭据（auth 的
+ * 设备 ID），这一节是浏览器自己生成的 installId —— 本机直连压根没有凭据那一层，而桌面
+ * 上最常见的正是本机直连（见 internal/profiles 的包注释）。所以两张表的行对不上是正常的。
  */
 export function DevicesPanel({
-  onClose, toast, embedded,
-}: { onClose?: () => void; toast: (m: string) => void; embedded?: boolean }) {
+  onClose, toast, embedded, onProfiles,
+}: {
+  onClose?: () => void
+  toast: (m: string) => void
+  embedded?: boolean
+  /** 改了**这台**设备绑哪一套：把整份响应交出去，App 那边当场把排布换过来 */
+  onProfiles?: (r: ProfilesResponse) => void
+}) {
   const [devs, setDevs] = useState<Device[]>([])
   const [me, setMe] = useState('')
   const [err, setErr] = useState('')
   const [keys, setKeys] = useState<PasskeyInfo[]>([])
   const [pkAvail, setPkAvail] = useState(false)
+  /** 「哪台设备用哪一套排布」那一节 */
+  const [profs, setProfs] = useState<Profile[]>([])
+  const [insts, setInsts] = useState<ProfileInstall[]>([])
   const [armed, setArmed] = useState<string | null>(null)
   const disarm = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
@@ -49,6 +67,11 @@ export function DevicesPanel({
       setKeys(r.passkeys ?? [])
       setPkAvail(r.available)
     } catch { /* 老版本服务端没这个口，当没有就行 */ }
+    try {
+      const r = await api.get<ProfilesResponse>('/profiles')
+      setProfs(r.profiles ?? [])
+      setInsts(r.installs ?? [])
+    } catch { /* 老版本服务端没这个口 */ }
   }, [])
 
   useEffect(() => {
@@ -118,6 +141,25 @@ export function DevicesPanel({
     }
   }
 
+  /**
+   * 把某台设备换到另一套排布上。
+   *
+   * 改的是**自己**这台时要把结果交给 App（onProfiles）：软键条和顶栏得当场换过去，
+   * 不然界面上还是老那一套，而设置里已经写着新名字了。改别人那台不用 —— 那台设备
+   * 下次打开页面自己会拿到。
+   */
+  const rebind = async (install: string, profile: string) => {
+    setErr('')
+    try {
+      const r = await api.post<ProfilesResponse>('/profiles/bind', { install, profile })
+      setInsts(r.installs ?? [])
+      if (install === INSTALL) onProfiles?.(r)
+      toast(`换成「${profs.find((p) => p.id === profile)?.name ?? profile}」了`)
+    } catch (e) {
+      setErr((e as Error).message)
+    }
+  }
+
   const label = (key: string, normal: string) => (armed === key ? '再点一次' : normal)
 
   const body = (
@@ -152,6 +194,41 @@ export function DevicesPanel({
           </li>
         ))}
       </ul>
+
+      {insts.length > 0 && profs.length > 0 && (
+        <div className="mt-3 border-t border-line pt-2.5">
+          <strong className="text-[13px] font-medium">哪台设备用哪一套排布</strong>
+          <p className="mt-1 mb-1.5 text-xs/relaxed text-muted">
+            软键条和顶栏的排布是按「套」存的（在设置最上面那一行选）。
+            <b>在这儿能改别的设备那一套</b> —— 手机上排布调坏了的时候，那台手机自己最难操作。
+          </p>
+          <ul className="list-none p-0">
+            {insts.map((it) => (
+              <li key={it.id} className="flex items-center gap-2 py-1.5">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate">
+                    {it.label || '未知设备'}
+                    {it.me && (
+                      <span className="ml-2 rounded border border-brand/40 bg-brand/12 px-1.5 py-px text-[11px] text-brand">
+                        这台
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-muted">{it.lastSeen ? `${ago(it.lastSeen)}打开过` : '—'}</div>
+                </div>
+                <Select
+                  className="shrink-0"
+                  value={it.profile}
+                  aria-label={`${it.label || '这台设备'}用哪一套排布`}
+                  onChange={(e) => void rebind(it.id, e.target.value)}
+                >
+                  {profs.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </Select>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="mt-3 border-t border-line pt-2.5">
         <div className="mb-1.5 flex items-center justify-between">

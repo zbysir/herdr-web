@@ -156,7 +156,9 @@ export function FilesPanel({
   }
 
   return (
-    <Panel title="文件" onClose={onClose} className="max-md:bottom-2 md:max-h-[calc(100%-72px)]">
+    // 宽屏上留一截底：文件面板下面就是发件箱，挡住它就没法「看一眼图再接着说」。
+    // 那个 34px 是跟着 Panel 的 top-1.5 算的（改 Panel 的 top 就得跟着改这儿）
+    <Panel title="文件" onClose={onClose} className="max-md:bottom-2 md:max-h-[calc(100%-34px)]">
       {/* 粘任意绝对路径。**这一条兜住所有「不在任何起点下面」的情况** ——
           agent 往 /var/folders/xx/T/ 里写了张图，这儿粘进去就完了。 */}
       <div className="mb-2 flex gap-1.5">

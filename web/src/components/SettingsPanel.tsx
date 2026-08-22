@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
+import { X } from 'lucide-react'
 import { AArrowDown, AArrowUp, CircleHalf } from '@/icons'
-import type { SoftKey, State } from '@/lib/api'
+import type { ProfilesResponse, SoftKey, State } from '@/lib/api'
 import { enableNotify, notifyState, testNotify, type NotifyState } from '@/lib/notify'
 import { Panel } from './ui/panel'
 import { Button } from './ui/button'
@@ -8,6 +9,7 @@ import { Checkbox } from './ui/checkbox'
 import { Select } from './ui/select'
 import { SoftkeysPanel } from './SoftkeysPanel'
 import { TopbarPanel } from './TopbarPanel'
+import { ProfilePicker } from './ProfilePicker'
 import type { TopbarId } from './topbarItems'
 import { DevicesPanel } from './DevicesPanel'
 import { cn } from '@/lib/utils'
@@ -23,6 +25,9 @@ import { cn } from '@/lib/utils'
  * 原来那个「程序请求的终端能力」列表（DEC 1049 / OSC 10 那一串）去掉了：那是当初补
  * 协议时的调试视图，日常没人看。能力本身还照样在 session 里记着（主题变更通知要用），
  * 只是不再摆到界面上。
+ *
+ * 分页条**上面**还有一行「这台设备用哪一套排布」（profile）：顶栏和软键条两页改的是那一套
+ * 里的东西，所以它不能做成第五个分页 —— 得一直看得见。见 ProfilePicker。
  */
 /** 每种权限状态说一句人话 —— 「开不了」的原因差别很大，笼统一句「不支持」查不出所以然 */
 const NOTIFY_HINT: Record<NotifyState, string> = {
@@ -47,14 +52,14 @@ const TABS: { id: SettingsTab; label: string }[] = [
 export function SettingsPanel({
   tab, onTab, onClose, opts, setOpt, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs,
   kbdFull, onKbdFull, heals, onSaved, onTopbar, toast, state,
-  fontSize, onFont, scheme, onScheme,
+  fontSize, onFont, scheme, onScheme, profile, onProfiles,
 }: {
   tab: SettingsTab
   onTab: (t: SettingsTab) => void
   onClose: () => void
   opts: TermOpts
   setOpt: (k: keyof TermOpts, v: boolean) => void
-  /** 面板图标上那个未读数角标画不画（有人不喜欢）。存在本地，一台设备一份 */
+  /** 面板图标上那个未读数角标画不画（有人不喜欢）。跟着这套排布走，见 lib/prefs.ts */
   dot: boolean
   onDot: (v: boolean) => void
   /** 系统通知开没开（浏览器权限另算，面板里当场问） */
@@ -81,9 +86,15 @@ export function SettingsPanel({
   onFont: (d: number) => void
   scheme: 'dark' | 'light'
   onScheme: () => void
+  /** 这台设备用哪一套排布（顶栏 / 软键条两页改的就是它），见 internal/profiles */
+  profile: { id: string; name: string }
+  /** 名册 / 绑定 / 那一套的开关变了 —— App 据此重拉排布、把开关刷一遍 */
+  onProfiles: (r: ProfilesResponse) => void
 }) {
   return (
-    <Panel title="设置" onClose={onClose} className="w-[560px]">
+    // 不给 title：那一行「设置」+ × 占 44px，而这块面板本来就最缺高度（软键条那页要拖）。
+    // × 并进分页条右边 —— 分页条是粘在顶上的，滚到哪儿关闭都在手边，比原来更好点。
+    <Panel onClose={onClose} className="w-[560px]">
       {/* 分页条粘在顶上：软键条那页很长，滚下去还得能换页。
           下划线式，不是三个填充按钮 —— 三个色块并排时「当前是哪一页」只能靠颜色深浅
           去猜，而下划线是位置信息，扫一眼就知道自己在第几页。手指要点得中的那点高度
@@ -94,7 +105,11 @@ export function SettingsPanel({
           分页条上方那条缝里滚过去（截图实拍）。所以：-mt-2 把它抻到滚动区真正的顶边、
           -top-2 让 sticky 允许它停在那儿（只给 -mt-2 会被 sticky 又推回去，实测），
           再用自己的 pt-2 把分页条的视觉位置还原。改了 panel 的 pt 就得同步改这儿。 */}
-      <nav className="sticky -top-2 z-1 -mx-4 -mt-2 mb-3 flex gap-5 border-b border-line bg-bar px-4 pt-2">
+      {/* 「这台设备用哪一套」摆在分页条**上面**：下面「顶栏」「软键条」两页改的就是这一套，
+          而「我在改哪一套」是看那两页时必须一直看得见的（见 ProfilePicker 的注释） */}
+      <ProfilePicker onChanged={onProfiles} toast={toast} />
+
+      <nav className="sticky -top-2 z-1 -mx-4 -mt-2 mb-3 flex items-center gap-5 border-b border-line bg-bar px-4 pt-2">
         {TABS.map((t) => (
           <button
             key={t.id}
@@ -110,6 +125,17 @@ export function SettingsPanel({
             {t.label}
           </button>
         ))}
+        {/* 关闭：顶在分页条最右边（这块面板没有标题栏，见上面 Panel 那条注释）。
+            -mb-px 把它和分页条那条下边框对齐，不然按钮会把这一行撑高一像素。 */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="-mb-px ml-auto shrink-0 self-center"
+          onClick={onClose}
+          aria-label="关闭"
+        >
+          <X className="size-4" />
+        </Button>
       </nav>
 
       {tab === 'term' && (
@@ -121,9 +147,9 @@ export function SettingsPanel({
           fontSize={fontSize} onFont={onFont} scheme={scheme} onScheme={onScheme}
         />
       )}
-      {tab === 'topbar' && <TopbarPanel onSaved={onTopbar} toast={toast} />}
-      {tab === 'keys' && <SoftkeysPanel embedded onSaved={onSaved} toast={toast} />}
-      {tab === 'devices' && <DevicesPanel embedded toast={toast} />}
+      {tab === 'topbar' && <TopbarPanel onSaved={onTopbar} toast={toast} profile={profile} />}
+      {tab === 'keys' && <SoftkeysPanel embedded onSaved={onSaved} toast={toast} profile={profile} />}
+      {tab === 'devices' && <DevicesPanel embedded toast={toast} onProfiles={onProfiles} />}
     </Panel>
   )
 }
@@ -215,7 +241,8 @@ function TermSection({
       </label>
 
       {/* 「点 switch 开面板一览」和上面那串终端行为不是一类：它改的是「点 herdr 那个按钮会
-          发生什么」。和下面那个角标一样是「这台设备上顺手不顺手」的偏好，所以并在同一条线下面。 */}
+          发生什么」。和下面那个角标一样是「这类设备上顺手不顺手」的偏好（跟着排布那一套走，
+          见 lib/prefs.ts），所以并在同一条线下面。 */}
       <label className="mt-2 flex cursor-pointer items-start gap-2.5 rounded-md border-t border-line pt-3 transition-colors hover:text-fg">
         <span className="pt-px">
           <Checkbox checked={opts.switchPanel} onCheckedChange={(v) => setOpt('switchPanel', !!v)} />
