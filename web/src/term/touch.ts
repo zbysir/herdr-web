@@ -1,5 +1,12 @@
-// 触屏手势：滑动 = 滚轮上报，单击 = 发给程序但不弹键盘，双击 = 切键盘，
-// 长按 = 抓住（按下左键不放），之后滑动就是拖。
+// 触屏手势：滑动 = 滚轮上报，单击 = 发给程序但不弹键盘，长按 = 抓住（按下左键不放），
+// 之后滑动就是拖。
+//
+// **没有双击。** 双击原来是「呼出 / 收起系统键盘」的入口，去掉了 —— 代价太大：为了分清
+// 「这是单击」还是「这是双击的第一下」，每一次单击都得压着等一个双击窗口（320ms）才敢发
+// 出去；而只要不等，第一下就会漏进 pane 里那个程序 —— Claude Code 自己有可点的东西
+// （展开一段、**选一个选项**），漏一下就把选项给选了。键盘现在只走软键条上的 ⌨
+// （`act:kbd`，出厂配置第一个键就是它）和顶栏上那个「系统键盘」按钮：都是明确的按钮，
+// 点了就是要键盘，不用猜，也没有延迟。
 // **手指落在 pane 分界线附近时不用长按**，直接就是拖 —— 那条线是 herdr 的边框，
 // 在上面滑动本来也没别的含义，抓住就拉正是桌面上鼠标的做法。
 //
@@ -11,7 +18,6 @@ import type { Terminal } from '@xterm/xterm'
 
 interface Hooks {
   send: (d: string) => void
-  toggleKeyboard: () => void
   /**
    * 这一格上有链接就打开它（文件路径 / URL），没有就什么都不做。
    *
@@ -21,14 +27,6 @@ interface Hooks {
    * URL。触屏本来也没有 hover，那条路走不通，只能在 tap 那一刻自己判一次。
    */
   openLinkAt: (col: number, row: number) => void
-  /**
-   * 这一格上有链接吗（文件路径 / URL）。
-   *
-   * 单独问一句，是为了**只在有链接的时候才等双击窗口**：等待是为了「双击的第一下不要顺手
-   * 把查看器打开」，而没有链接的格子上没什么可等的 —— 全都等的话点什么都慢 320ms
-   * （点 pane、点 herdr 顶栏那个 switch 都算，用户报过「点什么都延迟很大」）。
-   */
-  hasLink: (col: number, row: number) => boolean
   /**
    * 这一下点击被网页自己接走了吗（true = 别再发给程序）。
    *
@@ -60,22 +58,6 @@ interface TouchState {
 
 // 长按多久算抓住。再短会和「想滑一下」打架，再长手指容易先动
 const HOLD_MS = 380
-/**
- * 两下之间多久算双击（双击 = 显示 / 收起系统键盘）。
- *
- * 界线是**「这件事出得去吗」**：
- *
- *   - 出不去的（接走 herdr 顶栏那个 switch → 开我们自己的面板）**立刻做**。等 1/3 秒开个
- *     面板像卡住 —— 用户报过一次「点什么都延迟很大」，就是我把这条也推迟了。
- *   - 出得去的（鼠标上报发给 pane 里那个程序、打开点到的那条链接）**等过这个窗口**。它们
- *     收不回来：Claude Code 自己有可点的东西（展开一段、选一个选项），双击的第一下漏出去
- *     就把选项给选了（用户报过）；查看器一开就盖了半个屏。
- *
- * 代价：真的单击（点 pane 切焦点、点 Claude 里的东西）比原来晚 320ms 落地。这是「双击也是
- * 一个手势」的必然代价 —— 在第二下到来之前，没有办法知道第一下是不是单击。想要单击零延迟，
- * 只能取消双击那个入口。
- */
-const DOUBLE_MS = 320
 /**
  * 长按期间允许手指晃多少 px。
  *
@@ -130,9 +112,6 @@ export function attachTouch(host: HTMLElement, term: Terminal, hooks: Hooks): ()
   })
 
   let touch: TouchState | null = null
-  let lastTapAt = 0
-  /** 攒着的那一下单击（等双击窗口过去才真的做，见 DOUBLE_MS） */
-  let pendingTap: ReturnType<typeof setTimeout> | undefined
 
   const glyphAt = (col: number, row: number) => {
     const buf = term.buffer.active
@@ -285,49 +264,33 @@ export function attachTouch(host: HTMLElement, term: Terminal, hooks: Hooks): ()
     if (tc.drag) { release(tc); return }
     if (Math.abs(tc.y - tc.y0) > 8 || Math.abs(tc.x - tc.x0) > 8) return // 是滑动，已经处理过了
 
-    // 同样用事件时间戳（和 tc.at 一个时间轴），不是处理函数里的 Date.now()
-    const now = e?.timeStamp ?? performance.now()
-    const isDouble = now - lastTapAt < DOUBLE_MS
-    lastTapAt = now
-
-    if (isDouble) {
-      // 双击 = 显示 / 收起键盘。**把第一下攒着的那套单击动作撤掉** —— 不撤的话双击会顺手
-      // 把路径 / URL 打开，还把一次点击漏给 herdr。
-      clearTimeout(pendingTap)
-      pendingTap = undefined
-      return hooks.toggleKeyboard()
-    }
     // 长按什么都不做（重点是别弹键盘）。有鼠标上报的时候长按已经在上面被「抓住」接走了，
     // 走到这儿只剩普通 shell，以及抓取还没到点就松手的情况。
-    if (now - tc.at > 500) return
+    // 时间戳用事件自带的那个（和 tc.at 一个时间轴），不是处理函数里的 Date.now()。
+    if ((e?.timeStamp ?? performance.now()) - tc.at > 500) return
 
     const box = cellBox()
     if (!box) return
     const { col, row } = cellAt(tc.x, tc.y, box)
 
-    // **网页自己的动作立刻做**：接走 herdr 顶栏那个 switch 开我们的面板 —— 那是本地的事，
-    // 撤得回来，而等 1/3 秒开个面板像卡住（用户报过）。
+    // 下面全部**当场做**。没有双击之后就没有「这一下到底算什么」的悬念，也就不用压着等 ——
+    // 那 320ms 的延迟和「第一下漏出去」两件事都是双击带来的（见文件开头那段）。
+    //
+    // 先问一句这一下是不是被网页接走了（herdr 顶栏那个 switch）。放在链接判断**之前**：
+    // 那个按钮上不会有链接，但既然接走了，就该彻底不往下走。
     if (hooks.claimTap(col, row)) return
 
-    // **剩下的都等过双击窗口**（见 DOUBLE_MS），因为它们「出得去、收不回」：
-    // 鼠标上报一发出去，pane 里那个程序就当成真点击 —— Claude Code 自己有可点的东西
-    // （展开一段、选一个选项），用户报过双击终端把选项给选了；查看器一开就盖了半个屏。
-    // 双击的第一下必须**什么都不留**，所以这两件一起攒着，来了第二下整套撤掉。
-    const linked = hooks.hasLink(col, row)
-    const owned = tc.owned
-    clearTimeout(pendingTap)
-    pendingTap = setTimeout(() => {
-      pendingTap = undefined
-      // 链接先判，但**不吞掉这一下点击**：桌面上点链接时 xterm 也照样把点击上报给程序
-      // （linkifier 和鼠标上报是两条各自独立的监听，互不知情），这儿保持一致。
-      if (linked) hooks.openLinkAt(col, row)
-      if (owned) {
-        hooks.send(`\x1b[<0;${col};${row}M`)      // 单击照样发给程序，只是不抢焦点
-        hooks.send(`\x1b[<0;${col};${row}m`)
-      } else {
-        term.focus()                              // 普通 shell 里点一下就是想打字
-      }
-    }, DOUBLE_MS)
+    // 链接先判，但**不吞掉这一下点击**：桌面上点链接时 xterm 也照样把点击上报给程序
+    // （linkifier 和鼠标上报是两条各自独立的监听，互不知情），这儿保持一致 ——
+    // 触屏另立一套「点了链接就不算点击」的规矩，只会变成第二种要记的行为。
+    hooks.openLinkAt(col, row)
+
+    if (tc.owned) {
+      hooks.send(`\x1b[<0;${col};${row}M`)      // 单击照样发给程序，只是不抢焦点
+      hooks.send(`\x1b[<0;${col};${row}m`)
+    } else {
+      term.focus()                              // 普通 shell 里点一下就是想打字
+    }
   }
 
   /**
@@ -412,7 +375,6 @@ export function attachTouch(host: HTMLElement, term: Terminal, hooks: Hooks): ()
   document.addEventListener('touchend', onDocTouchEnd, { capture: true, passive: true })
   for (const t of ghostTypes) document.addEventListener(t, onDocMouse, true)
   return () => {
-    clearTimeout(pendingTap)
     clearTimeout(ghostTimer)
     host.removeEventListener('touchstart', onStart)
     host.removeEventListener('touchmove', onMove)

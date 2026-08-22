@@ -193,10 +193,8 @@ export class Session {
     host.addEventListener('contextmenu', (e) => e.preventDefault())
     this.detachTouch = attachTouch(host, this.term, {
       send: (d) => this.send(d),
-      toggleKeyboard: () => this.toggleKeyboard(),
       // 触屏上点链接走这条（桌面走 xterm 的 linkifier）。两条路认的是同一份规则：
       // 文件路径都出自 findPaths，URL 那边桌面归 WebLinksAddon、这边一个粗正则。
-      hasLink: (col, row) => !!linkAtCell(this.term, col, row),
       openLinkAt: (col, row) => {
         const hit = linkAtCell(this.term, col, row)
         if (!hit) return

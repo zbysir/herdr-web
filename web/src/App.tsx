@@ -362,11 +362,12 @@ export default function App() {
         onKeyboardChange: (up) => {
           setKbdUp(up)
           /*
-           * **双击终端唤起的键盘也算「呼出键盘」。** 这一条是漏掉过的：我只接了输入框的
-           * pointerdown 和 ⌨ 键，而手机上从终端进键盘最顺手的就是双击。
+           * **⌨ 那个键唤起的键盘也算「呼出键盘」。** 这一条是漏掉过的：我只接了输入框的
+           * pointerdown。（那时候终端上还有「双击呼出键盘」，也是从这儿接的；双击后来
+           * 去掉了 —— 见 term/touch.ts 开头。）
            *
-           * 挂在这儿是因为 `toggleKeyboard()` 会**同步**回调过来，而双击那一下就在
-           * touchend 里 —— 手势还没过期，requestFullscreen 才给过（挂在「视口变矮」上
+           * 挂在这儿是因为 `toggleKeyboard()` 会**同步**回调过来，那一下还在按键的
+           * click 里 —— 手势还没过期，requestFullscreen 才给过（挂在「视口变矮」上
            * 就是因为脱离了手势才一直失败）。
            *
            * 读 localStorage 而不是闭包里的 kbdFull：这个回调是建 Session 时传进去的，
