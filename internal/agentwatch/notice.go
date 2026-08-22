@@ -108,6 +108,38 @@ func settled(want, cur string) string {
 	}
 }
 
+// seed 记下「开工那一刻屏幕上最后一段话是什么」。
+//
+// 为什么要它：`lastText` 平时是「上次弹过的那条」，可 herdr-web 刚起来时它是空的 ——
+// 那时候你投一句又取消，emit 拿不到东西比，照样会弹一条旧回答。所以 agent **第一次**
+// 开工时先读一屏垫底，之后就一直有得比了。
+//
+// 只在没有底的时候读，所以一个终端最多读这么一次；working↔idle 那种 100ms 的抖动
+// （实测有）不会反复触发。
+func (w *Watcher) seed(p herdr.Pane) {
+	w.mu.Lock()
+	_, ok := w.lastText[p.TerminalID]
+	if ok || w.seeding[p.TerminalID] {
+		w.mu.Unlock()
+		return
+	}
+	w.seeding[p.TerminalID] = true
+	w.mu.Unlock()
+
+	text, err := w.c.ReadText(p.PaneID, "visible", readLines)
+	body := ""
+	if err == nil && strings.TrimSpace(text) != "" {
+		body = extract(text, "idle", noticeLines, noticeChars)
+	}
+
+	w.mu.Lock()
+	if _, ok := w.lastText[p.TerminalID]; !ok && body != "" {
+		w.lastText[p.TerminalID] = body
+	}
+	delete(w.seeding, p.TerminalID)
+	w.mu.Unlock()
+}
+
 // arm 挂一条待发的提示：记下「要报哪个状态」，没有收集协程在跑就起一个。
 //
 // pend 存的是**状态**而不是 bool：防抖那 2.5 秒里状态可能又变了一次
@@ -159,6 +191,13 @@ func (w *Watcher) collect(term string) {
 
 // emit 读屏 + 抽话 + 入环。读不到就带空 Text 照样发一条 —— 「那个 agent 在等你」这件事
 // 本身就值得弹，抽不出话不该把提示也一起吞掉。
+//
+// **抽出来的话和上次一模一样就不弹**（`lastText`）。这一条是用出来的：你投了一句话又按
+// **Esc 取消**，herdr 那边就是一次干干净净的 `working → idle`，和「跑完了」在状态上毫无
+// 区别；而屏幕上 claude **不留任何「被打断」的记号**（实测抓屏确认：最后一个 `⏺` 块还是
+// 上一轮的回答，你那句话被放回输入框）。于是弹出来的是一段**旧回答**，还挂着「跑完了」。
+//
+// 「这一趟有没有新东西」才是真正的判据：一个字都没变，就没有什么可告诉你的。
 func (w *Watcher) emit(p herdr.Pane, status string) {
 	text, err := w.c.ReadText(p.PaneID, "visible", readLines)
 	if err != nil {
@@ -171,6 +210,13 @@ func (w *Watcher) emit(p herdr.Pane, status string) {
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	// 和上次一模一样 = 这一趟什么都没产出（多半是被 Esc 取消了），不弹。
+	// 空的不比：那是读屏失败，两次都失败不代表「没变化」。
+	if body != "" && body == w.lastText[p.TerminalID] {
+		log.Printf("提示：%s 这一趟没有新输出（多半是取消 / 打断了），不弹", p.PaneID)
+		return
+	}
+	w.lastText[p.TerminalID] = body
 	w.seq++
 	w.notes = append(w.notes, Notice{
 		Seq: w.seq, At: time.Now().UnixMilli(),

@@ -160,6 +160,12 @@ Things worth knowing:
 
 The ▦ in the top bar (or an `act:panes` key on the soft key bar) opens a list of panes grouped by workspace, one row each. **Tap a row and you are there, zoomed full screen.** Above the list you can filter (tab name / title / path / pane id), show only panes running an agent, and turn "zoom" off (a tap then means "move focus, leave zoom alone").
 
+The panel is **tightened to phone scale**, deliberately, in three places:
+
+- **No title bar.** A whole row for "Pane list" plus an ✕ is 44px of blank on a phone — and what this panel is is obvious from its content. The ✕ moved to the right end of the filter row (which is why `title` on `ui/panel` is optional now: leave it out and the bar is not rendered; panels that need a heading still pass one).
+- **No refresh button; the list refreshes itself.** While the panel is open it re-fetches every 4s (never while the tab is hidden), so the state dots, the "minutes ago" column and newly spawned panes are all live. It used to fetch once on open, which meant everything you were looking at was a snapshot — and this is the panel you open to see *who is waiting for you*, where a frozen state is worse than none. A refresh button just hands that job back to the user, from the most mis-tappable spot in the row.
+- **Rows start at 36px** (they were 44). A row already holds two lines of text (≈30px), so 44 was padding for its own sake; the whole full-width row is the hit area, 36px is not hard to hit, and a phone screen fits two or three more panes.
+
 **Why it exists.** The soft key bar sends **keys**, and keys can only express **relative** navigation: next tab, one pane to the right. "Zoom `w5:p3`" is not expressible as a key — you have to decompose it into a walk, and every screen along that walk is exactly the unzoomed multi-pane layout that is unreadable on a phone. The scale measured here is 48 panes / 38 tabs / 4 workspaces; one trip is four blind legs of workspace → tab → pane → zoom.
 
 herdr's socket layer is **addressed by pane_id**: `pane.zoom` with a `pane_id` crosses workspace + tab + pane in one call (focus follows across workspace and tab; no `workspace.focus` then `tab.focus` needed — verified). So the UI is simply a row you tap.
@@ -175,9 +181,13 @@ Tapping a row while the on-screen keyboard was up used to take **two taps: the f
 - All three entrances deliberately **do not let the browser move focus** — the soft key bar calls `preventDefault` on mousedown, and the touch layer swallows `touchstart` entirely (otherwise a swipe turns into a text selection, see [Phones](#phones)). So when the panel floats up, the outbox / terminal input is still focused and the keyboard still owns half the screen.
 - That one tap therefore **first** takes focus away: `--vvh` follows visualViewport, the panel reflows, and the row under your finger has moved — so the browser dispatches the click somewhere else, or not at all.
 
-Both ends are plugged now: **opening the panel blurs the focused input** (the web has no "hide keyboard" API; blur *is* hiding the keyboard), and the filter box no longer autofocuses on touch — the test changed from "phone portrait (< 440px)" to "is there a fine pointer", because tablets used to autofocus too, which pops the keyboard right back up. And **a row commits on `pointerup`, not on `click`**: touch and pen pointer events have implicit capture, so whichever row got the `pointerdown` also gets the `pointerup`, however much the layout moved in between. Mouse and keyboard still go through `click` (on the desktop a click is never lost), and a finger that travels more than 10px counts as scrolling the list, not a tap.
+Three things are plugged now:
 
-The two file-browsing surfaces (directory panel / viewer) are opened by tapping in the terminal too, so they dismiss the keyboard on open as well.
+- **Opening the panel blurs the focused input** (the web has no "hide keyboard" API; blur *is* hiding the keyboard). The two file-browsing surfaces (directory panel / viewer) are opened by tapping in the terminal too, so they dismiss it on open as well.
+- **The filter box no longer autofocuses on touch** — the test changed from "phone portrait (< 440px)" to "is there a fine pointer", because tablets used to autofocus too, which pops the keyboard straight back up.
+- **A row commits on `pointerup`, not on `click`**: touch and pen pointer events have implicit capture, so whichever row got the `pointerdown` also gets the `pointerup`, however much the layout moved in between. Mouse and keyboard still go through `click` (on the desktop a click is never lost), and a finger that travels more than 10px counts as scrolling the list, not a tap. Rows have to identify the element themselves rather than lean on the global fallback below: a lost click is one failure, a click **dispatched to the neighbouring row** is the other, and jumping to the wrong pane is worse than nothing happening.
+
+Buttons elsewhere (every panel's ✕, the toggles, the tabs) rely on the global fallback — see [The first tap only dismisses the keyboard](#the-first-tap-only-dismisses-the-keyboard).
 
 ### Sorting (switchable)
 
@@ -230,8 +240,11 @@ When an agent stops to wait for you (or has just finished), a card appears in th
 | `working` → `idle` (finished) | Yes, same | `idle` is *resting*, so it only counts as "finished" when it came from `working` |
 | → `working` | No | That is almost always what you just posted — an echo |
 | `blocked` → `idle` | No | You just answered and it is about to start; reporting "finished" would be a lie |
+| Posted something and hit **Esc to cancel** | No | See below — herdr sees a clean `working → idle`, so it is told apart by content |
 
 **`done` fires no matter where it came from — requiring `working` first was a bug.** On a real device, poking an agent with a one-line "say hi" gives `idle → done` with **no `working` in between** (herdr's screen detection is conservative and a short task never registers as running). The first version required `working → done`, so short tasks produced no notice at all — every unit test stayed green and only the end-to-end poke found it.
+
+**Nothing new on screen means nothing is announced.** Post a line and hit **Esc**, and herdr reports a clean `working → idle` — identical to finishing. claude leaves **no "interrupted" marker on screen** either (captured on a real device, `testdata/idle-interrupted.txt`: the last `⏺` block is still the previous answer and your line is put back in the composer). So the first version announced a **stale answer** labelled "finished". The test that actually works is "did anything new appear": the scraped text is compared with the last one for that terminal and an identical one is dropped. When a terminal has no previous text (herdr-web just started), the first `→ working` reads one screen to seed the comparison — once per terminal, so the 100ms `working↔idle` flicker cannot make it read repeatedly.
 
 **A state has to hold for 2.5 seconds to count.** claude / codex flicker back to idle while working, and without debouncing one long task produces a dozen false "finished" cards; `pane.read` snapshots also lag by a frame, so reading immediately catches the tail of the previous task. If the state changes again within those 2.5 seconds (`idle → blocked` is a common pair), the **last** one is reported, as a single card.
 
@@ -357,11 +370,27 @@ None is optional, because what comes out is **a file the agent wrote**:
 
 ## Settings panel
 
-The ⚙ at the right end of the top bar holds everything, in three pages: **Terminal** (font size / light-dark, kitty protocol / Option as Meta / copy on select / synchronized output, tapping herdr's switch opens the pane list, the badge on the panel icon, system notifications, how long notice cards stay, plus a line of backend environment), **Soft keys** (next section), and **Devices** (who has paired, sign out, kick).
+The ⚙ at the right end of the top bar holds everything, in four pages: **Terminal** (font size / light-dark, kitty protocol / Option as Meta / copy on select / synchronized output, tapping herdr's switch opens the pane list, the badge on the panel icon, system notifications, how long notice cards stay, plus a line of backend environment), **Top bar** (next section), **Soft keys** (the one after), and **Devices** (who has paired, sign out, kick).
 
-The font size / light-dark controls at the top of the Terminal page are the same actions as the three icons in the top bar, not a second copy of the state: a phone in portrait has no room for them in the top bar, so that is the only place to reach them.
+The font size / light-dark controls at the top of the Terminal page are the same actions as the matching icons in the top bar, not a second copy of the state — and those icons can be dragged off the bar, in which case this page is where they still live.
 
 This used to be three independent little panels with three icons in the top bar — which is crowded on a tablet, and "settings" split three ways means finding anything depends on remembering which icon is which. **The ⚙ that used to sit in the bottom right of the soft key bar (a shortcut to the Soft keys page) is gone too**: it lived permanently at the end of the key row competing for space (especially in portrait), while editing keys is a thing you do once — going through the top bar is not a burden.
+
+## Top bar (drag the buttons you want)
+
+**Which icons sit in the top bar, and in what order, is configuration** — edit it under Settings → Top bar: the bar is on top, the buttons not on it are below, press and drag one up to add it, drag it down (or hit its ✕) to remove it, drag within the bar to reorder. A chip in the library can also just be **tapped** to append it — "add one" should not require learning to drag first.
+
+Same shape as the soft key bar (**library below, bar above, drag into it**) and the same gesture code (`web/src/lib/chipdrag.ts` — two arrangement editors each with their own drag implementation is how one action ends up with two different feels). On touch it takes a 250ms press to pick a chip up: the page has to scroll, and the chip itself is the handle, so without the press there is no way to tell "scroll the page" from "drag this".
+
+It lives **on the server** (`~/.herdr-web/topbar.json`, see `internal/topbar`), so phone / tablet / desktop share one bar — same reasoning as the soft keys. What is stored is **a list of button ids**, not button definitions: what a button looks like (icon, name) is built in (`web/src/components/topbarItems.tsx`). The server keeps a whitelist that has to match that catalogue exactly, with a test watching both (`TestActionsMatchJS` in `internal/topbar`) — adding a button on only one side fails in a way that is hard to trace: it drags fine in the editor and the save reports "unknown button", or it saves fine and the bar cannot draw it.
+
+**What you can put there**: pane list / files / outbox / soft key bar / system keyboard / upload image / pull clipboard / paste into terminal / smaller font / bigger font / light-dark / fullscreen / settings. The four in the middle used to be soft-key-only (the `act:` ones); they work in either bar now, and the two bars are separate configs.
+
+Three edges:
+
+- **The ⚙ cannot be removed** (no ✕ on its chip, dragging it to the library is refused, and the server puts it back on save). It is the only route back into this configuration, and the configuration travels with you: delete it on the phone and it is gone on the desktop too.
+- **A bar that does not fit scrolls sideways** — it never wraps and never hides anything. Font ± and light-dark used to be hidden below 440px by CSS (seven icons do not fit in 393px); that rule is gone, because "I dragged it on and cannot see it" is the hardest behaviour to explain, and sideways scrolling is what the soft key bar has always done on phones.
+- **The left end (status dot, session tag, "Connect") is not part of the configuration**: those are not buttons, they are "which herdr this page is attached to and whether it is connected" — the only place that says so, and being able to delete it would just read as a broken page.
 
 ## Soft key bar
 
@@ -416,6 +445,21 @@ Only **full-length lines** count (box-drawing characters covering 70% or more of
 The finger is allowed to drift 16px during the hold (`HOLD_SLOP`). It was 8px, which was too strict — a finger holding still drifts a dozen pixels anyway, and any drift cancelled the long press, which reads as "long press does nothing". With mouse reporting off (a plain shell) there is no grabbing, and a long press keeps doing nothing.
 
 Verified end to end: in a separate herdr session with a vertical split, long-pressing **3 cells to the right** of the divider and dragging moved it from column 45/46 to 40/41; swiping vertically right on the divider still emitted nothing but wheel reports.
+
+### The first tap only dismisses the keyboard
+
+With the keyboard up, tapping any button in an overlay (the close ✕ on the panels is the one you hit most) used to dismiss the keyboard and nothing else; a second tap was needed. Same cause as [One tap has to jump](#one-tap-has-to-jump) above: the tap takes focus away first → the keyboard hides → visualViewport changes, `--vvh` and the top bar reflow → the element under your finger is no longer there, so the browser dispatches the click somewhere else or not at all. **The touch events arrive as usual; only the click is lost.**
+
+So there is one global fallback (`web/src/lib/tap.ts`, installed once from `main.tsx`): if `pointerdown` and `pointerup` land on the same clickable control, the finger barely moved, and no click arrives within 250ms, it synthesizes one `el.click()`. The edges are all deliberate:
+
+- **Mouse is left alone** (on the desktop a click is never lost, so synthesizing one would double-fire); a finger that travels more than 10px, or a `pointercancel` (a scroll started), is not a tap.
+- **Nothing is synthesized if the element has left the document** — that means the tap did work.
+- **A late click from the same gesture is swallowed**, or "close" would close twice and the second one would land on the terminal underneath, i.e. a click sent into herdr. The test is a gesture counter, not a time window: the user's own second tap has its own `pointerdown` and is never eaten.
+- The synthesized click is recognised by **a flag, not `isTrusted`** — synthetic events are untrusted too, so keying on that would mistake any other synthetic click for ours (a test caught exactly that).
+
+Why at the document level rather than in each button: the bug has nothing to do with which button it is — anything inside an overlay while the keyboard is up hits it, and wiring controls up one at a time always misses the next new panel.
+
+The other half of it is fixed too: **a keyboard you had dismissed no longer pops back up because you switched panes or tapped the font buttons.** The old test was "not a phone (< 440px) → hand focus back to the terminal", and tablets and landscape phones are all wider than 440 — on those, focusing the terminal *is* raising the IME. Now focus is only handed back in two cases: **the keyboard was already up** (so put it back where it was), or **the machine has a fine pointer** (focusing raises nothing). See `refocusTerm` in `web/src/App.tsx`.
 
 ### Tapping herdr's switch opens ours (on by default)
 
@@ -557,6 +601,9 @@ internal/
   softkeys/           soft key config + key spec parsing (data.go is generated from the old JS version,
                       not retyped; testdata/js-snapshot.json holds that snapshot and the test diffs
                       the first 6 groups against it)
+  topbar/             which buttons sit in the top bar (a list of ids + a whitelist). **Separate
+                      file, separate endpoint** from the soft keys: sharing one would mean partial
+                      update semantics, which is how configuration gets silently dropped
   uploads/            image storage (type by magic number)
   files/              file browsing: starting points / directory listing / type by magic number /
                       short-lived signed links (sign.go). No boundary by default — FILE_ROOTS is
@@ -590,14 +637,20 @@ web/                  Vite + React + TS + Tailwind v4 + shadcn-style components
                       (flood-fill by background colour) — the test behind "tap it, get our pane list"
   src/hooks/          useCompose (outbox state machine), useNotices (notice polling + unread badge),
                       useViewportHeight
+  src/lib/            api.ts (fetch + CSRF), chipdrag.ts (the "library below, bar above, drag into
+                      it" gesture, shared by the top bar and soft key editors), tap.ts (synthesizes
+                      the click when the browser loses it)
   src/components/     Dock.tsx is the bottom dock shell (border / width / height shared by the
                       outbox and the soft key bar)
                       Notices.tsx is the stack of cards in the top right
                       FilesPanel.tsx is file browsing (starting points + directories + the paste box)
                       FileViewer.tsx shows one file (image / text), full screen
                       Pairing.tsx is the pairing page (the only thing rendered when unpaired)
-                      SettingsPanel.tsx is the settings panel; the soft key editor and device
-                      management are two of its pages
+                      SettingsPanel.tsx is the settings panel; the top bar editor, the soft key
+                      editor and device management are three of its pages
+                      TopbarPanel.tsx is the top bar editor; topbarItems.tsx is the single
+                      catalogue of which buttons exist (the server whitelist must match it,
+                      and a test watches that)
                       QrScan.tsx is the in-page scanner (BarcodeDetector + rear camera)
 reference/            the original Python prototype; "verified" in the three companion docs means
                       verified against it

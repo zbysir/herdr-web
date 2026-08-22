@@ -146,7 +146,7 @@ function Card({
             {n.text}
           </p>
         )}
-        <span className="mt-1 block truncate font-mono text-[10px] text-faint">{n.pane} · 点一下跳过去</span>
+        <span className="mt-1 block truncate font-mono text-[10px] text-faint">{n.pane} · 点击跳转</span>
       </button>
 
       <button

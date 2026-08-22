@@ -84,11 +84,15 @@ type Watcher struct {
 
 	// 提示那一套（见 notice.go）。pane 是最后见到的那个 pane 对象：提示要报 pane_id
 	// 和会话标题，而防抖那 2.5 秒之后事件早过去了，得留一份。
-	pane  map[string]herdr.Pane
-	pend  map[string]string // terminal_id → 等着报的状态（防抖期间又变了就覆盖）
-	busy  map[string]bool   // terminal_id → 已经有一个收集协程在等了
-	notes []Notice
-	seq   uint64
+	pane map[string]herdr.Pane
+	pend map[string]string // terminal_id → 等着报的状态（防抖期间又变了就覆盖）
+	busy map[string]bool   // terminal_id → 已经有一个收集协程在等了
+	// lastText：上次就这个终端说过的那段话。一模一样就不再弹（见 emit ——
+	// 「投了又按 Esc 取消」在状态上和「跑完了」一模一样，只能靠内容分辨）。
+	lastText map[string]string
+	seeding  map[string]bool // 正在垫底读屏，别重复读
+	notes    []Notice
+	seq      uint64
 }
 
 // New：file 是存时间的 JSON（传空字符串就只在内存里）。
@@ -97,6 +101,7 @@ func New(socket, file string) *Watcher {
 		c: herdr.New(socket), file: file,
 		term: map[string]string{}, status: map[string]string{}, at: map[string]int64{},
 		pane: map[string]herdr.Pane{}, pend: map[string]string{}, busy: map[string]bool{},
+		lastText: map[string]string{}, seeding: map[string]bool{},
 	}
 	w.load()
 	return w
@@ -274,7 +279,14 @@ func (w *Watcher) observe(p herdr.Pane) (bool, string) {
 // 变化会漏报一条，那个窗口短、而且下一次状态变化就补上了。
 func (w *Watcher) observeLive(p herdr.Pane) {
 	changed, old := w.observe(p)
-	if changed && worthNotice(old, p.AgentStatus) {
+	if !changed {
+		return
+	}
+	if p.AgentStatus == "working" {
+		go w.seed(p) // 开工了：第一次的话先读一屏垫底，跑完时好比「有没有新东西」
+		return
+	}
+	if worthNotice(old, p.AgentStatus) {
 		w.arm(p)
 	}
 }

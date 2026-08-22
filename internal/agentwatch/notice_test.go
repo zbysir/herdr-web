@@ -67,6 +67,7 @@ func TestSettled(t *testing.T) {
 // 整条路走一遍：假 herdr 推 working → idle，攒出一条提示，内容是屏幕上抽出来的那段话。
 func TestNoticeOnFinish(t *testing.T) {
 	f := newFake(t, screenAnswer, "working", "idle")
+	f.working = screenBefore // 开工时屏幕上是上一轮的回答，干完才变成 screenAnswer
 	w := f.watch(t)
 
 	n := waitNotice(t, w, 1)[0]
@@ -110,6 +111,7 @@ func TestNoticeSkipsJitter(t *testing.T) {
 // 防抖那一会儿里又变了一次（idle → blocked）：报的是**最后**那个状态，而且只报一条。
 func TestNoticeReportsLatestStatus(t *testing.T) {
 	f := newFake(t, screenAsk, "working", "idle", "blocked")
+	f.working = screenBefore
 	w := f.watch(t)
 
 	got := waitNotice(t, w, 1)
@@ -132,6 +134,7 @@ func TestNoticeReportsLatestStatus(t *testing.T) {
 // 这条用例把事件全掐掉，只留 pane.list 那条轮询。
 func TestNoticeFromPollingWhenNoEvents(t *testing.T) {
 	f := newFake(t, screenAnswer)
+	f.working = screenBefore
 	f.mute = true
 	f.setStatus("working")
 	w := f.watch(t)
@@ -143,6 +146,35 @@ func TestNoticeFromPollingWhenNoEvents(t *testing.T) {
 	n := waitNotice(t, w, 1)[0]
 	if n.Status != "idle" || n.Pane != "w1:pA" {
 		t.Errorf("轮询也该攒出提示，got %+v", n)
+	}
+}
+
+// **投了一句又按 Esc 取消：不该弹。**
+//
+// herdr 那边这就是一次干干净净的 `working → idle`，和「跑完了」在状态上毫无区别；而屏幕上
+// claude **不留任何「被打断」的记号**（真机抓屏确认，testdata/idle-interrupted.txt：最后一个
+// `⏺` 块还是上一轮的回答，你那句话被放回了输入框）。唯一分得清的判据是「这一趟有没有新
+// 东西」—— 这里就把开工那屏和干完那屏做成同一屏。
+func TestNoticeSkipsCancelled(t *testing.T) {
+	f := newFake(t, screenAnswer, "working", "idle") // working 留空 = 两次读到同一屏
+	w := f.watch(t)
+
+	time.Sleep(20 * settleNotice)
+	if got, _ := w.Notices(0); len(got) != 0 {
+		t.Errorf("这一趟一个字都没变，不该弹，got %d 条：%+v", len(got), got)
+	}
+}
+
+// 同一段话不会弹第二遍（同上，只是这回是连着两次「跑完了」）。
+func TestNoticeSkipsSameTextTwice(t *testing.T) {
+	f := newFake(t, screenAnswer, "working", "idle", "working", "idle")
+	f.working = screenBefore
+	w := f.watch(t)
+
+	waitNotice(t, w, 1)
+	time.Sleep(20 * settleNotice)
+	if got, _ := w.Notices(0); len(got) != 1 {
+		t.Errorf("内容没变的第二趟不该再弹，got %d 条", len(got))
 	}
 }
 
@@ -189,6 +221,11 @@ const screenAnswer = "" +
 	"✻ Baked for 20s\n\n────────────\n❯ \n────────────\n" +
 	"  ~/dev/bysir/herdr-web git:(master)\n  ⏵⏵ auto mode on (shift+tab to cycle)\n"
 
+// 开工时那一屏：上一轮的回答还挂在上面（真机上就是这样，见 testdata/idle-interrupted.txt）。
+const screenBefore = "" +
+	"⏺ 上一轮的回答：那个 bug 修好了。\n\n✻ Baked for 12s\n\n────────────\n❯ \n────────────\n" +
+	"  ~/dev/bysir/herdr-web git:(master)\n"
+
 // 一屏「等你回答」：底下是选择框。
 const screenAsk = "" +
 	"⏺ 我去改一下那个文件。\n\n" +
@@ -199,7 +236,11 @@ const screenAsk = "" +
 type fake struct {
 	sock   string
 	screen string
-	states []string // 订上之后按顺序推的 agent_status（事件那条路）
+	// working 是「正在干活时」那一屏（空 = 和 screen 同一屏）。
+	// 真机上开工和干完看到的当然不是同一屏，而「一模一样」恰恰是取消/打断的特征 ——
+	// 两个用例都要能造出来。
+	working string
+	states  []string // 订上之后按顺序推的 agent_status（事件那条路）
 
 	// mu/list 是**轮询**那条路：pane.list 每次回 list 里的当前值，测试自己改它。
 	// 真机上背景 pane 的变化就只能这么看见（herdr 不给它们推事件）。
@@ -301,8 +342,12 @@ func (f *fake) serve(conn net.Conn) {
 			"panes": []any{paneObj(f.status())},
 		}})
 	case "pane.read":
+		text := f.screen
+		if f.status() == "working" && f.working != "" {
+			text = f.working
+		}
 		send(map[string]any{"id": req.ID, "result": map[string]any{
-			"read": map[string]any{"text": f.screen},
+			"read": map[string]any{"text": text},
 		}})
 	case "events.subscribe":
 		send(map[string]any{"id": req.ID, "result": map[string]any{"type": "subscription_started"}})

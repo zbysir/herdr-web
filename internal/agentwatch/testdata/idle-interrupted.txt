@@ -1,0 +1,28 @@
+
+
+✻ Cogitated for 6s
+
+※ recap: We built herdr-diy: tab
+  duplicate on prefix+a/i, automatic
+  positional tab numbering with
+  roman-numeral suffixes, and prefix+u/d
+  agent switching. Everything is live and
+  running. Next: you confirm whether the
+  Chinese IME prefix fix works.
+
+❯ say hi
+
+⏺ Hi 🙂
+
+  第三次了 ——
+  是在测什么吗？（键位有没有串、还是
+  herdr
+  那边有别的情况？）有活儿直接扔过来。
+
+✻ Cooked for 6s
+   new task? /clear to save 283k tokens
+─────────────────────────────────────────
+❯ hi数一下 1 到 100，每个数字单独一行
+─────────────────────────────────────────
+  ~/dev/bysir/herdr-diy Opus 5 (1M con…
+  ⏵⏵ auto mode on (shift+tab to cycle)
