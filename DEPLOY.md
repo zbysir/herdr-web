@@ -152,3 +152,30 @@ rebinding）、写操作要自定义头。**loopback-only ≠ 浏览器安全**�
   容器里。
 
 安全机制本身怎么设计的、还有哪些没做，看 [SECURITY.md](SECURITY.md)。
+
+---
+
+## 从公网连（frp / 隧道）
+
+（原来在 README「安全」那节。）
+
+#### 从公网连（frp / 隧道）
+
+> 完整的公网访问方案、分档简化路线、以及实际部署时踩的运维坑：[DEPLOY.md](DEPLOY.md)。
+
+推荐 **frp 的 `type = tcp` + herdr-web 自己拿真证书**：TLS 端到端，frps 那台 VPS 上只看得到密文。用 frp 的 https 模式就是在 VPS 上解密，那台机器能看到你的整个终端画面。
+
+```bash
+HERDR_WEB_EXPOSED=1 HERDR_WEB_TLS_CERT=~/certs/herdr.example.com/fullchain.pem HERDR_WEB_TLS_KEY=~/certs/herdr.example.com/privkey.pem HERDR_WEB_HOSTNAME=herdr.example.com HERDR_WEB_PUBLIC_URL=https://herdr.example.com:17788 ./herdr-web
+```
+
+证书用 DNS-01 签（`lego` / `certbot` 都行）：**不需要公网可达，只要能改一条 TXT 记录**，所以把 A 记录指到内网地址也能拿到浏览器默认信任的证书 —— 手机上零警告、是 secure context（剪贴板和 `OSC 52` 跟着正常）、passkey 的域名门槛也一起解决了。
+
+⚠️ **`HERDR_WEB_EXPOSED=1` 必须自己声明**：走 frp 时 frpc 从本机连过来，herdr-web 看到的监听地址是 `127.0.0.1`、每个请求的源地址也是 `127.0.0.1`，「是不是本机」这个判据彻底失效。没声明的话「暴露了却检测不到」和「本机免配对把公网请求也放进来」这两个洞会同时开着。前者靠这个变量兜，后者已经改成**默认关**了。
+
+⚠️ **frp 的 tcp 模式拿不到客户端真实 IP**：所有请求在 herdr-web 眼里都来自 `127.0.0.1`（frpc 在容器里时也一样）。这有两个后果：
+
+1. 按 IP 的限速会把所有人算成同一个。封锁只挡新配对、不碰已有会话，所以最坏是「十五分钟内配不了新设备」，`herdr-web unlock` 解开。
+2. **「本机永不封」这个豁免必须关掉**，否则整层限速是空转 —— 看起来配了，一次都不生效。`HERDR_WEB_EXPOSED=1` 会自动关掉它，这也是这个变量必须声明的另一个理由。
+
+想要真实 IP 就在 frpc 上开 `transport.proxyProtocolVersion = "v2"`（herdr-web 还得会解 PROXY 协议头，现在不会），或者用 http 模式让 frps 加 `X-Forwarded-For`（那时候才配 `HERDR_WEB_TRUST_PROXY=1`）。**没有可信前置千万别开那个变量** —— 攻击者自带一个头就能伪造源 IP。
