@@ -176,7 +176,7 @@ export interface WhoAmI {
   tls: boolean
   legacy: boolean // 服务端还留着旧 token 文件
   passkeys: number // 注册过几把
-  passkeyAvailable: boolean // 这个部署能不能用（裸 IP 访问时为 false）
+  passkeyAvailable: boolean // **当前这个 origin** 能不能用（裸 IP 访问时为 false，见 auth.UsableOn）
 }
 
 export interface Device {

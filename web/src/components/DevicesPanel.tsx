@@ -239,8 +239,8 @@ export function DevicesPanel({
         </div>
         {!pkAvail && (
           <p className="text-xs/relaxed text-muted">
-            这个部署用不了：WebAuthn 要求标识是域名，用 IP 访问不行。让域名指到这台机器
-            （内网地址也可以）就能用了。
+            这个地址上用不了：WebAuthn 要求标识是域名，用 IP 访问不行 —— 装不装证书都一样，
+            门槛是「标识必须是域名」。换用域名那条路访问就能加（域名指到内网地址也算）。
           </p>
         )}
         {pkAvail && keys.length === 0 && (

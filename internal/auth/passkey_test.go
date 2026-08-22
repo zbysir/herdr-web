@@ -142,3 +142,34 @@ func TestPasskeyLoginNeedsRegistered(t *testing.T) {
 		t.Error("不存在的 ceremony 该报错")
 	}
 }
+
+// passkey 能不能用是**按 origin** 算的，不是按「这个部署配了 RPID 没有」。
+// 开了局域网直连之后同一个部署同时有域名 origin 和裸 IP origin —— 判错的表现是
+// 裸 IP 那一侧画出一个按下去只会抛 SecurityError 的按钮。
+func TestUsableOn(t *testing.T) {
+	cases := []struct {
+		rpid, host string
+		want       bool
+	}{
+		{"example.com", "example.com", true},
+		{"example.com", "example.com:7788", true},
+		{"example.com", "herdr.example.com", true},          // 子域算
+		{"herdr.example.com", "herdr.example.com:443", true},
+		{"herdr.example.com", "example.com", false},         // 上级域不算
+		{"herdr.example.com", "evilexample.com", false},     // 后缀像但不是子域
+		{"herdr.example.com", "xherdr.example.com", false},
+		{"example.com", "192.168.1.5", false},               // 裸 IP 永远不行
+		{"example.com", "192.168.1.5:7790", false},          // 局域网直连那条路
+		{"example.com", "127.0.0.1", false},
+		{"example.com", "[::1]:7788", false},
+		{"localhost", "localhost:7788", true},               // 规范里的特例
+		{"", "example.com", false},                          // 没配 RPID
+		{"example.com", "", false},
+		{"example.com", "EXAMPLE.COM:7788", true},           // 大小写不敏感
+	}
+	for _, c := range cases {
+		if got := UsableOn(c.rpid, c.host); got != c.want {
+			t.Errorf("UsableOn(%q, %q) = %v，想要 %v", c.rpid, c.host, got, c.want)
+		}
+	}
+}

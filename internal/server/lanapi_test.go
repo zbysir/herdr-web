@@ -163,3 +163,51 @@ func TestStripForwarded(t *testing.T) {
 		t.Errorf("公网那条路上 TRUST_PROXY 的行为不该被改动，得到 %q", got)
 	}
 }
+
+// 开了局域网直连之后同一个部署同时有域名 origin 和裸 IP origin，而 passkey 只在域名那侧
+// 可能成立。whoami / passkeys 里那个 available 必须**按请求的 Host** 算 —— 判错的表现是
+// 裸 IP 那一侧画出一个按下去只会抛 SecurityError 的按钮。
+func TestPasskeyOKPerOrigin(t *testing.T) {
+	dir := t.TempDir()
+	pk, err := auth.NewPasskeys(auth.PasskeyConfig{
+		Dir: dir, RPID: "herdr.example.com",
+		Origins: []string{"https://herdr.example.com"}, Display: "t",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Cfg: &config.Config{}, Passkeys: pk, RPID: "herdr.example.com"}
+	if !pk.Available() {
+		t.Fatal("配了 RPID 就该是 available（全局那一层）")
+	}
+
+	for host, want := range map[string]bool{
+		"herdr.example.com":     true,
+		"herdr.example.com:443": true,
+		"192.168.31.214:7790":   false, // 局域网直连那条路
+		"127.0.0.1:7788":        false,
+	} {
+		r := httptest.NewRequest(http.MethodGet, "/api/auth/whoami", nil)
+		r.Host = host
+		if got := s.passkeyOK(r); got != want {
+			t.Errorf("Host=%s：passkeyOK = %v，想要 %v", host, got, want)
+		}
+	}
+}
+
+// 裸 IP 上那几个 ceremony 的口要早拒 + 说清楚，别让 WebAuthn 库在后面报一个看不懂的 origin 错。
+func TestPasskeyGateRejectsIP(t *testing.T) {
+	s := &Server{Cfg: &config.Config{}, RPID: "herdr.example.com"}
+	r := httptest.NewRequest(http.MethodPost, "/api/auth/passkey/login/begin", nil)
+	r.Host = "192.168.31.214:7790"
+	w := httptest.NewRecorder()
+	if s.passkeyGate(w, r) {
+		t.Fatal("裸 IP 上应当直接拒掉")
+	}
+	if w.Code != http.StatusConflict {
+		t.Errorf("状态码 = %d，想要 409", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "域名") {
+		t.Errorf("错误信息得说清为什么：%s", w.Body)
+	}
+}

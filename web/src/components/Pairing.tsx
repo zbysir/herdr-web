@@ -175,7 +175,7 @@ export function Pairing({
           {who && !who.passkeyAvailable && (
             <>
               <br />
-              这个部署用不了 passkey：得用域名访问（裸 IP 不能当 WebAuthn 的标识）。
+              这个地址上用不了 passkey（裸 IP 不能当 WebAuthn 的标识）—— 换用域名那条路访问就有。
             </>
           )}
         </p>

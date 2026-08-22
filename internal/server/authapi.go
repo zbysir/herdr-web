@@ -116,9 +116,10 @@ func (s *Server) apiAuth(w http.ResponseWriter, r *http.Request, seg []string) {
 			"ttlDays": s.Cfg.DeviceTTLDays,
 			// 有没有旧 token 文件：配对页要据此提示「你也可以用旧链接进来」
 			"legacy": s.Cfg.Token != "" && s.Cfg.LegacyToken != "off",
-			// 配对页据此决定要不要显示「用 passkey 登录」
+			// 配对页据此决定要不要显示「用 passkey 登录」。**按当前 origin 算** ——
+			// 裸 IP 上那个按钮按下去只会抛 SecurityError，见 Server.passkeyOK
 			"passkeys":         s.Passkeys.Count(),
-			"passkeyAvailable": s.Passkeys.Available(),
+			"passkeyAvailable": s.passkeyOK(r),
 		}
 		if id != nil {
 			out["kind"], out["label"] = id.Kind, id.Label

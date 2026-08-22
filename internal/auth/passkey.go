@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -110,6 +112,34 @@ func (p *Passkeys) CheckTampered(alert func(string)) {
 
 // Available：这个部署能不能用 passkey。
 func (p *Passkeys) Available() bool { return p != nil && p.w != nil }
+
+// UsableOn 在**这个 Host 上**能不能做 WebAuthn。
+//
+// 规范的判据：origin 的有效域必须**等于 RPID 或者是它的子域**。裸 IP 永远不行
+// （`localhost` 是规范里的特例，靠下面的等值比较自然命中）。
+//
+// 为什么不能只用 Available()（「这个部署配了 RPID 没有」）：**同一个部署会同时有域名
+// origin 和裸 IP origin** —— 开了局域网直连（HERDR_WEB_LAN_PORT）之后就是这样，公网那条
+// 路是域名、直连那条是 IP。全局判断会在 IP 那一侧交给前端一个 `available: true`，于是页面
+// 画出一个「用 passkey 登录」的按钮，而按下去只会抛 SecurityError —— 一个必然失败的按钮，
+// 比没有按钮糟得多（人会以为是自己指纹没录好）。
+//
+// 这条**和证书无关**：把自签 CA 装到设备上、浏览器警告完全消失之后，裸 IP 上照样不行。
+// 门槛是「标识必须是域名」，不是「连接够不够可信」。
+func UsableOn(rpid, host string) bool {
+	if rpid == "" {
+		return false
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.ToLower(strings.Trim(host, "[]"))
+	if host == "" || net.ParseIP(host) != nil {
+		return false
+	}
+	rpid = strings.ToLower(rpid)
+	return host == rpid || strings.HasSuffix(host, "."+rpid)
+}
 
 func (p *Passkeys) Count() int {
 	if p == nil {

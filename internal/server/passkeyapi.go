@@ -15,6 +15,24 @@ import (
 //
 // 登录不要求认证，这正是它的价值：**换新设备时不用回机器前**。同步 passkey 的话，
 // 一次注册就覆盖你所有设备。
+// passkeyOK 这个请求所在的 origin 上能不能做 passkey。
+//
+// **必须按请求算，不能只看部署配了 RPID 没有**：开了局域网直连之后同一个部署同时有域名
+// origin（公网那条路）和裸 IP origin（直连那条），而 WebAuthn 只认域名。判据的细节和
+// 为什么和证书无关，见 auth.UsableOn。
+func (s *Server) passkeyOK(r *http.Request) bool {
+	return s.Passkeys.Available() && auth.UsableOn(s.RPID, r.Host)
+}
+
+// 裸 IP 上直接把这几个口拒掉，而不是让 WebAuthn 库在后面报一个看不懂的 origin 错。
+func (s *Server) passkeyGate(w http.ResponseWriter, r *http.Request) bool {
+	if s.passkeyOK(r) {
+		return true
+	}
+	fail(w, http.StatusConflict, errf("这个地址上用不了 passkey：WebAuthn 的标识只能是域名，裸 IP 不行。用域名那条路访问"))
+	return false
+}
+
 func (s *Server) apiPasskey(w http.ResponseWriter, r *http.Request, seg []string) {
 	// seg = ["auth", "passkey", ...] 或 ["auth", "passkeys", ...]
 	if seg[1] == "passkeys" {
@@ -26,6 +44,11 @@ func (s *Server) apiPasskey(w http.ResponseWriter, r *http.Request, seg []string
 		return
 	}
 	action, step := seg[2], seg[3]
+
+	// 注册和登录两套 ceremony 在裸 IP 上都不可能成功，早拒早说清楚
+	if !s.passkeyGate(w, r) {
+		return
+	}
 
 	switch {
 	case action == "register" && step == "begin" && r.Method == http.MethodPost:
@@ -104,7 +127,7 @@ func (s *Server) apiPasskeyList(w http.ResponseWriter, r *http.Request, seg []st
 	case http.MethodGet:
 		writeJSON(w, 200, map[string]any{
 			"passkeys":  s.Passkeys.List(),
-			"available": s.Passkeys.Available(),
+			"available": s.passkeyOK(r),
 			"rpid":      s.RPID,
 		})
 	case http.MethodDelete:
