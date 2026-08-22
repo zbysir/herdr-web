@@ -152,6 +152,24 @@ func Load(dir, certFile, keyFile string, ips []net.IP, names []string) (*Result,
 	}, nil
 }
 
+// Resign 在局域网 IP 变了（换 Wi-Fi、插网线、DHCP 换了段）之后把自签证书重签一遍。
+//
+// 它只往磁盘写 —— **跑着的监听不用换，也不用重启**：Result 会在十秒内热重载
+// （见 reloadIfChanged）。IP 没变就什么都不做（covers 为真时只读一遍文件）。
+//
+// 为什么这件事必须有人定期做：SAN 不匹配在手机上报的是 `ERR_CERT_COMMON_NAME_INVALID`，
+// 那个错**没有「继续访问」的口子**，而局域网直连这条路本来就是靠「点一次继续」建立
+// 信任的。启动时签一次不够，跑着的时候换个网就废了。
+func Resign(dir string, ips []net.IP, names []string) error {
+	d := filepath.Join(dir, "tls")
+	caCert, caKey, caDER, err := loadOrMakeCA(d)
+	if err != nil {
+		return err
+	}
+	_, _, _, err = loadOrMakeLeaf(d, caCert, caDER, caKey, ips, names)
+	return err
+}
+
 func loadOrMakeCA(d string) (*x509.Certificate, *ecdsa.PrivateKey, []byte, error) {
 	certPath, keyPath := filepath.Join(d, "ca.pem"), filepath.Join(d, "ca-key.pem")
 	if der, key, err := readPair(certPath, keyPath); err == nil {

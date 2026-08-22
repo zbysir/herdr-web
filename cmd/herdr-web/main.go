@@ -24,7 +24,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -37,6 +36,7 @@ import (
 	"github.com/zbysir/herdr-web/internal/auth"
 	"github.com/zbysir/herdr-web/internal/config"
 	"github.com/zbysir/herdr-web/internal/ctl"
+	"github.com/zbysir/herdr-web/internal/lan"
 	"github.com/zbysir/herdr-web/internal/qr"
 	"github.com/zbysir/herdr-web/internal/runlock"
 	"github.com/zbysir/herdr-web/internal/selfupdate"
@@ -180,6 +180,29 @@ func serve(webDir string) error {
 		}
 	}
 
+	// 局域网直连口（HERDR_WEB_LAN_PORT）。**必须是 TLS** —— 见 config.Config.LanPort
+	// 那段注释：https 页面嗅探不到 http 目标，明文的口等于这条路不存在。
+	// 主口本来就是自签的话同一张就够（那张证书的 SAN 里已经有所有局域网 IP）。
+	var lanCert *tlsgen.Result
+	if cfg.LanNeedsListener() {
+		if cert != nil && cert.SelfSigned {
+			lanCert = cert
+		} else if lanCert, err = tlsgen.Load(cfg.Dir, "", "", certIPs(cfg), cfg.Hostnames); err != nil {
+			return fmt.Errorf("局域网直连口的自签证书准备失败: %w", err)
+		}
+	}
+	// IP 会变（换 Wi-Fi、插网线），而 SAN 不匹配那个错在手机上没有「继续访问」的口子。
+	// 半分钟看一次，变了就重签写盘，跑着的监听自己热重载 —— 见 tlsgen.Resign。
+	if cfg.LanDirectPort() > 0 && (lanCert != nil && lanCert.SelfSigned || cert != nil && cert.SelfSigned) {
+		go func() {
+			for range time.Tick(30 * time.Second) {
+				if err := tlsgen.Resign(cfg.Dir, certIPs(cfg), cfg.Hostnames); err != nil {
+					log.Printf("局域网 IP 变了但重签证书失败: %v", err)
+				}
+			}
+		}()
+	}
+
 	// passkey：RPID 必须是域名，裸 IP 访问的部署这里会拿到空字符串，
 	// 于是 Passkeys.Available() 为假，相关的口和按钮都不出现。
 	passkeys, err := auth.NewPasskeys(auth.PasskeyConfig{
@@ -221,6 +244,7 @@ func serve(webDir string) error {
 		Version:     version.Version,
 		Updates:     updates,
 		Agents:      agents,
+		LanPort:     cfg.LanDirectPort(),
 	})
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
@@ -228,19 +252,44 @@ func serve(webDir string) error {
 	if err != nil {
 		return fmt.Errorf("监听 %s 失败: %w", addr, err)
 	}
+	var mainTLS *tls.Config
 	if cert != nil {
 		cert.OnReload = func(leaf *x509.Certificate) {
 			if leaf != nil {
 				log.Printf("换上了新证书（到期 %s）", leaf.NotAfter.Format("2006-01-02"))
 			}
 		}
-		ln = tls.NewListener(ln, cert.TLSConfig())
+		mainTLS = cert.TLSConfig()
+		ln = tls.NewListener(ln, mainTLS)
 	}
 
 	if l, err := ctl.Listen(cfg.Dir, ctlHandler(cfg, store, gate)); err != nil {
 		log.Printf("命令行通道起不来（子命令会用不了）: %v", err)
 	} else if l != nil {
 		defer l.Close()
+	}
+
+	// 局域网直连口：和主口同一个 handler，只是自己带 TLS 且听 0.0.0.0。
+	// 起不来不影响主服务 —— 那时候只是没有加速，网页嗅探失败会安静地留在公网那条路上。
+	if lanCert != nil {
+		lanAddr := fmt.Sprintf("0.0.0.0:%d", cfg.LanPort)
+		if lanLn, err := net.Listen("tcp", lanAddr); err != nil {
+			log.Printf("局域网直连口 %s 起不来（不影响主服务）: %v", lanAddr, err)
+		} else {
+			defer lanLn.Close()
+			// 和主口是同一张自签证书时**复用同一份 tls.Config**：在一个 Result 上
+			// 调两次 TLSConfig() 会不上锁地改它的内部状态，和另一个监听的握手抢。
+			conf := mainTLS
+			if lanCert != cert {
+				conf = lanCert.TLSConfig()
+			}
+			h := srv.Handler()
+			go func() {
+				if err := http.Serve(tls.NewListener(lanLn, conf), h); err != nil {
+					log.Printf("局域网直连口挂了: %v", err)
+				}
+			}()
+		}
 	}
 
 	// 管理口：只绑 127.0.0.1。为什么单独一个口而不是在主服务上加个认证页面，
@@ -513,7 +562,7 @@ func pairURL(cfg *config.Config, code string) string {
 	host := "127.0.0.1"
 	if len(cfg.Hostnames) > 0 {
 		host = cfg.Hostnames[0]
-	} else if nics := lanAddresses(); len(nics) > 0 && !cfg.Loopback {
+	} else if nics := lan.Addresses(); len(nics) > 0 && !cfg.Loopback {
 		host = nics[0].Address
 	}
 	return base(cfg, host) + "/?pair=" + code
@@ -521,7 +570,7 @@ func pairURL(cfg *config.Config, code string) string {
 
 func certIPs(cfg *config.Config) []net.IP {
 	ips := []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback}
-	for _, n := range lanAddresses() {
+	for _, n := range lan.Addresses() {
 		if ip := net.ParseIP(n.Address); ip != nil {
 			ips = append(ips, ip)
 		}
@@ -534,9 +583,9 @@ func banner(cfg *config.Config, store *auth.Store, passkeys *auth.Passkeys, cert
 	fmt.Println("  herdr-web " + version.Version + " 已启动")
 	fmt.Println("  " + base(cfg, "127.0.0.1") + "/")
 
-	var nics []nic
+	var nics []lan.Addr
 	if !cfg.Loopback {
-		nics = lanAddresses()
+		nics = lan.Addresses()
 	}
 	for i, n := range nics {
 		tag := ""
@@ -640,62 +689,4 @@ func short(fp string) string {
 		return fp
 	}
 	return strings.Join(parts[:4], ":") + " … " + strings.Join(parts[len(parts)-4:], ":")
-}
-
-type nic struct {
-	Name    string
-	Address string
-	score   int
-}
-
-// lanAddresses 机器上虚拟网卡一大堆（OrbStack / VPN / bridge），挑出手机真能连上的那个。
-func lanAddresses() []nic {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return nil
-	}
-	out := []nic{}
-	for _, ifc := range ifaces {
-		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
-			continue
-		}
-		addrs, err := ifc.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, a := range addrs {
-			ipn, ok := a.(*net.IPNet)
-			if !ok || ipn.IP.To4() == nil {
-				continue
-			}
-			ip := ipn.IP.To4().String()
-			n := nic{Name: ifc.Name, Address: ip}
-			if strings.HasPrefix(ifc.Name, "en") {
-				n.score += 10 // 无线 / 有线
-			}
-			for _, bad := range []string{"bridge", "utun", "vmnet", "llw", "awdl", "anpi", "ap", "docker", "veth", "tap", "tun"} {
-				if strings.HasPrefix(ifc.Name, bad) {
-					n.score -= 10
-					break
-				}
-			}
-			if strings.HasPrefix(ip, "198.18.") || strings.HasPrefix(ip, "198.19.") {
-				n.score -= 20 // benchmark 段，OrbStack 在用
-			}
-			if strings.HasSuffix(ip, ".0") {
-				n.score -= 5
-			}
-			if isPrivate(ip) {
-				n.score += 2
-			}
-			out = append(out, n)
-		}
-	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].score > out[j].score })
-	return out
-}
-
-func isPrivate(ip string) bool {
-	p := net.ParseIP(ip)
-	return p != nil && p.IsPrivate()
 }

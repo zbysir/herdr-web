@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/zbysir/herdr-web/internal/lan"
 )
 
 // 门卫层：Host 白名单 + 跨站检查 + 安全响应头。
@@ -55,13 +57,28 @@ const CSRFHeader = "X-Herdr-Web"
 
 func csrfHeaderOK(r *http.Request) bool { return r.Header.Get(CSRFHeader) != "" }
 
+// connectSrc 是 CSP 的 connect-src。默认只有 'self' —— 前端被注入也没法把终端内容外发。
+//
+// 开了局域网直连就得多放行**本机自己在局域网里的那几个 origin**，否则那次嗅探会被自己的
+// CSP 挡掉。放宽的边界很窄：只有私网地址（见 lan.Origins），而且那头就是本进程。
+//
+// 为什么每个响应都现算而不是启动时拼死：IP 会变。拼死的表现是换个网之后 CSP 里还是旧
+// 地址，嗅探被挡，而控制台里那条 CSP 报错和「连不上」长得一模一样。
+func (s *Server) connectSrc() string {
+	origins := lan.Origins(s.LanPort)
+	if len(origins) == 0 {
+		return "'self'"
+	}
+	return "'self' " + strings.Join(origins, " ")
+}
+
 func (s *Server) secHeaders(w http.ResponseWriter) {
 	h := w.Header()
 	// connect-src 'self' 顺带保证「万一前端被注入」也没法把终端内容外发。
 	// style-src 要 'unsafe-inline'：xterm.js 自己插 <style>，面板拖动也在用行内 style。
 	h.Set("content-security-policy", strings.Join([]string{
 		"default-src 'self'",
-		"connect-src 'self'",
+		"connect-src " + s.connectSrc(),
 		"img-src 'self' data: blob:",
 		"style-src 'self' 'unsafe-inline'",
 		"font-src 'self' data:",

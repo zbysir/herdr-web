@@ -8,6 +8,7 @@ import { initialScheme, type Scheme } from '@/term/themes'
 import { useViewportHeight } from '@/hooks/useViewportHeight'
 import { useCompose } from '@/hooks/useCompose'
 import { useNotices } from '@/hooks/useNotices'
+import { useLanDirect } from '@/hooks/useLanDirect'
 import { away, onNotifyClick, showNotify } from '@/lib/notify'
 import { usePhone } from '@/hooks/usePhone'
 import { useKeyboardUp } from '@/hooks/useKeyboardUp'
@@ -24,6 +25,7 @@ import { FilesPanel } from '@/components/FilesPanel'
 import { FileViewer } from '@/components/FileViewer'
 import { Pairing } from '@/components/Pairing'
 import { CopyPrompt } from '@/components/CopyPrompt'
+import { LanPrompt } from '@/components/LanPrompt'
 import { PastePrompt } from '@/components/PastePrompt'
 import { Logo } from '@/components/Logo'
 import { cn } from '@/lib/utils'
@@ -237,6 +239,10 @@ export default function App() {
    * 间隔是服务端下发的（`HERDR_WEB_NOTICE_MS`，0 = 这个部署关了提示）。state 还没拉回来
    * 之前是 0，也就是不轮询 —— 差的那一两拍无所谓，而默认值写在前端就成了第二个真相源。
    */
+  /* 局域网直连：探得通就换到直连那个 origin 上去（见 hooks/useLanDirect.ts）。
+     等 gate === 'ok' 才开始 —— 配对页上跳走没有意义，凭据还没有。 */
+  const lanDirect = useLanDirect(state?.lan, gate === 'ok')
+
   const notices = useNotices(
     state?.notice?.pollMs ?? 0,
     gate === 'ok',
@@ -1285,6 +1291,12 @@ export default function App() {
             onClose={() => setPendingCopy(null)}
           />
         )}
+        <LanPrompt
+          state={lanDirect.ask}
+          onAccept={lanDirect.accept}
+          onDecline={lanDirect.decline}
+          onDismiss={lanDirect.dismiss}
+        />
         {/* 提示浮在终端右上角。面板开着时先让开 —— 那几块浮层就在同一个角上，
             叠上去会把面板的标题栏盖掉 */}
         <Notices

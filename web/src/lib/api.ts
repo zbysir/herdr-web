@@ -44,9 +44,21 @@ export const SESSION = (() => {
  * 一下就好（比把它塞进凭据、再为它做一套过期 / 撤销强得多）。
  */
 const INSTALL_KEY = 'installId'
+const INSTALL_RE = /^[A-Za-z0-9_-]{6,64}$/
 export const INSTALL = (() => {
   const cur = localStorage.getItem(INSTALL_KEY)
-  if (cur && /^[A-Za-z0-9_-]{6,64}$/.test(cur)) return cur
+  if (cur && INSTALL_RE.test(cur)) return cur
+  // 局域网直连那一跳带过来的（见 hooks/useLanDirect.ts）。换 origin 就是换了一份
+  // localStorage，不带过来的话同一台平板在新 origin 上算「第一次来」，服务端会按
+  // deviceKind() 重新猜一套排布 —— 明明是同一台设备、同一个人。
+  //
+  // 走 fragment 而不是 query：它不是秘密（服务端不拿它做任何权限判断），但也没有
+  // 理由留在地址栏、浏览器历史和访问日志里。
+  const carried = new URLSearchParams(location.hash.slice(1)).get('install')
+  if (carried && INSTALL_RE.test(carried)) {
+    localStorage.setItem(INSTALL_KEY, carried)
+    return carried
+  }
   // getRandomValues 在非安全上下文里也有（randomUUID 没有 —— 局域网 http 上就是它）
   const b = new Uint8Array(12)
   crypto.getRandomValues(b)
@@ -54,6 +66,11 @@ export const INSTALL = (() => {
   localStorage.setItem(INSTALL_KEY, v)
   return v
 })()
+
+// 上面读完就把 fragment 抹掉：地址栏干净，而且刷新时不会再走一遍「采纳」那条路。
+if (location.hash.includes('install=')) {
+  history.replaceState(null, '', location.pathname + location.search)
+}
 
 export type DeviceKind = 'phone' | 'tablet' | 'desktop'
 
@@ -184,6 +201,11 @@ export interface State {
   herdrSocket: string
   /** 服务端开着文件浏览没有（HERDR_WEB_FILES=0 时为 false）。关着就别画那个按钮 */
   files?: boolean
+  /**
+   * 局域网直连的候选（缺失 = 这个部署没开这条路，见 HERDR_WEB_LAN_PORT）。
+   * origins 是**服务端每次现报**的 —— 局域网 IP 会变，前端不能缓存它。
+   */
+  lan?: { port: number; origins: string[] }
   /** 版本信息。outdated 为真时才有 latest / how —— 后端只在有新版本时才带这两个，
       前端不用自己比版本号（比法在 Go 那边，只有一份）。 */
   version?: { current: string; latest?: string; outdated?: boolean; how?: string }

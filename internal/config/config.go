@@ -22,7 +22,16 @@ import (
 type Config struct {
 	Host string
 	Port int
-	Dir  string // ~/.herdr-web：配置和文件（softkeys.json / tls / uploads）
+	// LanPort：局域网直连口（自签 TLS，听 0.0.0.0）。0 = 不开。
+	//
+	// 为什么要单独一个口：走隧道 / 反代那档，主口收的是明文（`TLS=proxy`），而
+	// **https 页面对 http 目标的 fetch 一律算 active mixed content 被浏览器拦死**
+	// （`mode:'no-cors'` 也拦）—— 所以嗅探不到，「自动发现局域网」这条路整个不成立。
+	// 拿真证书的那档也一样要另开：Let's Encrypt 不给私网 IP 签，照 IP 直连必然
+	// SAN 不匹配。只有「主口本身就是自签 TLS 且听着局域网」那档不用多开一个，
+	// 见 LanDirectPort。
+	LanPort int
+	Dir     string // ~/.herdr-web：配置和文件（softkeys.json / tls / uploads）
 	// DataDir 是**内部数据**：设备凭据、passkey 公钥。用户不该手改，所以和配置分开放。
 	// （为什么不上 SQLite：这点数据量换 +5MB 二进制和「cat 不了」不划算，而它唯一
 	//   能解决的跨进程写，用锁文件就够了 —— 见 internal/runlock。）
@@ -236,6 +245,7 @@ func Load() (*Config, error) {
 	c := &Config{
 		Host:        v.GetString("host"),
 		Port:        intOf(v, "port", 7788, 1),
+		LanPort:     intOf(v, "lan_port", 0, 0),
 		Dir:         v.GetString("dir"),
 		Shell:       v.GetString("shell"),
 		Socket:      v.GetString("socket"),
@@ -323,6 +333,11 @@ func Load() (*Config, error) {
 	if c.Exposed {
 		c.TrustLoopback = false // 声明暴露之后这个豁免只会是个洞
 	}
+	// 撞口的表现是「第二个监听起不来」，而那条日志夹在启动横幅里很容易看漏，
+	// 所以在这儿直接拒绝启动。Port+1 是管理口（见 serve）。
+	if c.LanPort > 0 && (c.LanPort == c.Port || c.LanPort == c.Port+1) {
+		return nil, fmt.Errorf("HERDR_WEB_LAN_PORT=%d 和主口 %d（或管理口 %d）撞了，换一个", c.LanPort, c.Port, c.Port+1)
+	}
 
 	if c.LegacyToken != "off" {
 		c.Token = legacyToken(v, c.Dir)
@@ -380,6 +395,26 @@ func (c *Config) PasskeyOrigins() []string {
 func (c *Config) ServesTLS() bool {
 	return c.TLSMode == "auto" || c.TLSMode == "files" || c.TLSMode == "acme"
 }
+
+// LanDirectPort 是网页要去嗅探的那个端口。0 = 这个部署没有局域网直连这条路。
+//
+// 显式配了 LanPort 就是它。没配的话，只有一种情况白送：主口自己就是**自签** TLS 且
+// 听着局域网 —— 那张自签证书的 SAN 里本来就有所有局域网 IP（见 cmd 的 certIPs），
+// 照 IP 直连就是有效的，不用多开一个口。
+//
+// 真证书（files / acme）那档**不算**：那张证书只对域名有效，照 IP 连必然 SAN 不匹配。
+func (c *Config) LanDirectPort() int {
+	if c.LanPort > 0 {
+		return c.LanPort
+	}
+	if c.TLSMode == "auto" && !c.Loopback {
+		return c.Port
+	}
+	return 0
+}
+
+// LanNeedsListener 局域网直连要不要另起一个监听（false = 直接用主口那个）。
+func (c *Config) LanNeedsListener() bool { return c.LanPort > 0 }
 
 // BrowserHTTPS：**浏览器眼里**是不是 https。cookie 的 Secure 属性要跟着这个走，
 // 而不是跟着本进程有没有 TLS —— 前置终止 TLS 时本进程收的是 http，但浏览器是 https。

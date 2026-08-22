@@ -61,6 +61,10 @@ type Server struct {
 	TLS   bool            // 浏览器眼里是不是 https（决定 cookie 的 Secure）
 	names map[string]bool // Host 头里允许出现的域名，见 guard.go
 
+	// LanPort 局域网直连口的端口（0 = 这个部署没这条路）。网页拿它 + 当前局域网
+	// 地址拼出候选去嗅探，见 lanapi.go。
+	LanPort int
+
 	// Agents 盯着 agent 状态变化打时间戳（面板一览的「几分钟前」）。可以为 nil：
 	// 那时候时间列空着，排序退回按 state_change_seq。
 	Agents *agentwatch.Watcher
@@ -93,6 +97,7 @@ type Options struct {
 	Version      string
 	Updates      *selfupdate.Checker
 	Agents       *agentwatch.Watcher
+	LanPort      int
 }
 
 func New(cfg *config.Config, web fs.FS, a *auth.Store, g *auth.Gate, opt Options) *Server {
@@ -125,6 +130,7 @@ func New(cfg *config.Config, web fs.FS, a *auth.Store, g *auth.Gate, opt Options
 		Version:     opt.Version,
 		Updates:     opt.Updates,
 		Agents:      opt.Agents,
+		LanPort:     opt.LanPort,
 		Ctx:         opt.Ctx,
 		names:       map[string]bool{"localhost": true},
 		sess:        map[string]*live{},
@@ -257,6 +263,8 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 		s.apiHerdr(w, r, seg)
 	case "files":
 		s.apiFiles(w, r, seg)
+	case "handoff":
+		s.apiHandoff(w, r)
 	default:
 		fail(w, http.StatusNotFound, errf("没有这个接口"))
 	}
@@ -285,6 +293,8 @@ func (s *Server) apiState(w http.ResponseWriter, r *http.Request) {
 		"session":     name, // 空 = 默认 session
 		"herdrSocket": s.Cfg.SessionSocket(name),
 		"version":     s.versionInfo(),
+		// 局域网直连的候选（没开这条路时是 nil，前端据此什么都不做）
+		"lan": s.lanInfo(),
 	})
 }
 
