@@ -153,13 +153,26 @@ export function FileViewer({
         {info.kind === 'image' && url && (
           // 默认 contain 铺满可视区，点一下切到原始尺寸（外层容器负责滚动）。
           // 手机上双指缩放照样有用 —— 这个只是省掉「小图被拉伸 / 大图看不清细节」。
+          //
+          // **SVG 走 `<img>` 是有安全含义的，别改成内联 `<svg>` 或 innerHTML**：
+          // `<img>` 里的 SVG 是规范规定的 secure static mode（脚本不跑、外部资源不加载），
+          // 而内联进 DOM 的 SVG 是本页面的一部分，agent 写的那段脚本就跑在我们的源上。
+          //
+          // 尺寸也得分开：SVG 常常不带 width/height（只有 viewBox），那时候 `<img>` 会
+          // 退回 300×150 的默认替换元素尺寸 —— 一张图表缩成邮票大。给它撑满容器再
+          // contain，有 viewBox 就会按比例放大。
           <img
             src={url}
             alt={info.name}
             onError={() => void renew()}
             onClick={() => setZoom((z) => !z)}
             title={zoom ? '点一下：缩到刚好' : '点一下：看原始尺寸'}
-            className={cn('cursor-zoom-in', zoom ? 'max-w-none cursor-zoom-out' : 'max-h-full max-w-full object-contain')}
+            className={cn(
+              'cursor-zoom-in',
+              zoom
+                ? 'max-w-none cursor-zoom-out'
+                : cn('object-contain', info.mime === 'image/svg+xml' ? 'h-full w-full' : 'max-h-full max-w-full'),
+            )}
           />
         )}
 
@@ -179,8 +192,8 @@ export function FileViewer({
           <Note>
             这是二进制文件，页面里没法预览 —— 上面那个下载按钮把它取下来。
             <br />
-            （只有按魔数认出来的 png / jpg / gif / webp 才会在页面里渲染。别的一律当附件下载，
-            因为从本站的源上渲染一个 agent 写的文件，就等于让它跑在这个页面里。）
+            （只有认出来的图才会在页面里渲染：png / jpg / gif / webp 按魔数认，SVG 按开头认。
+            别的一律当附件下载 —— 从本站的源上渲染一个 agent 写的文件，就等于让它跑在这个页面里。）
           </Note>
         )}
         {info.kind === 'special' && <Note bad>这不是常规文件（设备 / socket / 管道），读它会把请求永远挂住，所以不给读。</Note>}

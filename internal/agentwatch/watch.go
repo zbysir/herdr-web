@@ -12,6 +12,10 @@
 // 是常事，一重启时间列全空看着就像坏了；而 herdr 重启之后所有终端都是新的 id，旧记录
 // 自然对不上，也就不会张冠李戴。存盘时只写**这会儿还在的**终端，文件自己就不会长胖。
 //
+// **状态是「轮询保底 + 事件加速」两条路凑出来的。** 只听事件不行：实测 herdr 只对看得见的
+// pane 推 `pane.updated`，背景 workspace 里的 agent 干完活能 40 秒没有一条事件（见
+// pollAgents 那条注释）。事件那条路留着，是因为你正看着的那个 pane 能因此几乎实时。
+//
 // **听的是全局 `pane.updated`，不是 `pane.agent_status_changed`。** 后者看着才对口，
 // 但实测会漏：同一个五分钟里，`pane.updated` 那条流看到 3 次状态变化，按 pane 订的
 // `pane.agent_status_changed` 只来了 1 条（herdr 大概对它做了防抖，快速来回的
@@ -52,6 +56,20 @@ const retry = 5 * time.Second
 
 // 攒一会儿再落盘：状态变化本来就稀疏，但一次重订阅可能连着补好几条。
 const flush = 15 * time.Second
+
+// 多久主动对一次底（一次 pane.list）。
+//
+// **不能只靠事件。** 实测（真机，2026-08-22）：herdr 只对「看得见的」pane 推
+// `pane.updated` —— 给背景 workspace 里的一个 agent 投一句 hi，`pane.get` 6 秒后就报
+// working、13 秒报 done，而事件流里**第一条事件 40 秒后才来**。而背景里那些恰恰是提示
+// 最该管的（你看得见的那个用不着提示）。
+//
+// 所以现在是「轮询保底 + 事件加速」：轮询保证每个 pane 的变化最多晚 3 秒被看到，事件让
+// 你正看着的那个几乎实时。一次 pane.list 就是一个 socket 调用、几十 KB，比发件箱开着时
+// 500ms 打三次轻得多。
+//
+// 是 var 不是 const：单测把它调到几十毫秒。
+var pollAgents = 3 * time.Second
 
 type Watcher struct {
 	c    *herdr.Client
@@ -98,10 +116,43 @@ func (w *Watcher) Live() bool {
 	return w.live
 }
 
-// Start 起 goroutine：一个盯事件（自己重连、按 pane 集合的变化重订阅），一个攒着落盘。
+// Start 起 goroutine：一个盯事件（自己重连、按 pane 集合的变化重订阅），一个定时对底
+// （事件漏掉的靠它，见 pollAgents），一个攒着落盘。
 func (w *Watcher) Start(ctx context.Context) {
 	go w.loop(ctx)
+	go w.poller(ctx)
 	go w.flusher(ctx)
+}
+
+// poller 每 pollAgents 拉一次 pane.list，把变化按「刚刚发生」处理。
+//
+// **连不上之后回来的那一拍不发提示**：herdr server 停过一阵（或者笔记本合盖），回来时
+// 一屏 pane 的状态都和停机前不一样，那些变化是「这半小时里发生的」，当场弹成一片
+// 「刚刚跑完了」就是编时间。同理**第一拍也不发**（进程刚起来，看到的是历史）。
+func (w *Watcher) poller(ctx context.Context) {
+	t := time.NewTicker(pollAgents)
+	defer t.Stop()
+	stale := true
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		cur, err := w.agents()
+		if err != nil {
+			stale = true // 断过一次，回来那一拍只对底
+			continue
+		}
+		for _, p := range cur {
+			if stale {
+				w.observe(p)
+			} else {
+				w.observeLive(p)
+			}
+		}
+		stale = false
+	}
 }
 
 func (w *Watcher) loop(ctx context.Context) {

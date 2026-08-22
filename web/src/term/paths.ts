@@ -188,3 +188,42 @@ export function pathLinkProvider(term: Terminal, onOpen: (p: string) => void): I
     },
   }
 }
+
+/**
+ * URL 的粗匹配，**只给触屏的 tap 命中判断用**。
+ *
+ * 桌面上 URL 归 WebLinksAddon 管（hover 出下划线、点击打开），这儿不碰它。但触屏
+ * 上那条路整个走不通：xterm 的 linkifier 是 `mousemove → mousedown → mouseup` 驱动的，
+ * 而 touch.ts 把单指手势全接管了（`preventDefault`，不让浏览器补发兼容鼠标事件，
+ * 否则一划就变成拖选）。**触屏本来也没有 hover**，所以「点哪儿算链接」只能在 tap
+ * 那一刻自己判一次。多这一个正则是这个取舍的代价。
+ */
+const URL_RE = new RegExp(`\\b(?:https?|mailto):[^${STOP}]+`, 'g')
+
+/** 一次 tap 落在哪个链接上。col / row 是 **1-based 的视口坐标**（touch.ts 给的那套）。 */
+export function linkAtCell(
+  term: Terminal,
+  col: number,
+  row: number,
+): { kind: 'path' | 'url'; text: string } | null {
+  const bufRow = term.buffer.active.viewportY + row - 1
+  const { text, xs, ys } = logical(term, bufRow)
+  if (!text) return null
+
+  // 手指落在哪个字符上：xs/ys 和 text 一一对应（见 logical，中文占两格也对得上）
+  let at = -1
+  for (let i = 0; i < xs.length; i++) {
+    if (ys[i] === bufRow && xs[i] === col - 1) { at = i; break }
+  }
+  if (at < 0) return null
+
+  for (const hit of findPaths(text)) {
+    if (at >= hit.start && at < hit.end) return { kind: 'path', text: hit.path }
+  }
+  URL_RE.lastIndex = 0
+  for (let m = URL_RE.exec(text); m; m = URL_RE.exec(text)) {
+    const u = m[0].replace(TAIL, '')
+    if (at >= m.index && at < m.index + u.length) return { kind: 'url', text: u }
+  }
+  return null
+}

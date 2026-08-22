@@ -13,11 +13,22 @@
 //
 //  1. **绝不以 text/html 吐内容。** 同源的 HTML 就是一个能调 `/api/herdr/say` 的
 //     跳板：agent 写一个 html、你点开，等于它拿到了你的 herdr。所以这里按**魔数**
-//     认类型，只有 png/jpg/gif/webp 允许 inline，其余一律 attachment + octet-stream。
-//     SVG 故意**不认** —— 它是一种能跑脚本的「图片」，inline 渲染就是同源 XSS。
+//     认类型，只有认出来的图允许 inline，其余一律 attachment + octet-stream。
+//
+//     **SVG 是个特例，值得单独说。** 它没有魔数（就是 XML），而且**能跑脚本** ——
+//     所以它安不安全，全看它以什么身份被渲染：
+//     - 查看器里走 `<img src=…>`：规范规定的 secure static mode，脚本一律不跑、
+//     外部资源一律不加载。这条**不依赖任何响应头**。
+//     - 「在新标签打开」是顶层文档：靠 `/_f/` 上那条 CSP `sandbox`（没有
+//     allow-scripts 就是不给执行，而且源是 opaque 的，跑了也碰不到我们的 API），
+//     外加一条只给 SVG 的 `default-src 'none'` 把外链也堵掉。
+//     两条路各自独立成立，所以才敢认它。见 server/filesapi.go 的 svgCSP。
+//
 //  2. **只读常规文件**（IsRegular）。少这一条，点进 `/dev/zero` 就是一条无限流，
 //     点 `/dev/rdisk0` 更糟。目录里照样把它们列出来（列表要说实话），只是打不开。
+//
 //  3. **目录列表要限条数**。一个二十万文件的目录能把手机浏览器卡死。
+//
 //  4. **配了 Roots 时，前缀检查必须在 EvalSymlinks 之后**，而且比的是
 //     `root + 分隔符` —— 少任何一条都是**静默放行**：symlink 能从 jail 里指出去，
 //     纯前缀比较会让 `/home/user` 放行 `/home/user2`。
@@ -168,8 +179,7 @@ const (
 // imageMIME 按**魔数**认图。不信扩展名也不信 content-type：这两个都是随手能改的，
 // 而 inline 渲染一个「其实不是图」的东西正是要防的那件事。
 //
-// **故意没有 SVG**：它是 XML，同源 inline 渲染能跑脚本，等于把 agent 写的文件变成
-// 一个能调本站 API 的页面。SVG 会落到 binary 那一档，只能下载。
+// SVG 不在这儿 —— 它没有魔数，见 isSVG。
 func imageMIME(b []byte) string {
 	switch {
 	case len(b) > 8 && bytes.Equal(b[:8], []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}):
@@ -182,6 +192,27 @@ func imageMIME(b []byte) string {
 		return "image/webp"
 	}
 	return ""
+}
+
+// SVGMIME 单独拎出来：HTTP 那层要认它来决定发哪条 CSP（见 server/filesapi.go）。
+const SVGMIME = "image/svg+xml"
+
+// isSVG：SVG 没有魔数（它就是 XML），只能看开头像不像。
+//
+// 判据故意保守：BOM / 空白之后第一个字符必须是 `<`，采样里出现 `<svg`，而且
+// **不能出现 `<html`** —— 「一份 HTML 里顺手嵌了个 svg」必须走附件那条路，那才是真
+// 危险的东西。认错的代价不对称：把 svg 认成文本只是看到源码，把 html 认成 svg 就是
+// 把一个能跑脚本的文档 inline 出去了。
+//
+// 采样只有 sniffLen 字节，所以开头挂着一长串注释 / DOCTYPE 的 svg 会认不出来，退回
+// 文本预览。这个代价可以接受：宁可少认，不要多认。
+func isSVG(b []byte) bool {
+	t := bytes.TrimLeft(bytes.TrimPrefix(b, []byte{0xef, 0xbb, 0xbf}), " \t\r\n")
+	if len(t) == 0 || t[0] != '<' {
+		return false
+	}
+	low := bytes.ToLower(t)
+	return !bytes.Contains(low, []byte("<html")) && bytes.Contains(low, []byte("<svg"))
 }
 
 // looksText：这一段采样像不像 UTF-8 文本。判据是「没有 NUL 且是合法 UTF-8」。
@@ -216,7 +247,7 @@ var textExt = map[string]bool{
 	".gitignore": true, ".env": true, ".patch": true, ".diff": true, ".lock": true,
 }
 
-var imageExt = map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true}
+var imageExt = map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true, ".svg": true}
 
 func extKind(name string) string {
 	ext := strings.ToLower(filepath.Ext(name))
@@ -400,6 +431,8 @@ func (b *Browser) Peek(p string) (*Info, error) {
 
 	if mime := imageMIME(head); mime != "" {
 		out.Kind, out.Mime = KindImage, mime
+	} else if isSVG(head) {
+		out.Kind, out.Mime = KindImage, SVGMIME
 	} else if looksText(head, n == sniffLen) {
 		out.Kind = KindText
 	} else {

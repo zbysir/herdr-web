@@ -131,13 +131,12 @@ func TestPeekKinds(t *testing.T) {
 	// **改后缀骗不过去**：认的是魔数
 	imgLying := write(t, filepath.Join(dir, "b.txt"), pngHead)
 	txt := write(t, filepath.Join(dir, "c.md"), []byte("# 标题\n正文"))
-	// SVG 是 XML，看着是「图」但**必须**落到 text/binary 那一档 —— inline 渲染
-	// 一个能跑脚本的东西就是同源 XSS
+	// SVG 认成图（查看器走 <img>，那条路规范上就不跑脚本；顶层打开靠 svgCSP）
 	svg := write(t, filepath.Join(dir, "d.svg"), []byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`))
 	bin := write(t, filepath.Join(dir, "e.bin"), []byte{0x00, 0x01, 0x02, 0xff})
 
 	for _, c := range []struct{ p, kind string }{
-		{img, KindImage}, {imgLying, KindImage}, {txt, KindText}, {svg, KindText}, {bin, KindBinary},
+		{img, KindImage}, {imgLying, KindImage}, {txt, KindText}, {svg, KindImage}, {bin, KindBinary},
 	} {
 		info, err := b.Peek(c.p)
 		if err != nil {
@@ -147,12 +146,41 @@ func TestPeekKinds(t *testing.T) {
 			t.Errorf("Peek(%s).Kind = %q，想要 %q", filepath.Base(c.p), info.Kind, c.kind)
 		}
 	}
-	// SVG 认成 text 是可以的（预览成源码），但**绝不能**是 image —— 那才是洞
-	if info, _ := b.Peek(svg); info.Kind == KindImage {
-		t.Fatal("SVG 被当成图了，inline 渲染就是同源 XSS")
+	if info, _ := b.Peek(svg); info.Mime != SVGMIME {
+		t.Errorf("svg 的 mime = %q，HTTP 那层要靠它挑 CSP", info.Mime)
 	}
 	if info, _ := b.Peek(img); info.Mime != "image/png" {
 		t.Errorf("png 的 mime = %q", info.Mime)
+	}
+}
+
+// 认错的代价不对称：svg 认成文本只是看到源码，**html 认成 svg 就是把一个能跑脚本的
+// 文档 inline 出去了**。所以这条只往「宁可少认」那边错。
+func TestIsSVGDoesNotSwallowHTML(t *testing.T) {
+	yes := []string{
+		`<svg xmlns="http://www.w3.org/2000/svg"/>`,
+		"\n\t  <svg width=\"10\"></svg>",
+		`<?xml version="1.0"?><svg></svg>`,
+		"\ufeff<svg></svg>", // 带 BOM
+		`<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" ""><svg></svg>`,
+	}
+	no := []string{
+		`<html><body><svg><script>alert(1)</script></svg></body></html>`, // 关键的一条
+		`<!DOCTYPE html><html><svg/></html>`,
+		`说明：这个文件里提到了 <svg> 但它是一份文本`, // 第一个非空白字符不是 <
+		`{"kind":"<svg>"}`,
+		``,
+		`<note>没有 svg</note>`,
+	}
+	for _, v := range yes {
+		if !isSVG([]byte(v)) {
+			t.Errorf("应该认成 SVG：%q", v)
+		}
+	}
+	for _, v := range no {
+		if isSVG([]byte(v)) {
+			t.Errorf("**不该**认成 SVG：%q", v)
+		}
 	}
 }
 

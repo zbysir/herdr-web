@@ -65,13 +65,47 @@ type Notice struct {
 
 // worthNotice 说这次状态变化值不值得弹一下。
 //
-// `idle` / `done` 只在**从 working 过来**时算「跑完了」。不加这个限制的话，你回答完一个
-// 提问（blocked → idle）也会收到一条「跑完了」—— 而那一刻它其实刚要开始干活。
+// `blocked`（等你回答）和 `done`（跑完了）**不管从哪儿来都算** —— 这两个是 herdr 明确
+// 表态的「轮到你了」，从哪个状态跳过来不影响这件事成不成立。
+//
+// **`done` 一开始要求「必须从 working 来」，那是错的**：真机上戳一个 agent 说 hi，herdr
+// 的状态是 `idle → done`，中间**压根没报过 working**（它的屏幕识别是保守的，短任务来不及
+// 判成在跑）。于是短任务一条提示都弹不出来 —— 这个 bug 是端到端试出来的，单测里那条
+// 「working → done」用例照样绿。
+//
+// `idle` 是**歇着**，不是「干完了」，所以只在从 working 过来时才算一次「跑完了」：不加这个
+// 限制的话，你回答完一个提问（blocked → idle）也会收到一条「跑完了」，而那一刻它其实刚要
+// 开始干活。
 func worthNotice(old, cur string) bool {
-	if cur == "blocked" {
-		return true // 等你回答：不管从哪儿来
+	if cur == "blocked" || cur == "done" {
+		return true
 	}
-	return old == "working" && (cur == "idle" || cur == "done")
+	return old == "working" && cur == "idle"
+}
+
+// settled 说防抖等完之后这一下还该不该报，报的又是哪个状态（空字符串 = 不报）。
+//
+// want 是当初挂上的那个状态，cur 是这会儿的。分四种：
+//
+//   - **又在跑了** → 不报。这就是防抖的全部意义：working↔idle 的抖动实测只隔 100ms，
+//     每抖一次报一条的话，一个长任务能刷出十几条假的「跑完了」。
+//   - **现在是 blocked** → 报 blocked。它停在那儿等你，这是最该说的一种。
+//     （比如 done 之后紧接着又问你话，那就报后面这个。）
+//   - **当初是 blocked、现在不是了** → 不报。那是**你自己刚回答完**它才不 blocked 的，
+//     再弹一条「跑完了」是句假话。
+//   - 剩下的（done ↔ idle 这种收尾抖动）→ 报**现在**这个。原来这儿是「和当初不一样就
+//     整条丢掉」，于是 `done` 之后 2.5 秒内落到 `idle` 的那些真·跑完了全被吞了。
+func settled(want, cur string) string {
+	switch {
+	case cur == "" || cur == "working":
+		return ""
+	case cur == "blocked":
+		return "blocked"
+	case want == "blocked":
+		return ""
+	default:
+		return cur
+	}
 }
 
 // arm 挂一条待发的提示：记下「要报哪个状态」，没有收集协程在跑就起一个。
@@ -104,10 +138,13 @@ func (w *Watcher) collect(term string) {
 		p := w.pane[term]
 		w.mu.Unlock()
 
-		// 抖回去了 / 又开工了：这一下不是「轮到你了」，什么都不说。
-		// 这是防抖的全部意义 —— 报一条假的「跑完了」比晚报两秒糟得多。
-		if want != "" && want == cur && p.PaneID != "" {
-			w.emit(p, cur)
+		if want != "" && p.PaneID != "" {
+			if st := settled(want, cur); st != "" {
+				w.emit(p, st)
+			} else {
+				// 丢掉的这一下值得留一行：提示「该弹没弹」查起来没有别的抓手
+				log.Printf("提示：%s 的 %s 在防抖里变成了 %s，这条不弹", p.PaneID, want, cur)
+			}
 		}
 
 		w.mu.Lock()

@@ -166,14 +166,31 @@ func (s *Server) rawURL(p string) string {
 //
 // 这个口上四条硬规矩，任何一条破了都是一个能被 agent 写出来的文件利用的洞：
 //
-//  1. **content-type 只有两种**：魔数认出来的图，和 application/octet-stream。
+//  1. **content-type 只有两种**：认出来的图，和 application/octet-stream。
 //     绝不会是 text/html —— 同源的 HTML 页面能调本站所有 /api（cookie 是 HttpOnly，
 //     但它根本不需要读 cookie，浏览器会自动带上），等于 agent 写个 html 你点开就把
-//     herdr 交出去了。SVG 也不算图（能跑脚本的「图片」），落到 octet-stream。
+//     herdr 交出去了。
 //  2. **只有图 inline**，其余一律 attachment。
 //  3. **再压一条 CSP `sandbox`**，覆盖 guard 里那条。万一前两条哪天被改坏了，
-//     sandbox 会让这个响应连自己的源都没有（同源 fetch 直接失效）。
+//     sandbox 会让这个响应连自己的源都没有（同源 fetch 直接失效），脚本也不给执行。
+//     SVG 再多收一档，见 svgCSP。
 //  4. **只读常规文件**（在 files.Open 里挡）—— /dev/zero 是一条无限流。
+//
+// svgCSP 是只发给 SVG 的那条。
+//
+// SVG 是**能跑脚本**的图片，所以它安不安全全看以什么身份被渲染。两条路各自独立成立：
+//
+//   - 查看器里是 `<img src=…>`。规范规定的 secure static mode：脚本一律不跑、外部
+//     资源一律不加载。**这条不看任何响应头**，就算这个 CSP 哪天被前置代理剥掉了也还在。
+//   - 「在新标签打开」是顶层文档，那时候 SVG 里的 `<script>` / `onload=` 本来是会跑的。
+//     `sandbox`（不带 allow-scripts）把执行掐掉，顺带把源变成 opaque —— 就算跑起来
+//     也碰不到本站的 API。
+//
+// `default-src 'none'` 是再多的一档：堵掉「svg 里塞个外链图片 / 字体，你一打开它就
+// 往外发一个请求」。style 要放行 —— 图表类 svg 基本都带 `style=` 属性和 `<style>`，
+// 不放行就画出来一片黑。data: 的图和字体是自包含的，放行没有外发风险。
+const svgCSP = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:"
+
 func (s *Server) handleFileRaw(w http.ResponseWriter, r *http.Request) {
 	if s.Files == nil || !s.Files.Enabled || s.Sign == nil {
 		http.NotFound(w, r)
@@ -212,6 +229,9 @@ func (s *Server) handleFileRaw(w http.ResponseWriter, r *http.Request) {
 	if info.Kind == files.KindImage {
 		h.Set("content-type", info.Mime)
 		h.Set("content-disposition", disposition("inline", info.Name))
+		if info.Mime == files.SVGMIME {
+			h.Set("content-security-policy", svgCSP)
+		}
 	} else {
 		h.Set("content-type", "application/octet-stream")
 		h.Set("content-disposition", disposition("attachment", info.Name))

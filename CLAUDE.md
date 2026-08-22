@@ -25,10 +25,15 @@
   最后一个**不是工具调用**的 `⏺` 块（带 `⎿` 的那种是干活的流水，不是它对你说的话）。
   `internal/agentwatch/testdata/` 是真机抓屏，改这块必须跑 `go test ./internal/agentwatch/`。
   另外**对底那条路不发提示**（herdr 停机后重连会补出一片「刚刚跑完了」，那是编时间）。
+  还有两条是端到端才发现的（单测全绿）：herdr **只对看得见的 pane 推 `pane.updated`**，
+  背景 workspace 里的 agent 干完活能 40 秒没有事件 —— 所以状态是「3 秒轮一次 `pane.list`
+  保底 + 事件加速」；短任务 herdr **不报 `working`**（`idle → done` 直接过去），所以
+  `done` / `blocked` 一律弹，别再要求「必须从 working 来」。
 - 文件浏览（`internal/files`、`web/src/term/paths.ts`）：吐内容那条路**绝不能是
-  `text/html`** —— 同源 HTML 就是一个能调 `/api/herdr/say` 的跳板（SVG 也算）。
-  认路径的正则要挡中文标点（`a.png。相对的` 会被吞成一个路径），光秃秃的相对路径
-  必须带扩展名（不然 `2026/08/21` 变链接）。都在 README「文件浏览」那节。
+  `text/html`** —— 同源 HTML 就是一个能调 `/api/herdr/say` 的跳板。**SVG 能 inline 是
+  因为走 `<img>`**（规范的 secure static mode）+ 顶层打开有 CSP `sandbox`，换成内联
+  `<svg>` 就是同源 XSS。认路径的正则要挡中文标点（`a.png。相对的` 会被吞成一个路径），
+  光秃秃的相对路径必须带扩展名（不然 `2026/08/21` 变链接）。都在 README「文件浏览」那节。
 
 ## 约定
 

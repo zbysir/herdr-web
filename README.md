@@ -166,6 +166,19 @@ herdr's socket layer is **addressed by pane_id**: `pane.zoom` with a `pane_id` c
 
 **It is an index, not a second interface.** After the tap you are looking at the same herdr terminal — the page is attached to the whole TUI, so when herdr moves focus the picture follows by itself, and every keyboard habit is unchanged. That is deliberate: "take over one pane on mobile and build a graphical pane manager" could be made flashier, at the cost of **two sets of habits** and a second source of truth. So this panel answers "where to", and does not create, rename or delete anything.
 
+On a phone there is a third entrance, and it is the handiest one: **tap the `switch` button in herdr's own mobile top bar** and this list is what opens (on by default — see [Tapping herdr's switch opens ours](#tapping-herdrs-switch-opens-ours-on-by-default)).
+
+### One tap has to jump
+
+Tapping a row while the on-screen keyboard was up used to take **two taps: the first only dismissed the keyboard, the second jumped** (seen on a real phone). Two causes stack up:
+
+- All three entrances deliberately **do not let the browser move focus** — the soft key bar calls `preventDefault` on mousedown, and the touch layer swallows `touchstart` entirely (otherwise a swipe turns into a text selection, see [Phones](#phones)). So when the panel floats up, the outbox / terminal input is still focused and the keyboard still owns half the screen.
+- That one tap therefore **first** takes focus away: `--vvh` follows visualViewport, the panel reflows, and the row under your finger has moved — so the browser dispatches the click somewhere else, or not at all.
+
+Both ends are plugged now: **opening the panel blurs the focused input** (the web has no "hide keyboard" API; blur *is* hiding the keyboard), and the filter box no longer autofocuses on touch — the test changed from "phone portrait (< 440px)" to "is there a fine pointer", because tablets used to autofocus too, which pops the keyboard right back up. And **a row commits on `pointerup`, not on `click`**: touch and pen pointer events have implicit capture, so whichever row got the `pointerdown` also gets the `pointerup`, however much the layout moved in between. Mouse and keyboard still go through `click` (on the desktop a click is never lost), and a finger that travels more than 10px counts as scrolling the list, not a tap.
+
+The two file-browsing surfaces (directory panel / viewer) are opened by tapping in the terminal too, so they dismiss the keyboard on open as well.
+
 ### Sorting (switchable)
 
 The button at the top cycles it; the choice is remembered locally:
@@ -200,9 +213,9 @@ A few details:
 - The "zoom" toggle is remembered locally. On by default on phones: a tiled multi-pane layout is unreadable there, so arriving without zooming is the same as not arriving.
 - `zoomed` is a property of **the whole tab**, not of a pane (herdr always zooms the focused one). So "this tab only has one pane" comes back as `zoomed:false`, which is not a failure — the UI says so explicitly.
 
-## Notices: a card when an agent changes state (top right + red dot)
+## Notices: a card when an agent changes state (top right + badge)
 
-When an agent stops to wait for you (or has just finished), a card appears in the top right **carrying what it said**, and a red dot lights up on the ▦ in the top bar. Tapping the card jumps to that pane (zoomed — the same action and the same "zoom" toggle as tapping a row in the pane list).
+When an agent stops to wait for you (or has just finished), a card appears in the top right **carrying what it said**, and a badge with the count lights up on the ▦ in the top bar. Tapping the card jumps to that pane (zoomed — the same action and the same "zoom" toggle as tapping a row in the pane list).
 
 **Why this exists.** Only one of herdr's panes is visible in the page (on a phone, only the zoomed one), while a dozen agents can be running at once. Finding "the one waiting for me" used to mean opening the pane list and scanning it — so an agent stuck on a y/n for half an hour was routine.
 
@@ -213,11 +226,25 @@ When an agent stops to wait for you (or has just finished), a card appears in th
 | Change | Fires? | Why |
 |---|---|---|
 | → `blocked` (waiting on you) | **Yes**, and it does not auto-dismiss | It really is sitting there waiting. A card that floats away by itself puts you back to "no idea who is waiting" |
-| `working` → `idle` / `done` (finished) | Yes, dismissed after 12s | Just a notification; missing it costs nothing |
+| → `done` (finished) | Yes, dismissed after 12s by default | An explicit "your turn" from herdr, whatever it came from |
+| `working` → `idle` (finished) | Yes, same | `idle` is *resting*, so it only counts as "finished" when it came from `working` |
 | → `working` | No | That is almost always what you just posted — an echo |
 | `blocked` → `idle` | No | You just answered and it is about to start; reporting "finished" would be a lie |
 
+**`done` fires no matter where it came from — requiring `working` first was a bug.** On a real device, poking an agent with a one-line "say hi" gives `idle → done` with **no `working` in between** (herdr's screen detection is conservative and a short task never registers as running). The first version required `working → done`, so short tasks produced no notice at all — every unit test stayed green and only the end-to-end poke found it.
+
 **A state has to hold for 2.5 seconds to count.** claude / codex flicker back to idle while working, and without debouncing one long task produces a dozen false "finished" cards; `pane.read` snapshots also lag by a frame, so reading immediately catches the tail of the previous task. If the state changes again within those 2.5 seconds (`idle → blocked` is a common pair), the **last** one is reported, as a single card.
+
+**State comes from polling with events as an accelerator — not from events alone.** Measured on a real device: herdr only pushes `pane.updated` for panes that are **visible**. Poke an agent sitting in a background workspace and `pane.get` reports `working` after 6s and `done` after 13s, while the event stream's **first event arrives 40 seconds later**:
+
+```
+ 0.1s  [poll pane.get] done      ← posted "say hi"
+ 6.2s  [poll pane.get] working
+13.2s  [poll pane.get] done      ← finished after 13s
+40.8s  [event pane.updated] first event finally arrives
+```
+
+Background panes are exactly the ones notices are for (the one you can see needs no notice), so a `pane.list` poll every 3 seconds is the floor and events only make the pane you are looking at near-instant. One `pane.list` is a single socket call of a few dozen KB — far lighter than the outbox's three calls per 500ms while it is open.
 
 **Nothing is replayed when herdr comes back after being down.** Reconciling at that moment finds a screen full of panes whose state differs from before the outage, but those changes happened "sometime in the last half hour"; firing a burst of "just finished" would be inventing timestamps — the same reason the "3 minutes ago" column refuses to invent times for old changes. The cost is that a change inside the 800ms resubscribe window is missed.
 
@@ -236,22 +263,50 @@ The scraper is adapted from `extractResult` in [herdr-sight](../herdr-sight) (wh
 
 - **Tap = jump there** (zoomed; same action and same "zoom" toggle as a pane list row), and the card dismisses itself afterwards — you already went, leaving it up only blocks the view.
 - At most **3** stack in the corner; the rest collapse into one line: "N more · open the pane list".
+- **How long they stay is a setting** (5s / 12s (default) / 30s / 1min / stay put). "Waiting on you" ignores it and always stays.
 - **"Waiting on you" sorts to the top**, then by recency. Not purely by time, because the two kinds have different lifetimes: "finished" leaves after a dozen seconds while "waiting on you" stays, so time ordering lets a fresh "finished" push down the one that is actually waiting — the only one that needs you to do anything. When the stack is full, "finished" cards are dropped first.
 - The whole stack gets out of the way while a panel is open: those overlays share the same corner.
 
-### The red dot
+### The badge (how many are still unread)
 
-- It sits on the ▦ in the top bar, and **also on the `act:panes` key** on the soft key bar — on a phone the top bar collapses the moment the keyboard is up, which is exactly when you are talking to an agent and most need to know another one is waiting.
-- **Opening the pane list marks them seen** (the only way to clear the dot): that is where these changes are meant to be read, and priority sorting puts "waiting / finished" at the top. Dismissing a single card does **not** count as seen — that only means it was in the way.
-- It is stored in `localStorage` (as a seq, not a count), so **a page refresh does not lose it**: on a phone, a dot that vanishes on reload makes the whole feature pointless. Named sessions track their own (that is a different herdr).
-- **The dot can be turned off** if it bothers you: Settings → Terminal, last item, "red dot on the panel icon". That only stops drawing the dot; the cards in the corner still appear — two separate things, because the dot persists while cards leave on their own. Stored locally, per device. To turn the whole feature off, that is `HERDR_WEB_NOTICE_MS=0` on the server side.
-- **Opening the page lights the dot but replays no cards**: those changes may be half an hour old, and showing them as if they just happened is inventing time.
+The ▦ in the top bar carries a **number**: how many notices you have not looked at. The `act:panes` key on the soft key bar carries the same one — on a phone the top bar collapses the moment the keyboard is up, which is exactly when you are talking to an agent and most need to know another one is waiting.
+
+A number rather than a dot: a dot only says "something is there", while *how many* is actionable — two agents waiting and five agents waiting are different decisions. Over 9 it reads `9+`.
+
+**What counts as seen:**
+
+| Action | Badge |
+|---|---|
+| **Tap a card to jump** | Everything unread for that pane clears (the number drops). **Per pane, not per notice** — you are looking at that agent's current screen, which includes what it said earlier |
+| Tap a system notification | Same |
+| **Open the pane list** | Everything counts as seen (that is where these changes are meant to be read, in one scan) |
+| Dismiss a single card (×) | **Not** seen — that only means it was in the way |
+
+With two agents waiting, tapping into one takes the badge from 2 to 1 rather than clearing it; it goes away when you have been into both.
+
+**A refresh does not lose it** (`localStorage`): on a phone, a badge that vanishes on reload makes the whole feature pointless. What is stored is a **watermark** (seq — everything below it is seen) plus **the handful above it you have already seen**: a watermark alone cannot express "read #7, not #6". Once nothing is unread the watermark moves up and that list is cleared, so it stays a few entries long. Named sessions track their own (that is a different herdr).
+
+**It can be turned off** if it bothers you: Settings → Terminal, "badge on the panel icon". That only stops drawing the badge; the cards in the corner still appear. Stored locally, per device. To turn the whole feature off, that is `HERDR_WEB_NOTICE_MS=0` on the server side.
+
+**Opening the page lights the badge but replays no cards**: those changes may be half an hour old, and showing them as if they just happened is inventing time.
+
+### System notifications
+
+Settings → Terminal → "System notifications" (**you have to tap it yourself** — browsers only hand out the permission prompt inside a user gesture). After that, new notices go out as browser notifications **while you are not looking at the page**; tapping one brings the page back to the front and jumps to that pane.
+
+- **The test is "are you looking at this page", not `document.hidden`.** On macOS, switching to another app only unfocuses Chrome — the tab still counts as visible and `hidden` stays false, so a `hidden`-only test never fires in the most common case (that was the first version, and the report was "system notifications simply never show up"). The check is `document.hidden || !document.hasFocus()`. There is a "notify me even while I am looking at this page" switch for people who want both.
+- **A "Test it" button** ignores both the switch and the focus test and fires one right away. Where it is stuck (permission? focus mode? iOS not installed to the home screen?) cannot be guessed — one tap answers it, and the reason comes back as a toast.
+- **One notification per agent** (the tag is the `terminal_id`), replacing the previous one instead of piling up in the notification centre.
+- **On phones**: Android Chrome works in an ordinary tab. **iPhone / iPad must "Add to Home Screen"** and open it from there (a page in a Safari tab cannot get notification permission; iOS 16.4+).
+- Turning the switch on registers a `sw.js` (**and only then**). Both Android Chrome and iOS require `ServiceWorkerRegistration.showNotification()` — the `new Notification()` constructor is unavailable there. That worker **caches nothing** (it does not even listen for `fetch`); it only handles notification clicks. A worker that intercepts requests on a terminal page buys nothing and costs you "I changed it and nothing happened" debugging sessions.
+- **Close the page and they stop.** Real "even with the browser closed" needs Web Push (VAPID keys, stored subscriptions, the server pushing) — a whole other stack, not built.
+- Over plain http (not https, not localhost) browsers refuse the permission; the switch greys out and says why.
 
 ### Limits
 
 - `agent_status` cannot tell that a dialog is open (measured: the same picker reported `idle` once and `blocked` another time, see [HERDR-API.md](HERDR-API.md)). So occasionally a question is announced as "finished" — the card still carries the question, only the state label is wrong; the jump is right.
 - The scraping rules follow claude's current UI. After a redesign they may extract something odd; state and jumping still work, and the fix is a fresh capture in testdata plus a rule adjustment.
-- To turn the whole thing off: `HERDR_WEB_NOTICE_MS=0` (the frontend stops polling and stops drawing the dot).
+- To turn the whole thing off: `HERDR_WEB_NOTICE_MS=0` (the frontend stops polling and stops drawing the badge).
 
 ## File browsing (looking at what the agent generated)
 
@@ -302,7 +357,7 @@ None is optional, because what comes out is **a file the agent wrote**:
 
 ## Settings panel
 
-The ⚙ at the right end of the top bar holds everything, in three pages: **Terminal** (font size / light-dark, kitty protocol / Option as Meta / copy on select / synchronized output, the red dot on the panel icon, plus a line of backend environment), **Soft keys** (next section), and **Devices** (who has paired, sign out, kick).
+The ⚙ at the right end of the top bar holds everything, in three pages: **Terminal** (font size / light-dark, kitty protocol / Option as Meta / copy on select / synchronized output, tapping herdr's switch opens the pane list, the badge on the panel icon, system notifications, how long notice cards stay, plus a line of backend environment), **Soft keys** (next section), and **Devices** (who has paired, sign out, kick).
 
 The font size / light-dark controls at the top of the Terminal page are the same actions as the three icons in the top bar, not a second copy of the state: a phone in portrait has no room for them in the top bar, so that is the only place to reach them.
 
@@ -361,6 +416,20 @@ Only **full-length lines** count (box-drawing characters covering 70% or more of
 The finger is allowed to drift 16px during the hold (`HOLD_SLOP`). It was 8px, which was too strict — a finger holding still drifts a dozen pixels anyway, and any drift cancelled the long press, which reads as "long press does nothing". With mouse reporting off (a plain shell) there is no grabbing, and a long press keeps doing nothing.
 
 Verified end to end: in a separate herdr session with a vertical split, long-pressing **3 cells to the right** of the divider and dragging moved it from column 45/46 to 40/41; swiping vertically right on the divider still emitted nothing but wheel reports.
+
+### Tapping herdr's switch opens ours (on by default)
+
+herdr has a mobile layout of its own: once the terminal gets narrow enough (its `ui.mobile_width_threshold`, 64 columns by default) it collapses to a single column with a two-row status bar, and **flush against the right edge** sits a `switch` button — which opens herdr's own switcher (spaces / tabs / menu, drilled into one level at a time). By default a touch on it is **no longer forwarded to herdr**; it opens the [pane list](#pane-list-how-you-switch-panes-on-a-phone) instead: sorted by state, filterable, one tap crosses workspaces and zooms. Turn it off under ⚙ → Terminal and the button goes back to being herdr's.
+
+The button is located by **flooding outwards from the word along the background colour** (`web/src/term/mobilebar.ts`), not by hard-coded coordinates — at 50 columns the block is columns 41–50 × rows 1–2, at 64 columns it is 55–64; the width follows the layout. Three things measured on a live herdr:
+
+- **The hit area has to be the whole block, not just the six letters.** herdr's own hit area is the whole block: a tap on the row *above* the word (where there is no text at all) opens its panel just the same. Match only the letters and half the area still opens herdr's panel — one button, two behaviours.
+- **Once claimed, the mouse report must not go out**, or both panels end up open and you have to dismiss herdr's after jumping.
+- **herdr's own switcher has `switch` as its title**, so a block that starts at column 1 is never treated as the button — that title row is one continuous background (with a separate `close` block at the right). Without that guard, "close herdr's panel" would be claimed by us.
+
+The cost, stated plainly: "+ new workspace / + new tab / settings / keybinds / detach" in herdr's panel become unreachable (ours only answers "where to" — the trade-off is in [Pane list](#pane-list-how-you-switch-panes-on-a-phone)). Turn the setting off to get them back, or reach them with herdr's prefix keys from the soft key bar.
+
+Verified end to end on a real herdr narrowed to 64 columns: with the setting off, tapping `switch` brings up herdr's panel (spaces / tabs / menu); with it on, the pane list comes up and **not one byte goes to herdr**; while herdr's own panel is open, tapping its title is not claimed (the block found there starts at column 1, so it is rejected).
 
 ### Copy and paste on a phone
 
@@ -517,7 +586,9 @@ web/                  Vite + React + TS + Tailwind v4 + shadcn-style components
                       paths.ts turns file paths in the terminal into tappable links (reassembling
                       wrapped lines, terminating on CJK punctuation, refusing truncated ones —
                       every rule learned the hard way)
-  src/hooks/          useCompose (outbox state machine), useNotices (notice polling + red dot),
+                      mobilebar.ts spots the switch button in herdr's mobile top bar
+                      (flood-fill by background colour) — the test behind "tap it, get our pane list"
+  src/hooks/          useCompose (outbox state machine), useNotices (notice polling + unread badge),
                       useViewportHeight
   src/components/     Dock.tsx is the bottom dock shell (border / width / height shared by the
                       outbox and the soft key bar)
@@ -649,7 +720,7 @@ Changes take effect on restart — configuration is read once at startup. To con
 | `HERDR_WEB_SOCKET` | `$HERDR_SOCKET_PATH` or `~/.config/herdr/herdr.sock` | The herdr socket the outbox connects to. **Do not rely on `HERDR_SOCKET_PATH`**: `dropEnv` strips `HERDR_*`, and this process may not have been started from a herdr pane at all |
 | `HERDR_WEB_POLL_MS` | `500` | How often the outbox checks "where is focus, what is in the input line". Minimum 200 |
 | `HERDR_WEB_PUSH_MS` | `700` | With "two-way" on, how long after you stop typing the draft is pushed. Minimum 100 |
-| `HERDR_WEB_NOTICE_MS` | `4000` | How often notices (the cards and the red dot) ask "anything new". **`0` turns the whole notice feature off** and the frontend stops polling. Anything under 1000 is treated as 1000 — this tick only reads memory on the server (it does not touch the herdr socket), but a notice is inherently 2.5 seconds behind the state change (debounce), so polling harder cannot beat that |
+| `HERDR_WEB_NOTICE_MS` | `4000` | How often notices (the cards and the unread badge) ask "anything new". **`0` turns the whole notice feature off** and the frontend stops polling. Anything under 1000 is treated as 1000 — this tick only reads memory on the server (it does not touch the herdr socket), but a notice is inherently 2.5 seconds behind the state change (debounce), so polling harder cannot beat that |
 | `HERDR_WEB_SETTLE_MS` | `120` | How long to wait between two `pane.read` calls (to defeat the one-frame snapshot lag). **Never 0**: herdr sometimes answers in 1-2ms, both reads land on the same frame, and the clear loop misreads that as "cannot be cleared". The clear path has its own 120ms floor |
 
 ### Exposure / TLS / credentials

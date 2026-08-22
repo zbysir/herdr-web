@@ -1,8 +1,11 @@
+import { useEffect, useState } from 'react'
 import { AArrowDown, AArrowUp, CircleHalf } from '@/icons'
 import type { SoftKey, State } from '@/lib/api'
+import { enableNotify, notifyState, testNotify, type NotifyState } from '@/lib/notify'
 import { Panel } from './ui/panel'
 import { Button } from './ui/button'
 import { Checkbox } from './ui/checkbox'
+import { Select } from './ui/select'
 import { SoftkeysPanel } from './SoftkeysPanel'
 import { DevicesPanel } from './DevicesPanel'
 import { cn } from '@/lib/utils'
@@ -19,7 +22,16 @@ import { cn } from '@/lib/utils'
  * 协议时的调试视图，日常没人看。能力本身还照样在 session 里记着（主题变更通知要用），
  * 只是不再摆到界面上。
  */
-export type TermOpts = { kitty: boolean; meta: boolean; copyOnSelect: boolean; sync2026: boolean }
+/** 每种权限状态说一句人话 —— 「开不了」的原因差别很大，笼统一句「不支持」查不出所以然 */
+const NOTIFY_HINT: Record<NotifyState, string> = {
+  granted: '已开。默认只在你没看这一页时弹（切到别的 app、锁屏、切标签页都算）。页面被彻底关掉就收不到 —— 那要 Web Push，还没做',
+  default: '点一下会问你要权限',
+  denied: '被拒过。手机上到「设置 → 通知」或浏览器的网站设置里把这个站的通知改成允许，再回来点',
+  insecure: '这个地址不是安全上下文（要 https，或者 localhost），浏览器不给通知权限',
+  unsupported: 'iPhone / iPad：Safari 标签页里拿不到通知权限，要先「添加到主屏幕」再从主屏打开（iOS 16.4+）。桌面上换 Chrome / Firefox / Safari',
+}
+
+export type TermOpts = { kitty: boolean; meta: boolean; copyOnSelect: boolean; sync2026: boolean; switchPanel: boolean }
 
 export type SettingsTab = 'term' | 'keys' | 'devices'
 
@@ -30,7 +42,8 @@ const TABS: { id: SettingsTab; label: string }[] = [
 ]
 
 export function SettingsPanel({
-  tab, onTab, onClose, opts, setOpt, dot, onDot, heals, onSaved, toast, state,
+  tab, onTab, onClose, opts, setOpt, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs,
+  heals, onSaved, toast, state,
   fontSize, onFont, scheme, onScheme,
 }: {
   tab: SettingsTab
@@ -38,9 +51,18 @@ export function SettingsPanel({
   onClose: () => void
   opts: TermOpts
   setOpt: (k: keyof TermOpts, v: boolean) => void
-  /** 面板图标上那个红点画不画（有人不喜欢那个点）。存在本地，一台设备一份 */
+  /** 面板图标上那个未读数角标画不画（有人不喜欢）。存在本地，一台设备一份 */
   dot: boolean
   onDot: (v: boolean) => void
+  /** 系统通知开没开（浏览器权限另算，面板里当场问） */
+  os: boolean
+  onOS: (v: boolean) => void
+  /** 系统通知：人正看着这一页时也弹 */
+  osFg: boolean
+  onOSFg: (v: boolean) => void
+  /** 「跑完了」的卡片挂多久（ms，0 = 一直挂着） */
+  cardMs: number
+  onCardMs: (v: number) => void
   heals: number
   onSaved: (lib: SoftKey[], bar: string[][]) => void
   toast: (m: string) => void
@@ -84,7 +106,9 @@ export function SettingsPanel({
 
       {tab === 'term' && (
         <TermSection
-          opts={opts} setOpt={setOpt} dot={dot} onDot={onDot} heals={heals} state={state}
+          opts={opts} setOpt={setOpt} dot={dot} onDot={onDot} os={os} onOS={onOS}
+          osFg={osFg} onOSFg={onOSFg} cardMs={cardMs} onCardMs={onCardMs}
+          heals={heals} state={state} toast={toast}
           fontSize={fontSize} onFont={onFont} scheme={scheme} onScheme={onScheme}
         />
       )}
@@ -95,12 +119,20 @@ export function SettingsPanel({
 }
 
 function TermSection({
-  opts, setOpt, dot, onDot, heals, state, fontSize, onFont, scheme, onScheme,
+  opts, setOpt, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs,
+  heals, state, fontSize, onFont, scheme, onScheme, toast,
 }: {
   opts: TermOpts
   setOpt: (k: keyof TermOpts, v: boolean) => void
   dot: boolean
   onDot: (v: boolean) => void
+  os: boolean
+  onOS: (v: boolean) => void
+  osFg: boolean
+  onOSFg: (v: boolean) => void
+  cardMs: number
+  onCardMs: (v: number) => void
+  toast: (m: string) => void
   heals: number
   state?: State | null
   fontSize: number
@@ -108,6 +140,18 @@ function TermSection({
   scheme: 'dark' | 'light'
   onScheme: () => void
 }) {
+  // 浏览器那侧的通知权限。面板一开就问一次真实值（用户可能在浏览器设置里撤掉过）
+  const [perm, setPerm] = useState<NotifyState>(notifyState)
+  useEffect(() => { setPerm(notifyState()) }, [])
+
+  // 打开的那一下**必须**是用户手势 —— 浏览器只在手势里给权限弹窗（定时器里申请一律静默拒绝）
+  const flipOS = async (v: boolean) => {
+    if (!v) { onOS(false); return }
+    const got = await enableNotify()
+    setPerm(got)
+    onOS(got === 'granted')
+  }
+
   // 每条一行、勾在最左边。gap 给 2.5：勾和字贴太近时一排四条看着像一坨
   const row = (k: keyof TermOpts, label: string) => (
     <label className="flex cursor-pointer items-start gap-2.5 rounded-md py-1 transition-colors hover:text-fg">
@@ -142,18 +186,101 @@ function TermSection({
       {row('copyOnSelect', '选中即复制（鼠标选中时；触屏上没有选区）')}
       {row('sync2026', '同步输出 DEC 2026（防画面撕裂；留一块空白画不上来时关它）')}
 
+      {/* 「点 switch 开面板一览」和上面那串终端行为不是一类：它改的是「点 herdr 那个按钮会
+          发生什么」。和下面那个角标一样是「这台设备上顺手不顺手」的偏好，所以并在同一条线下面。 */}
+      <label className="mt-2 flex cursor-pointer items-start gap-2.5 rounded-md border-t border-line pt-3 transition-colors hover:text-fg">
+        <span className="pt-px">
+          <Checkbox checked={opts.switchPanel} onCheckedChange={(v) => setOpt('switchPanel', !!v)} />
+        </span>
+        <span className="text-[13px]/relaxed">
+          点 herdr 的 switch 就开「面板一览」（手机 / 平板）
+          <span className="mt-0.5 block text-xs text-faint">
+            窄屏时 herdr 顶栏右上角有个 switch 按钮，点开的是它自己那张切换面板。开着这条时，
+            触屏上点它就不再发给 herdr，改开我们的面板一览（一行一个 pane，点一下跳过去并铺满）。
+            代价是 herdr 那张里的「+ new workspace / + new tab / settings / detach」这一路走不到 ——
+            要用就把这条关掉，或者从软键条走 herdr 的前缀键。
+          </span>
+        </span>
+      </label>
+
       {/* 提示那一条**不属于**「终端」，但设置面板只有三页（终端 / 软键条 / 设备），
           为一个开关单开一页不值当。用一条分隔线隔开，别混进上面那串终端行为里去。 */}
-      <label className="mt-2 flex cursor-pointer items-start gap-2.5 rounded-md border-t border-line pt-3 transition-colors hover:text-fg">
+      <label className="mt-1 flex cursor-pointer items-start gap-2.5 rounded-md py-1 transition-colors hover:text-fg">
         <span className="pt-px"><Checkbox checked={dot} onCheckedChange={(v) => onDot(!!v)} /></span>
         <span className="text-[13px]/relaxed">
-          面板图标上的红点（有 agent 在等你回答 / 刚跑完时点一个）
+          面板图标上的角标（还有几条没看：等你回答 / 刚跑完）
           <span className="mt-0.5 block text-xs text-faint">
-            关掉只是不画那个点，右上角的提示卡照常出；整套提示要关是服务端那侧的
+            点进去看过一条就少一个；关掉只是不画这个角标，右上角的提示卡照常出。整套提示要关是服务端那侧的
             <code className="mx-1 rounded border border-line bg-ctl px-1 py-px font-mono text-[11px]">HERDR_WEB_NOTICE_MS=0</code>
           </span>
         </span>
       </label>
+
+      {/* 系统通知：本地开关 + 浏览器权限两件事。权限**当场问一次**再显示 ——
+          用户可能在浏览器设置里把它撤了，只信 localStorage 会显示成开着但一条都不弹。 */}
+      <label
+        className={cn(
+          'flex items-start gap-2.5 rounded-md pt-1 transition-colors',
+          perm === 'unsupported' || perm === 'insecure' ? 'opacity-60' : 'cursor-pointer hover:text-fg',
+        )}
+      >
+        <span className="pt-px">
+          <Checkbox
+            checked={os && perm === 'granted'}
+            disabled={perm === 'unsupported' || perm === 'insecure'}
+            onCheckedChange={(v) => { void flipOS(!!v) }}
+          />
+        </span>
+        <span className="text-[13px]/relaxed">
+          系统通知（切到别的 app / 锁屏也能知道）
+          <span className="mt-0.5 block text-xs text-faint">{NOTIFY_HINT[perm]}</span>
+        </span>
+      </label>
+
+      {/* 「试一下」不看开关也不看「在不在看这一页」，就是当场弹一条 —— 「到底卡在哪」
+          光靠猜是猜不出来的（权限？系统的专注模式？iOS 没装到主屏？），弹一次就知道了 */}
+      <div className="mt-1 flex flex-wrap items-center gap-2 pl-7">
+        <Button
+          size="tiny"
+          onClick={() => {
+            void (async () => {
+              const p = notifyState()
+              if (p !== 'granted') {
+                const got = await enableNotify() // 这一下是用户手势，可以申请权限
+                setPerm(got)
+                if (got !== 'granted') { toast(NOTIFY_HINT[got]); return }
+                onOS(true)
+              }
+              await testNotify()
+              toast('已经发出去一条了。没看见的话看下系统的通知设置 / 专注模式')
+            })()
+          }}
+        >
+          试一下
+        </Button>
+        <label className="flex cursor-pointer items-center gap-2 text-xs text-muted hover:text-fg">
+          <Checkbox checked={osFg} onCheckedChange={(v) => onOSFg(!!v)} />
+          我正看着这一页时也弹
+        </label>
+      </div>
+
+      {/* 卡片停留多久。「等你回答」那种不受这个管 —— 它是真的停在那儿等你，
+          自己飘走就又回到「不知道谁在等」了 */}
+      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
+        <span className="text-[13px]">提示卡停留</span>
+        <Select
+          value={String(cardMs)}
+          onChange={(e) => onCardMs(Number(e.target.value))}
+          aria-label="提示卡停留多久"
+        >
+          <option value="5000">5 秒</option>
+          <option value="12000">12 秒</option>
+          <option value="30000">30 秒</option>
+          <option value="60000">1 分钟</option>
+          <option value="0">一直挂着</option>
+        </Select>
+        <span className="text-xs text-faint">「等你回答」那种一直挂着，不受这个管</span>
+      </div>
 
       {heals > 0 && (
         <p className="text-xs/relaxed text-muted">

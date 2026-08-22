@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -24,6 +25,11 @@ func TestWorthNotice(t *testing.T) {
 	}{
 		{"working", "idle", true, "跑完了"},
 		{"working", "done", true, "跑完了"},
+		// 这条是端到端试出来的：真机上戳一个 agent 说 hi，herdr 报的是 idle → done，
+		// **中间压根没有 working**（屏幕识别保守，短任务来不及判成在跑）。
+		// 原来要求 done 必须从 working 来，于是短任务一条都弹不出来。
+		{"idle", "done", true, "短任务：herdr 没报过 working 就直接 done"},
+		{"blocked", "done", true, "回答完接着就跑完了"},
 		{"working", "blocked", true, "等你回答"},
 		{"idle", "blocked", true, "等你回答（从闲着直接问话也算）"},
 		{"idle", "working", false, "开工了：多半是你自己刚投进去的"},
@@ -33,6 +39,27 @@ func TestWorthNotice(t *testing.T) {
 	} {
 		if got := worthNotice(c.old, c.cur); got != c.want {
 			t.Errorf("%s → %s：want %v got %v（%s）", c.old, c.cur, c.want, got, c.why)
+		}
+	}
+}
+
+// 防抖等完之后报哪个状态。**这张表是「该弹没弹 / 不该弹却弹了」的全部判据**。
+func TestSettled(t *testing.T) {
+	for _, c := range []struct {
+		want, cur, out string
+		why            string
+	}{
+		{"idle", "idle", "idle", "稳住了，照报"},
+		{"done", "done", "done", "稳住了，照报"},
+		{"done", "idle", "idle", "收尾抖动：done 之后落到 idle，报现在这个（原来整条丢掉，真·跑完了被吞）"},
+		{"idle", "working", "", "又开工了：这一下不是「轮到你了」"},
+		{"blocked", "working", "", "你回答完它开工了"},
+		{"blocked", "idle", "", "你自己刚回答完，再报「跑完了」是假话"},
+		{"idle", "blocked", "blocked", "跑完之后紧接着又问你话：报后面这个"},
+		{"done", "", "", "pane 没了"},
+	} {
+		if got := settled(c.want, c.cur); got != c.out {
+			t.Errorf("settled(%q,%q) = %q，want %q（%s）", c.want, c.cur, got, c.out, c.why)
 		}
 	}
 }
@@ -99,6 +126,26 @@ func TestNoticeReportsLatestStatus(t *testing.T) {
 	}
 }
 
+// **一条事件都不来也要弹。** 真机上 herdr 只对看得见的 pane 推 `pane.updated`：给背景
+// workspace 里的 agent 投一句 hi，`pane.get` 6 秒就报 working、13 秒报 done，而事件流里
+// 第一条 40 秒后才来 —— 只听事件的话，最该提醒的那些 pane 一条提示都没有。
+// 这条用例把事件全掐掉，只留 pane.list 那条轮询。
+func TestNoticeFromPollingWhenNoEvents(t *testing.T) {
+	f := newFake(t, screenAnswer)
+	f.mute = true
+	f.setStatus("working")
+	w := f.watch(t)
+
+	// 先让轮询把 working 记下来（第一拍只对底不弹），再让它干完
+	time.Sleep(10 * pollAgents)
+	f.setStatus("idle")
+
+	n := waitNotice(t, w, 1)[0]
+	if n.Status != "idle" || n.Pane != "w1:pA" {
+		t.Errorf("轮询也该攒出提示，got %+v", n)
+	}
+}
+
 // 对底那条路（重新订上时的 pane.list）**不弹**：那些变化可能是 herdr 停机期间发生的，
 // 当场弹一片「刚刚跑完了」就是在编时间。
 func TestNoticeNotFromReconcile(t *testing.T) {
@@ -152,7 +199,28 @@ const screenAsk = "" +
 type fake struct {
 	sock   string
 	screen string
-	states []string // 订上之后按顺序推的 agent_status
+	states []string // 订上之后按顺序推的 agent_status（事件那条路）
+
+	// mu/list 是**轮询**那条路：pane.list 每次回 list 里的当前值，测试自己改它。
+	// 真机上背景 pane 的变化就只能这么看见（herdr 不给它们推事件）。
+	mu   sync.Mutex
+	list string
+	mute bool // true = 订上之后一条事件都不推（模拟「看不见的 pane」）
+}
+
+func (f *fake) setStatus(st string) {
+	f.mu.Lock()
+	f.list = st
+	f.mu.Unlock()
+}
+
+func (f *fake) status() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.list == "" {
+		return "idle"
+	}
+	return f.list
 }
 
 func newFake(t *testing.T, screen string, states ...string) *fake {
@@ -165,7 +233,7 @@ func newFake(t *testing.T, screen string, states ...string) *fake {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
-	f := &fake{sock: filepath.Join(dir, "h.sock"), screen: screen, states: states}
+	f := &fake{sock: filepath.Join(dir, "h.sock"), screen: screen, states: states, list: "idle"}
 	ln, err := net.Listen("unix", f.sock)
 	if err != nil {
 		t.Fatal(err)
@@ -194,6 +262,9 @@ func shortSettle(t *testing.T) {
 func (f *fake) watch(t *testing.T) *Watcher {
 	t.Helper()
 	shortSettle(t)
+	oldPoll := pollAgents
+	pollAgents = 30 * time.Millisecond
+	t.Cleanup(func() { pollAgents = oldPoll })
 	w := New(f.sock, "")
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -227,7 +298,7 @@ func (f *fake) serve(conn net.Conn) {
 	switch req.Method {
 	case "pane.list":
 		send(map[string]any{"id": req.ID, "result": map[string]any{
-			"panes": []any{paneObj("idle")},
+			"panes": []any{paneObj(f.status())},
 		}})
 	case "pane.read":
 		send(map[string]any{"id": req.ID, "result": map[string]any{
@@ -235,7 +306,14 @@ func (f *fake) serve(conn net.Conn) {
 		}})
 	case "events.subscribe":
 		send(map[string]any{"id": req.ID, "result": map[string]any{"type": "subscription_started"}})
+		if f.mute {
+			time.Sleep(10 * time.Second) // 一条都不推：模拟背景 pane
+			return
+		}
 		for _, st := range f.states {
+			// 轮询那条路（pane.list）要跟着一起变 —— 真机上两条路看到的是同一个 herdr，
+			// 只让事件动的话，轮询会拿旧状态把刚判掉的抖动又「纠正」回来。
+			f.setStatus(st)
 			send(map[string]any{"event": "pane_updated", "data": map[string]any{"pane": paneObj(st)}})
 			time.Sleep(2 * time.Millisecond) // 一串状态挤在防抖窗口里，这就是要验的
 		}

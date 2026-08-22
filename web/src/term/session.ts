@@ -40,9 +40,10 @@ function openLink(uri: string) {
   }
   window.open(u.href, '_blank', 'noopener,noreferrer')
 }
-import { pathLinkProvider } from './paths'
+import { linkAtCell, pathLinkProvider } from './paths'
 import { THEMES, type Scheme } from './themes'
 import { attachTouch } from './touch'
+import { hitsSwitchButton } from './mobilebar'
 
 export interface Cap { key: string; label: string; ok: boolean }
 
@@ -62,6 +63,11 @@ export interface SessionCallbacks {
    * 所以这一层只管认出来往上传，不管解。
    */
   onPath: (raw: string) => void
+  /**
+   * 点了 herdr 移动端顶栏那个 `switch`（只在设置里开着「点 switch 开面板一览」时）。
+   * 这一下**不会**发给 herdr，改开我们自己的面板一览 —— 判据见 `term/mobilebar.ts`。
+   */
+  onSwitchPanel: () => void
 }
 
 // 程序请求过的私有模式 → 人话 + 我们是否真支持
@@ -126,7 +132,7 @@ export class Session {
   private fadeTimer: ReturnType<typeof setTimeout> | undefined
 
   /** 面板里的开关，App 直接改 */
-  opts = { kitty: true, meta: true, copyOnSelect: false, sync2026: true }
+  opts = { kitty: true, meta: true, copyOnSelect: false, sync2026: true, switchPanel: true }
 
   constructor(private host: HTMLElement, private cb: SessionCallbacks, scheme: Scheme, fontSize: number) {
     this.scheme = scheme
@@ -188,6 +194,22 @@ export class Session {
     this.detachTouch = attachTouch(host, this.term, {
       send: (d) => this.send(d),
       toggleKeyboard: () => this.toggleKeyboard(),
+      // 触屏上点链接走这条（桌面走 xterm 的 linkifier）。两条路认的是同一份规则：
+      // 文件路径都出自 findPaths，URL 那边桌面归 WebLinksAddon、这边一个粗正则。
+      openLinkAt: (col, row) => {
+        const hit = linkAtCell(this.term, col, row)
+        if (!hit) return
+        if (hit.kind === 'url') openLink(hit.text)
+        else this.cb.onPath(hit.text)
+      },
+      // herdr 移动端顶栏右上角那个 switch：开着这个开关时，点它开的是我们的面板一览，
+      // 这一下不再发给 herdr（不然两张面板会一起开着）。窄屏之外根本没有那个按钮，
+      // 判据自己会返回 false，不用在这儿判是不是手机。
+      claimTap: (col, row) => {
+        if (!this.opts.switchPanel || !hitsSwitchButton(this.term, col, row)) return false
+        this.cb.onSwitchPanel()
+        return true
+      },
     })
 
     for (const ev of ['focus', 'blur']) {

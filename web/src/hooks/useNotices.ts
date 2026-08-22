@@ -1,4 +1,4 @@
-// 提示的轮询：agent 一有「轮到你了」的变化，右上角弹一下、面板图标上点个红点。
+// 提示的轮询：agent 一有「轮到你了」的变化，右上角弹一下、面板图标上挂个未读数。
 //
 // **为什么是轮询**：herdr-web 到浏览器只有 /pty 那一条二进制流（终端的字节），往里塞
 // JSON 等于给终端加一套协议；而这个页面本来就每 500ms 为发件箱打一次接口，再加一拍
@@ -6,18 +6,37 @@
 // 见 README「是轮询，不是推送」。
 //
 // 两个「已读」的概念，别混：
-//   - **弹窗**（items）只装「页面开着的这段时间里新来的」。首次对底那些**只点红点不弹**：
+//   - **弹窗**（items）只装「页面开着的这段时间里新来的」。首次对底那些**只记未读不弹**：
 //     那可能是半小时前发生的事，弹出来像刚发生的一样就是编时间。
-//   - **红点**（unread）是「有没有你还没看过的」，跨刷新记在 localStorage 里（记的是
-//     seq，不是条数）—— 手机上刷一下页面红点就没了的话，这个提示等于白做。
+//   - **未读**（unread）是「还有几条你没看过的」（界面上是个数字角标），跨刷新记在 localStorage 里 ——
+//     手机上刷一下页面红点就没了的话，这个提示等于白做。
+//
+// **未读是按条算的，不是一个开关。** 两个 agent 都在等你时，点进去看了一个，红点得留着
+// （还有一个没看）；两个都点进去了才灭。所以这里存的是「哪几条还没看」而不是一个布尔值 ——
+// 早先那版点一条就整片清掉，等于把另一个 agent 悄悄吞了。
+//
+// 落盘要存两样：**水位线**（seq，它以下的全算看过了）+ **水位线以上已经看过的那几条**。
+// 只存水位线的话表达不了「第 7 条看了、第 6 条还没看」；等未读清空了就把水位线推上去、
+// 那份名单也跟着清掉，所以它平时长度就是个位数。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, SESSION, type Notice, type NoticesResult } from '@/lib/api'
 
 // 每个 session 一份：命名 session 是**另一个 herdr**，那边的 agent 跟这边没关系
 // （seq 也是各数各的）。
 const SEEN_KEY = `noticeSeen${SESSION ? `:${SESSION}` : ''}`
+const READ_KEY = `noticeRead${SESSION ? `:${SESSION}` : ''}`
 
 const readSeen = () => Number(localStorage.getItem(SEEN_KEY)) || 0
+
+/** 水位线以上、已经点进去看过的那几条 seq */
+function readRead(): number[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(READ_KEY) || '[]')
+    return Array.isArray(v) ? v.filter((x) => typeof x === 'number') : []
+  } catch {
+    return [] // 存坏了就当没看过：多点一次红点，比把没看的说成看过了强
+  }
+}
 
 /** 右上角最多同时挂几张卡。再多就叠成一摞看不清了，多出来的只报个数 */
 export const MAX_CARDS = 3
@@ -46,13 +65,29 @@ function trim(list: Notice[]): Notice[] {
   return list.filter((n) => !drop.has(n.seq))
 }
 
-export function useNotices(pollMs: number, enabled: boolean) {
+export function useNotices(pollMs: number, enabled: boolean, onNew?: (n: Notice) => void) {
   const [items, setItems] = useState<Notice[]>([])
-  const [unread, setUnread] = useState(0)
+  /** 还没看过的那几条（整条留着：系统通知点回来时要按 pane 找） */
+  const [unread, setUnread] = useState<Notice[]>([])
+  // 放 ref 里：这个回调每次渲染都是新的（它捕获了「系统通知开没开」那个开关），
+  // 直接进 tick 的依赖会让轮询每渲染一次就重启一次。
+  const newCb = useRef(onNew)
+  newCb.current = onNew
 
   // 下一拍从哪儿要起。null = 还没对过底（第一拍要从「上次看到哪儿」要，好把红点点上）
   const since = useRef<number | null>(null)
-  const seen = useRef(readSeen())
+  const seen = useRef(readSeen())     // 水位线：seq 比它小的一律算看过了
+  const read = useRef(readRead())     // 水位线以上、已经看过的那几条
+
+  /** 把「看到哪儿了」写回本地。未读空了就顺手把水位线推到最新，名单清掉 */
+  const persist = useCallback((left: Notice[]) => {
+    if (!left.length && since.current !== null) {
+      seen.current = since.current
+      read.current = []
+    }
+    localStorage.setItem(SEEN_KEY, String(seen.current))
+    localStorage.setItem(READ_KEY, JSON.stringify(read.current))
+  }, [])
 
   const tick = useCallback(async () => {
     let r: NoticesResult
@@ -71,12 +106,17 @@ export function useNotices(pollMs: number, enabled: boolean) {
       localStorage.setItem(SEEN_KEY, String(r.seq))
     }
 
-    const fresh = (r.notices ?? []).filter((n) => n.seq > seen.current)
+    // 水位线以上、又不在「已经看过」名单里的，才算未读
+    const fresh = (r.notices ?? []).filter((n) => n.seq > seen.current && !read.current.includes(n.seq))
     if (!fresh.length) return
-    // 首拍拿到的是「上次看到那会儿之后攒的全部」，所以是**赋值**；之后每拍只拿得到
-    // 这一拍新来的（since 已经推到服务端的 seq 上了），所以是**累加**。
-    setUnread((u) => (first ? fresh.length : u + fresh.length))
+    // 首拍拿到的是「上次看到那会儿之后攒的全部」，所以是**换一份**；之后每拍只拿得到
+    // 这一拍新来的（since 已经推到服务端的 seq 上了），所以是**接上去**。
+    setUnread((u) => (first ? fresh : [...u, ...fresh]))
     if (first) return // 首次对底：只点红点，不弹（见文件头）
+
+    // 系统通知走这儿：**首次对底那批不发**（那些可能是半小时前的事，弹到锁屏上像刚发生
+    // 一样），和卡片是同一条规矩。
+    for (const n of fresh) newCb.current?.(n)
 
     setItems((cur) => {
       // 同一个终端只留最新那条：一个 agent 连着「跑完了 → 等你回答」时，两张卡叠着看
@@ -111,20 +151,41 @@ export function useNotices(pollMs: number, enabled: boolean) {
     return () => { removeEventListener('focus', f); document.removeEventListener('visibilitychange', f) }
   }, [enabled, pollMs, tick])
 
-  /** 看过了：红点灭掉，弹窗收掉。开「面板一览」时调 —— 那儿就是看这些变化的地方 */
+  /**
+   * 全都算看过了：红点灭掉，弹窗收掉。开「面板一览」时调 —— 那儿就是看这些变化的地方，
+   * 一眼扫完整张列表，剩下几条没点开也不该再挂着红点。
+   */
   const markSeen = useCallback(() => {
-    if (since.current !== null) {
-      seen.current = since.current
-      localStorage.setItem(SEEN_KEY, String(since.current))
-    }
-    setUnread(0)
+    setUnread([])
     setItems([])
-  }, [])
+    persist([])
+  }, [persist])
+
+  /**
+   * 看过**这个 pane** 了（点提示卡跳过去 / 点系统通知回来）：它名下的未读全消掉，卡片收掉。
+   *
+   * 按 pane 而不是按那一条：你跳过去看的是**那个 agent 现在的屏幕**，它先前那条
+   * 「跑完了」也一并看见了；只销掉点中的那一条的话，角标会莫名其妙地还剩一个数字，
+   * 而你已经无处可点（那条的卡片早自己走了）。
+   *
+   * 别的 agent 的未读一条不动 —— 两个 agent 在等你，看了一个不等于两个都看了。
+   */
+  const seePane = useCallback((pane: string) => {
+    setUnread((cur) => {
+      const hit = cur.filter((n) => n.pane === pane)
+      if (!hit.length) return cur
+      for (const n of hit) if (!read.current.includes(n.seq)) read.current.push(n.seq)
+      const left = cur.filter((n) => n.pane !== pane)
+      setItems((its) => its.filter((n) => n.pane !== pane))
+      persist(left)
+      return left
+    })
+  }, [persist])
 
   /** 单独关掉一张卡（红点不动：没去看那个 pane，就不算看过了） */
   const dismiss = useCallback((seq: number) => {
     setItems((cur) => cur.filter((n) => n.seq !== seq))
   }, [])
 
-  return { items, unread, markSeen, dismiss }
+  return { items, unread, markSeen, seePane, dismiss }
 }

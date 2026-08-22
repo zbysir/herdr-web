@@ -47,13 +47,13 @@ func TestRawNeverServesHTML(t *testing.T) {
 	if err := os.WriteFile(evil, []byte(`<script>fetch('/api/herdr/say',{method:'POST'})</script>`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// SVG 也是能跑脚本的「图片」，同样不能 inline
-	svg := filepath.Join(dir, "chart.svg")
-	if err := os.WriteFile(svg, []byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`), 0o644); err != nil {
+	// 「一份 HTML 里顺手嵌了个 svg」也必须走附件 —— 这条最容易被 isSVG 放过去
+	wrapped := filepath.Join(dir, "wrapped.html")
+	if err := os.WriteFile(wrapped, []byte(`<html><body><svg><script>alert(1)</script></svg></body></html>`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	for _, p := range []string{evil, svg} {
+	for _, p := range []string{evil, wrapped} {
 		w := getRaw(t, s, p)
 		if w.Code != 200 {
 			t.Fatalf("%s：HTTP %d %s", filepath.Base(p), w.Code, w.Body.String())
@@ -152,5 +152,41 @@ func TestRawTokenExpires(t *testing.T) {
 	s.handleFileRaw(w, httptest.NewRequest("GET", "/_f/"+old+"/a.txt", nil))
 	if w.Code != http.StatusForbidden {
 		t.Errorf("过期的票拿到 HTTP %d，想要 403", w.Code)
+	}
+}
+
+// SVG 认成图之后**必须**多带一条自己的 CSP。
+//
+// 它和 png 不一样：png 顶层打开就是张图，而 SVG 顶层打开是一份**能跑脚本的文档**。
+// 查看器里走 <img>（规范上就不跑脚本，不看响应头），这条 CSP 管的是「在新标签打开」
+// 那条路：sandbox 掐掉执行、default-src 'none' 堵掉外链。
+func TestRawSVGInlineWithTightCSP(t *testing.T) {
+	dir := t.TempDir()
+	s := rawServer(t)
+	svg := filepath.Join(dir, "chart.svg")
+	body := `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><script>alert(1)</script></svg>`
+	if err := os.WriteFile(svg, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w := getRaw(t, s, svg)
+	if w.Code != 200 {
+		t.Fatalf("HTTP %d %s", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("content-type"); ct != "image/svg+xml" {
+		t.Errorf("content-type = %q", ct)
+	}
+	if cd := w.Header().Get("content-disposition"); !strings.HasPrefix(cd, "inline") {
+		t.Errorf("要 inline 才看得见，拿到 %q", cd)
+	}
+	csp := w.Header().Get("content-security-policy")
+	if !strings.Contains(csp, "sandbox") {
+		t.Errorf("少了 sandbox：顶层打开时 svg 里的 <script> 就跑起来了。csp=%q", csp)
+	}
+	if !strings.Contains(csp, "default-src 'none'") {
+		t.Errorf("少了 default-src 'none'：svg 里塞个外链就能把「你打开过这张图」发出去。csp=%q", csp)
+	}
+	// 图表类 svg 基本都带 style，堵死了画出来一片黑
+	if !strings.Contains(csp, "style-src 'unsafe-inline'") {
+		t.Errorf("style 得放行，否则 svg 渲染出来没有颜色。csp=%q", csp)
 	}
 }

@@ -12,6 +12,23 @@ import type { Terminal } from '@xterm/xterm'
 interface Hooks {
   send: (d: string) => void
   toggleKeyboard: () => void
+  /**
+   * 这一格上有链接就打开它（文件路径 / URL），没有就什么都不做。
+   *
+   * 为什么要多这一条：xterm 的 linkifier 靠 `mousemove → mousedown → mouseup` 驱动，
+   * 而这一层把单指手势全接管了（下面 onStart 里的 preventDefault，不让浏览器补发兼容
+   * 鼠标事件，否则一划就变成拖选）—— 于是触屏上**所有**链接都点不动，包括原来那些
+   * URL。触屏本来也没有 hover，那条路走不通，只能在 tap 那一刻自己判一次。
+   */
+  openLinkAt: (col: number, row: number) => void
+  /**
+   * 这一下点击被网页自己接走了吗（true = 别再发给程序）。
+   *
+   * 目前只有一处：herdr 移动端顶栏右上角那个 `switch` 按钮 —— 设置里开着的时候点它开的是
+   * 我们的「面板一览」（见 `term/mobilebar.ts`）。接走了就**不能**再把鼠标上报发出去，
+   * 否则 herdr 自己那张面板会在我们这张底下一起开着，跳完 pane 回来还得再关一次。
+   */
+  claimTap: (col: number, row: number) => boolean
 }
 
 interface TouchState {
@@ -239,10 +256,20 @@ export function attachTouch(host: HTMLElement, term: Terminal, hooks: Hooks): ()
     // 走到这儿只剩普通 shell，以及抓取还没到点就松手的情况。
     if (now - tc.at > 500) return
 
+    const box = cellBox()
+    if (!box) return
+    const { col, row } = cellAt(tc.x, tc.y, box)
+
+    // 先问一句这一下是不是被网页接走了（herdr 顶栏那个 switch）。放在链接判断**之前**：
+    // 那个按钮上不会有链接，但既然接走了，就该彻底不往下走。
+    if (hooks.claimTap(col, row)) return
+
+    // 链接先判，但**不吞掉这一下点击**：桌面上点链接时 xterm 也照样把点击上报给程序
+    // （linkifier 和鼠标上报是两条各自独立的监听，互不知情），这儿保持一致 ——
+    // 触屏另立一套「点了链接就不算点击」的规矩，只会变成第二种要记的行为。
+    hooks.openLinkAt(col, row)
+
     if (tc.owned) {
-      const box = cellBox()
-      if (!box) return
-      const { col, row } = cellAt(tc.x, tc.y, box)
       hooks.send(`\x1b[<0;${col};${row}M`)      // 单击照样发给程序，只是不抢焦点
       hooks.send(`\x1b[<0;${col};${row}m`)
     } else {

@@ -44,12 +44,12 @@ export function Softkeys({
   /** act:panes 的键：开「面板一览」。手机上键盘一弹起来顶栏就收掉了，那时候只有这条路 */
   onPanes: () => void
   /**
-   * 有没看过的提示（`act:panes` 那个键右上角点个红点）。
+   * 还有几条提示没看过（`act:panes` 那个键右上角挂个数字角标）。0 = 不挂。
    *
    * 顶栏那个 ▦ 上已经有一个了，这儿还要一个是因为**手机上键盘一弹起来顶栏整条就收掉**
    * （见 App 里的 barHidden）——而那正是你在跟 agent 说话、最该知道「另一个在等你」的时候。
    */
-  notice?: boolean
+  notice?: number
   /** act:files 的键：开文件浏览（看 agent 生成的图）。同样是键盘弹起时唯一的入口 */
   onFiles: () => void
   /**
@@ -131,9 +131,12 @@ export function Softkeys({
                 }}
               >
                 {k.label}
-                {/* ring 用面板底色，让红点看着像贴在键上的徽标而不是浮在半空 */}
-                {notice && k.act === 'panes' && (
-                  <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-bad ring-2 ring-bar" />
+                {/* ring 用面板底色，让角标看着像贴在键上的徽标而不是浮在半空 */}
+                {!!notice && k.act === 'panes' && (
+                  <span className="absolute -top-1 -right-1 grid h-4 min-w-4 place-items-center rounded-full bg-bad px-1
+                                   font-mono text-[10px]/none font-medium text-white ring-2 ring-bar tabular-nums">
+                    {notice > 9 ? '9+' : notice}
+                  </span>
                 )}
               </Button>
             )

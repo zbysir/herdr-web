@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Keyboard, Pencil, CircleHalf, Gear, AArrowDown, AArrowUp, Maximize, Minimize, Panes, Files } from './icons'
-import { api, filesApi, resolveBar, SESSION, UNAUTHED, type ClipResult, type FileStat, type SoftKey, type SoftkeysResponse, type State, type UnauthedDetail, type WhoAmI } from '@/lib/api'
+import { api, filesApi, resolveBar, SESSION, UNAUTHED, type ClipResult, type FileStat, type Notice, type SoftKey, type SoftkeysResponse, type State, type UnauthedDetail, type WhoAmI } from '@/lib/api'
 import { readClipboard, writeClipboard } from '@/lib/clipboard'
 import { Session } from '@/term/session'
 import { initialScheme, type Scheme } from '@/term/themes'
 import { useViewportHeight } from '@/hooks/useViewportHeight'
 import { useCompose } from '@/hooks/useCompose'
 import { useNotices } from '@/hooks/useNotices'
+import { away, onNotifyClick, showNotify } from '@/lib/notify'
 import { usePhone } from '@/hooks/usePhone'
 import { useKeyboardUp } from '@/hooks/useKeyboardUp'
 import { Button } from '@/components/ui/button'
@@ -16,7 +17,7 @@ import { Softkeys } from '@/components/Softkeys'
 import { Compose } from '@/components/Compose'
 import { SettingsPanel, type SettingsTab, type TermOpts } from '@/components/SettingsPanel'
 import { PaneSwitcher, paneZoomPref } from '@/components/PaneSwitcher'
-import { Notices } from '@/components/Notices'
+import { AUTO_MS_DEFAULT, Notices } from '@/components/Notices'
 import { FilesPanel } from '@/components/FilesPanel'
 import { FileViewer } from '@/components/FileViewer'
 import { Pairing } from '@/components/Pairing'
@@ -31,6 +32,18 @@ type FsDoc = Document & {
   webkitExitFullscreen?: () => Promise<void> | void
 }
 type FsEl = HTMLElement & { webkitRequestFullscreen?: () => Promise<void> | void }
+
+/**
+ * 把焦点从输入框上摘掉 —— 手机上这就是「收起系统键盘」（Web 上没有别的办法，没有一个
+ * 「收键盘」的 API，只能靠 blur）。
+ *
+ * 焦点不在输入框上时什么都不做：按钮的焦点也一起摘掉的话，键盘用户会丢掉焦点环。
+ */
+const blurInput = () => {
+  const el = document.activeElement
+  if (!(el instanceof HTMLElement)) return
+  if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable) el.blur()
+}
 
 const lsBool = (k: string, def: boolean) => {
   const v = localStorage.getItem(k)
@@ -83,6 +96,10 @@ export default function App() {
   )
   const [opts, setOpts] = useState<TermOpts>({
     kitty: true, meta: true, copyOnSelect: false, sync2026: lsBool('sync2026', true),
+    // 默认开：只有窄屏（herdr 换成移动端布局）才有那个 switch 按钮，也就是只有手机 /
+    // 平板上会碰到 —— 而在那儿 herdr 自己那张面板正是最难用的一处（多 pane 平铺读不了）。
+    // 宽屏上根本没有那个按钮，这条开着也不改变任何行为。
+    switchPanel: lsBool('switchPanel', true),
   })
 
   const [settings, setSettings] = useState(false)
@@ -108,12 +125,25 @@ export default function App() {
   )
   const [live, setLive] = useState(() => lsBool('composeLive', false))
   /**
-   * 面板图标上那个红点画不画。**只管红点，不管弹窗** —— 有人嫌那个点一直挂在那儿扎眼，
+   * 面板图标上那个角标（还有几条没看）画不画。**只管角标，不管弹窗** —— 有人嫌它一直挂着扎眼，
    * 而提示卡是自己会走的，两件事分开。整套提示要关在服务端（`HERDR_WEB_NOTICE_MS=0`）。
    *
    * 存在本地：这是「这台设备上看着舒服不舒服」的偏好，不是部署的策略。
    */
   const [noticeDot, setNoticeDot] = useState(() => lsBool('noticeDot', true))
+  /**
+   * 系统通知开没开（浏览器的通知，锁屏 / 切到别的 app 也看得见）。
+   *
+   * 两个东西都要对：本地这个开关 + 浏览器的权限。开关记在 localStorage，权限归浏览器管 ——
+   * 用户可能在浏览器设置里把权限撤掉，所以每次开面板都重新问一次真实权限（见 SettingsPanel）。
+   */
+  const [noticeOS, setNoticeOS] = useState(() => lsBool('noticeOS', false))
+  /** 系统通知：**人正看着这一页时也弹**。默认关（那时候右上角那张卡已经在说了） */
+  const [noticeOSFg, setNoticeOSFg] = useState(() => lsBool('noticeOSFg', false))
+  /** 「跑完了」那种卡片挂多久（ms）；0 = 一直挂着。「等你回答」的永远挂着，不受这个管 */
+  const [noticeMs, setNoticeMs] = useState(
+    () => Number(localStorage.getItem('noticeCardMs') ?? AUTO_MS_DEFAULT) || 0,
+  )
   // 软键条每行的按键（已按 id 解析好）。几行、哪个键在哪一行都是服务端存的配置，
   // 编辑器存完把整份配置回传过来
   const [bar, setBar] = useState<SoftKey[][]>([])
@@ -145,12 +175,35 @@ export default function App() {
   const compose = useCompose(cfg, showCompose && gate === 'ok', live, toast)
 
   /**
-   * 提示：哪个 agent 等你回答了 / 跑完了（右上角弹一下 + ▦ 上点个红点）。
+   * 提示：哪个 agent 等你回答了 / 跑完了（右上角弹一下 + ▦ 上挂个未读数）。
    *
    * 间隔是服务端下发的（`HERDR_WEB_NOTICE_MS`，0 = 这个部署关了提示）。state 还没拉回来
    * 之前是 0，也就是不轮询 —— 差的那一两拍无所谓，而默认值写在前端就成了第二个真相源。
    */
-  const notices = useNotices(state?.notice?.pollMs ?? 0, gate === 'ok')
+  const notices = useNotices(
+    state?.notice?.pollMs ?? 0,
+    gate === 'ok',
+    useCallback((n: Notice) => {
+      // **只在页面看不见的时候弹系统通知**：你正看着这一页时右上角那张卡已经把话说完了，
+      // 再弹一条系统通知就是同一件事说两遍（而且 macOS 上还会盖住页面右上角那张卡）。
+      // 读 localStorage 而不是闭包里那几个 state：这个回调进了 hook 的 ref，拿闭包值的话
+      // 开关刚改完的那几拍还是旧的。
+      if (!lsBool('noticeOS', false)) return
+      // **判据是「人在不在看这一页」，不是 document.hidden**：macOS 上切到别的 app 时
+      // Chrome 只是失焦，hidden 一直是 false —— 只看 hidden 的话最主要的场景一条都不弹。
+      if (!away() && !lsBool('noticeOSFg', false)) return
+      void showNotify({
+        title: `${n.status === 'blocked' ? '等你回答' : '跑完了'} · ${n.title || n.pane}`,
+        // 通知里放不下长文，系统自己也会截；这儿先收一刀，别把整段塞给它
+        body: n.text.slice(0, 200) || `${n.agent || 'agent'} · ${n.pane}`,
+        tag: n.term, // 同一个 agent 的新提示替换旧那条，别在通知中心堆成一摞
+        pane: n.pane,
+      })
+    }, []),
+  )
+
+  // 点了系统通知：service worker 把页面拉到前台，然后告诉我们跳去哪个 pane
+  useEffect(() => onNotifyClick((pane) => { void gotoPane(pane, paneZoomPref()) }), [])
 
   /* --------------------------------------------------------- 文件 */
 
@@ -196,6 +249,7 @@ export default function App() {
    * 切目录随时在发生，这个面板又多半是隔了好一会儿才再打开一次（和 openPanes 一个道理）。
    */
   const openFiles = useCallback((at?: string) => {
+    blurInput() // 和 openPanes 同理：键盘占着半个屏时，点面板里第一下只会收键盘
     setFilesAt(at)
     setFilesOpen(true)
     void compose.loadPanes(true)
@@ -218,6 +272,7 @@ export default function App() {
    * 截断了，那时候摊一个空弹窗还得再关一次。
    */
   const openPath = useCallback(async (raw: string) => {
+    blurInput() // 终端里点路径那条路（触屏那层不让浏览器改焦点，键盘会一直挂着）
     try {
       const s = await filesApi.stat(raw, cwdRef.current || undefined)
       if (s.info.dir) openFiles(s.info.path)
@@ -244,6 +299,7 @@ export default function App() {
         onKeyboardChange: setKbdUp,
         onCopyBlocked: setPendingCopy,
         onPath: (raw) => void openPath(raw),
+        onSwitchPanel: () => openPanesRef.current(),
       },
       scheme,
       fontSize,
@@ -291,6 +347,7 @@ export default function App() {
     sess.current.term.options.macOptionIsMeta = opts.meta
     if (!opts.sync2026) sess.current.flushSync()
     localStorage.setItem('sync2026', opts.sync2026 ? '1' : '0')
+    localStorage.setItem('switchPanel', opts.switchPanel ? '1' : '0')
   }, [opts, ready])
 
   // 跟随系统明暗
@@ -565,16 +622,35 @@ export default function App() {
   }
 
   /**
+   * 「点 herdr 的 switch 就开面板一览」那条路要用的 ref。
+   *
+   * 和 cwdRef 一个道理：终端那层的回调是建 Session 时捕获的（那个 effect 只依赖 gate），
+   * 而 openPanes 每次渲染都是一个新闭包 —— 直接捕获会一直用第一次那个，里面的
+   * loadPanes / markSeen 都是旧的。
+   */
+  const openPanesRef = useRef(() => {})
+
+  /**
    * 开「面板一览」。顺手刷一次列表 —— agent 状态和 pane 的增删随时在变，
    * 而这个面板多半是隔了好一会儿才再打开一次。
+   *
+   * **开之前先收键盘。** 开它的三条路（顶栏 ▦、软键条 `act:panes`、点 herdr 顶栏那个
+   * switch）都可能是在键盘弹着的时候按的，而且三条都刻意**没让浏览器改焦点**（软键条在
+   * mousedown 上 preventDefault，触屏那层把 touchstart 整个吃掉）—— 于是面板浮出来时
+   * 发件箱 / 终端那个输入框还聚着，键盘还占着半个屏。那时候点列表里一行，那一下先去把键盘
+   * 收掉（焦点一走 `--vvh` 一变，面板跟着重排），于是「第一下不跳、第二下才跳」（真机实拍）。
+   * 列表里那一行自己也补了一道（收工在 pointerup 上，见 PaneSwitcher），两条一起才稳。
    */
   const openPanes = () => {
+    blurInput()
     setPanesOpen(true)
     void compose.loadPanes(true)
-    // 面板一览就是「看这些变化」的地方，开了就算看过了：红点灭掉、右上角那几张收掉。
-    // 这条是红点唯一的灭法 —— 单独关掉一张卡片不算看过（那只是嫌它挡着）。
+    // 面板一览就是「看这些变化」的地方，开了就算**全部**看过：角标清零、右上角那几张收掉。
+    // 点单张卡片只清那个 pane 的（见 Notices 的 onGoto）；关掉一张卡不算看过（那只是嫌它挡着）。
     notices.markSeen()
   }
+
+  useEffect(() => { openPanesRef.current = openPanes })
 
   /**
    * 跳到某个 pane。
@@ -594,11 +670,27 @@ export default function App() {
     )
   }
 
-  /** dot：右上角点一个红点（有没看过的提示）。ring 是顶栏底色，让它像贴在图标上的徽标 */
-  const iconBtn = (title: string, on: boolean, onClick: () => void, child: React.ReactNode, cls?: string, dot?: boolean) => (
+  /**
+   * badge：右上角挂一个**数字**角标（还有几条没看过）。0 / 省略 = 不挂。
+   *
+   * 数字而不是一个点：点只说「有东西」，而这儿的「有几条」是有用的 —— 两个 agent 在等你
+   * 和五个在等你，要不要放下手里的事去看是两回事。超过 9 就写 9+（再多那格就撑破了，
+   * 而且到那份上具体几条也不重要了）。
+   *
+   * ring 用顶栏底色，让它像贴在图标上的徽标而不是浮在半空的一块红。
+   */
+  const iconBtn = (title: string, on: boolean, onClick: () => void, child: React.ReactNode, cls?: string, badge?: number) => (
     <Button variant="default" size="icon" on={on} title={title} className={cn('relative', cls)} onClick={onClick} onMouseDown={(e) => e.preventDefault()}>
       {child}
-      {dot && <span data-testid="notice-dot" className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-bad ring-2 ring-bar" />}
+      {!!badge && (
+        <span
+          data-testid="notice-badge"
+          className="absolute -top-1 -right-1 grid h-4 min-w-4 place-items-center rounded-full bg-bad px-1
+                     font-mono text-[10px]/none font-medium text-white ring-2 ring-bar tabular-nums"
+        >
+          {badge > 9 ? '9+' : badge}
+        </span>
+      )}
     </Button>
   )
 
@@ -696,16 +788,16 @@ export default function App() {
 
         <div className="flex shrink-0 items-center gap-1">
           {iconBtn(
-            notices.unread
+            notices.unread.length
               // 说「条」不说「几个 agent」：同一个 agent 连着变几次就是几条，
               // 实测挂一会儿就能攒十几条，写成「10 个 agent」是假的
-              ? `面板一览：${notices.unread} 条新变化（等你回答 / 跑完了）`
+              ? `面板一览：${notices.unread.length} 条还没看（等你回答 / 跑完了）`
               : '面板一览：跳到某个 pane（顺带全屏）',
             panesOpen,
             () => (panesOpen ? setPanesOpen(false) : openPanes()),
             <Panes className="size-4" />,
             undefined,
-            noticeDot && notices.unread > 0,
+            noticeDot ? notices.unread.length : 0,
           )}
           {/* 文件浏览。服务端关掉（HERDR_WEB_FILES=0）就不画这个按钮 —— 点开一片 404
               比没有这个入口更糟。主入口其实是终端里那行路径可点，这个按钮是兜底。 */}
@@ -780,6 +872,12 @@ export default function App() {
             setOpt={(k, v) => setOpts((o) => ({ ...o, [k]: v }))}
             dot={noticeDot}
             onDot={(v) => { setNoticeDot(v); localStorage.setItem('noticeDot', v ? '1' : '0') }}
+            os={noticeOS}
+            onOS={(v) => { setNoticeOS(v); localStorage.setItem('noticeOS', v ? '1' : '0') }}
+            osFg={noticeOSFg}
+            onOSFg={(v) => { setNoticeOSFg(v); localStorage.setItem('noticeOSFg', v ? '1' : '0') }}
+            cardMs={noticeMs}
+            onCardMs={(v) => { setNoticeMs(v); localStorage.setItem('noticeCardMs', String(v)) }}
             heals={heals}
             onSaved={(lib, b) => setBar(resolveBar(lib, b))}
             toast={toast}
@@ -807,8 +905,10 @@ export default function App() {
             叠上去会把面板的标题栏盖掉 */}
         <Notices
           items={notices.items}
+          autoMs={noticeMs}
           hidden={panesOpen || settings || filesOpen || !!viewing}
-          onGoto={(id, seq) => { notices.dismiss(seq); void gotoPane(id, paneZoomPref()) }}
+          // 点卡片 = 我去看这个 agent 了：它名下的未读全消掉（角标跟着减），别的一条不动
+          onGoto={(id) => { notices.seePane(id); void gotoPane(id, paneZoomPref()) }}
           onDismiss={notices.dismiss}
           onMore={openPanes}
         />
@@ -830,7 +930,7 @@ export default function App() {
               onKeyboard={() => sess.current?.toggleKeyboard()}
               onImage={() => picker.current?.click()}
               onPanes={openPanes}
-              notice={noticeDot && notices.unread > 0}
+              notice={noticeDot ? notices.unread.length : 0}
               onFiles={() => openFiles()}
               onClip={() => void pullClip()}
               onPaste={() => void pastePhone()}

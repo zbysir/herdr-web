@@ -416,10 +416,15 @@ socket 是同一个套路。服务没在跑时这些子命令直接改文件。
     能开这个页面的人已经有一个 shell，读什么都拦不住，所以默认**不设** jail
     （`HERDR_WEB_FILE_ROOTS` 才是）。危险的是**吐出去的东西被浏览器当成什么**：
     同源的 `text/html` 就是一个能调 `/api/herdr/say` 的跳板（HttpOnly 只挡 JS 读 cookie，
-    而它根本不用读 —— 浏览器会自动带上）。所以只有**按魔数**认出来的 png/jpg/gif/webp
+    而它根本不用读 —— 浏览器会自动带上）。所以只有**认出来的图**（png/jpg/gif/webp 按魔数，SVG 按开头）
     才 inline，其余一律 `application/octet-stream` + `attachment`，响应上再压一条
-    CSP `sandbox`。**SVG 故意不算图**：那是能跑脚本的「图片」。文本预览走 JSON 由前端
-    画进 `<pre>`，那条路上根本没有「浏览器解释这段内容」的环节。
+    CSP `sandbox`。文本预览走 JSON 由前端画进 `<pre>`，那条路上根本没有「浏览器解释
+    这段内容」的环节。
+    **SVG 是唯一一个「能跑脚本却照样 inline」的类型**，因为它有两条各自独立的保障：
+    查看器里走 `<img>`（规范的 secure static mode，脚本不跑、外链不加载，**不依赖任何
+    响应头**），顶层打开靠 `sandbox`（不给执行 + opaque 源）外加 `default-src 'none'`。
+    改这块之前先读 `internal/files` 的包注释 —— 把 `<img>` 换成内联 `<svg>` 或
+    `innerHTML`，就是一个直接的同源 XSS。
     另外 `/_f/<票>` 是**唯一一条不看 cookie 的口**（`<img src>` 设不了 CSRF 头）：
     票绑死一个绝对路径、15 分钟过期、密钥进程内随机生成不落盘。它在 URL 里，
     所以会进浏览器历史和截图 —— 拿到的人在 15 分钟内能读**那一个**文件。

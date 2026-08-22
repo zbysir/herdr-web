@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
 import { RefreshCw, Search } from 'lucide-react'
 import type { Pane } from '@/lib/api'
 import { Panel } from './ui/panel'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
-import { usePhone } from '@/hooks/usePhone'
 import { cn } from '@/lib/utils'
 
 /**
@@ -113,13 +112,55 @@ export function PaneSwitcher({
   onGoto: (id: string, zoom: boolean) => void
   onReload: () => void
 }) {
-  const phone = usePhone()
+  /**
+   * 触屏上**不自动聚焦**筛选框。原来的判据是「手机竖屏」（`usePhone`，宽度 < 440px），
+   * 平板上于是照样自动聚焦 —— 一开面板键盘就顶出来，而这个面板刚刚才把键盘收掉
+   * （见 App 的 openPanes）：收一下又弹回来，点第一行还是只会先收键盘。
+   * 判据本来就该是「有没有实体指针」而不是屏幕多宽：这儿多半是用手指扫，不是打字。
+   */
+  const coarse = matchMedia('(pointer: coarse)').matches
   const [q, setQ] = useState('')
   const [zoom, setZoom] = useState(paneZoomPref)
   const [onlyAgent, setOnlyAgent] = useState(() => localStorage.getItem(LS_ONLY_AGENT) === '1')
   const [sort, setSort] = useState<Sort>(() => {
     const v = localStorage.getItem(LS_SORT)
     return SORTS.some((s) => s.id === v) ? (v as Sort) : 'priority'
+  })
+
+  /**
+   * 点一行**要一下就跳过去**，所以收工在 `pointerup` 上，不在 `click` 上。
+   *
+   * 为什么不能只靠 click：手机上键盘弹着的时候（在发件箱里口述、或者从 herdr 顶栏那个
+   * switch 开进来 —— 触屏那层为了不让浏览器乱改焦点把 touchstart 的默认行为吃掉了，
+   * 焦点还在输入框上），点这一行的**同一下**会先把键盘收掉：焦点一走 visualViewport 一变，
+   * `--vvh` 跟着变、面板整个重排，手指底下那一行已经挪了位置 —— 浏览器于是把 click 派给
+   * 别人或者干脆不派，表现就是「第一下只收键盘，第二下才跳」（真机上实拍到）。
+   *
+   * touch / 笔的 pointer 事件有**隐式捕获**：pointerdown 落在哪一行，pointerup 就还在
+   * 那一行，中间布局怎么动都不影响。鼠标不走这条（`pointerType === 'mouse'` 直接放过），
+   * 键盘 Enter 也不走 —— 那两条本来就是 click，而 click 在桌面上从不丢。
+   */
+  const down = useRef<{ x: number; y: number } | null>(null)
+  /** pointerup 已经接走的那一刻。紧跟着可能还来一个 click，得吃掉，不然跳两次 */
+  const took = useRef(0)
+  const tap = (p: Pane) => ({
+    onPointerDown: (e: PointerEvent) => {
+      down.current = e.pointerType === 'mouse' ? null : { x: e.clientX, y: e.clientY }
+    },
+    // 滚列表时浏览器会给一个 pointercancel，那一下不算点
+    onPointerCancel: () => { down.current = null },
+    onPointerUp: (e: PointerEvent) => {
+      const d = down.current
+      down.current = null
+      // 手指走了超过 10px 当成在滚列表（pointercancel 不是每次都来）
+      if (!d || Math.abs(e.clientX - d.x) > 10 || Math.abs(e.clientY - d.y) > 10) return
+      took.current = e.timeStamp
+      onGoto(p.id, zoom)
+    },
+    onClick: (e: MouseEvent) => {
+      if (e.timeStamp - took.current < 800) return // pointerup 刚接走过
+      onGoto(p.id, zoom)
+    },
   })
 
   // 「3m」不能是死的：面板开着不动的时候也得走。30 秒一拍够了（最小刻度就是分钟）
@@ -187,8 +228,8 @@ export function PaneSwitcher({
             className="h-7 w-full pl-7"
             placeholder="筛 tab / 标题 / 路径"
             value={q}
-            // 手机上不自动聚焦：一开面板就顶出键盘，而这儿多半是用手指扫、不是打字
-            autoFocus={!phone}
+            // 触屏上不自动聚焦（见上面 coarse 那段）
+            autoFocus={!coarse}
             onChange={(e) => setQ(e.target.value)}
           />
         </div>
@@ -247,7 +288,7 @@ export function PaneSwitcher({
                     'hover:border-line hover:bg-ctl focus-visible:ring-2 focus-visible:ring-brand/35',
                     p.focused && 'border-brand/40 bg-brand/10',
                   )}
-                  onClick={() => onGoto(p.id, zoom)}
+                  {...tap(p)}
                 >
                   <span
                     title={p.agent ? `${p.agent} · ${p.status}` : 'shell'}

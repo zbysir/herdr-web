@@ -21,8 +21,13 @@ import { cn } from '@/lib/utils'
  * 的状态。跑完了那种十几秒后自己收掉 —— 那只是通知，错过也不影响什么。
  */
 
-/** 跑完了那种挂多久自己收掉（ms）。等你回答的不收，见上面 */
-const AUTO_MS = 12_000
+/**
+ * 「跑完了」那种挂多久自己收掉（ms）。**在设置里可调**（0 = 一直挂着）。
+ *
+ * 「等你回答」那种不受这个数管，永远挂着：它是真的停在那儿等你，自己飘走了就又回到
+ * 「不知道谁在等」的状态 —— 而这正是这个功能要解决的那件事。
+ */
+export const AUTO_MS_DEFAULT = 12_000
 
 /**
  * 状态怎么说。颜色和面板一览那一列点是同一套：**红 = 等你，绿 = 跑完了**。
@@ -43,12 +48,14 @@ const CHIP: Record<string, { text: string; chip: string; card: string }> = {
 const chipOf = (status: string) => CHIP[status] ?? CHIP.done
 
 export function Notices({
-  items, hidden, onGoto, onDismiss, onMore,
+  items, hidden, autoMs = AUTO_MS_DEFAULT, onGoto, onDismiss, onMore,
 }: {
   /** 老的在前，新的在后（和 useNotices 给的顺序一致） */
   items: Notice[]
   /** 有面板开着时先让开：那些面板就在同一个角上 */
   hidden?: boolean
+  /** 「跑完了」那种挂多久（ms）；0 = 一直挂着。设置里调 */
+  autoMs?: number
   /** 跳过去（seq 是这条提示 —— 跳完把它收掉，已经去看了，留着只挡视线） */
   onGoto: (paneID: string, seq: number) => void
   onDismiss: (seq: number) => void
@@ -75,7 +82,7 @@ export function Notices({
       className="pointer-events-none absolute top-2.5 right-2.5 z-20 flex w-[min(360px,calc(100%-20px))] flex-col gap-1.5"
     >
       {show.map((n) => (
-        <Card key={n.seq} n={n} onGoto={onGoto} onDismiss={onDismiss} />
+        <Card key={n.seq} n={n} autoMs={autoMs} onGoto={onGoto} onDismiss={onDismiss} />
       ))}
       {more > 0 && (
         <button
@@ -91,19 +98,20 @@ export function Notices({
 }
 
 function Card({
-  n, onGoto, onDismiss,
+  n, autoMs, onGoto, onDismiss,
 }: {
   n: Notice
+  autoMs: number
   onGoto: (paneID: string, seq: number) => void
   onDismiss: (seq: number) => void
 }) {
   const c = chipOf(n.status)
 
   useEffect(() => {
-    if (n.status === 'blocked') return // 等你回答的不自动收（见文件头）
-    const t = setTimeout(() => onDismiss(n.seq), AUTO_MS)
+    if (n.status === 'blocked' || autoMs <= 0) return // 等你回答的 / 设成「一直挂着」的不收
+    const t = setTimeout(() => onDismiss(n.seq), autoMs)
     return () => clearTimeout(t)
-  }, [n.seq, n.status, onDismiss])
+  }, [n.seq, n.status, autoMs, onDismiss])
 
   return (
     <div
@@ -144,7 +152,7 @@ function Card({
       <button
         type="button"
         aria-label="收起这条"
-        title="收起这条（不影响面板图标上的红点）"
+        title="收起这条（不算看过，面板图标上的未读数不变）"
         className="absolute top-1.5 right-1.5 cursor-pointer rounded p-1 text-faint hover:bg-ctl hover:text-fg"
         onClick={() => onDismiss(n.seq)}
       >
