@@ -4,970 +4,832 @@
   <img src="assets/logo.png" alt="herdr-web" width="96" />
 </p>
 
-浏览器里的终端，用来跑 `herdr`。一个 Go 二进制（前端嵌在里面），手机也能用。
+<p align="center">
+  <b>English</b> · <a href="README.zh-CN.md">简体中文</a>
+</p>
 
-> **语音投稿**（平板手写笔说话打字 → 投进 agent pane）是这个项目的主功能，见下面「发件箱」。三份配套文档：发件箱的设计取舍在 [OUTBOX.md](OUTBOX.md)，抽输入框那套坑在 [COMPOSER.md](COMPOSER.md)，herdr socket API 实测出来的语义在 [HERDR-API.md](HERDR-API.md)。
+A terminal in your browser, built for running [`herdr`](https://github.com/zbysir/herdr). One Go binary with the frontend baked in. Works on phones.
 
-## 装
+> **Voice compose** — dictate on a tablet, edit what you got wrong, then hand the whole paragraph to an agent pane — is the point of this project. See [Outbox](#outbox-voice-compose) below. Three companion documents (Chinese): design trade-offs behind the outbox in [OUTBOX.md](OUTBOX.md), the pitfalls of scraping an agent's input line in [COMPOSER.md](COMPOSER.md), and the herdr socket API semantics we verified by hand in [HERDR-API.md](HERDR-API.md).
+
+## Install
 
 ```bash
-npm install -g @bysir/herdr-web       # 有 node 的话最省事，升级也交给它
-herdr-web                             # 只听 127.0.0.1
+npm install -g @bysir/herdr-web       # easiest if you have node; upgrades come free
+herdr-web                             # listens on 127.0.0.1 only
 ```
 
-没有 node（服务器上常见）：
+No node (common on servers):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zbysir/herdr-web/master/install.sh | sh
 ```
 
-装到 `~/.local/bin`。要换地方，变量得给 `sh` 而**不是** `curl`：
+Installs into `~/.local/bin`. To install somewhere else, the variable has to go to `sh`, **not** to `curl`:
 
 ```bash
-curl -fsSL …/install.sh | HERDR_WEB_INSTALL_DIR=/opt/bin sh    # 对
-HERDR_WEB_INSTALL_DIR=/opt/bin curl -fsSL …/install.sh | sh    # 错，变量给了 curl，脚本收不到
+curl -fsSL …/install.sh | HERDR_WEB_INSTALL_DIR=/opt/bin sh    # right
+HERDR_WEB_INSTALL_DIR=/opt/bin curl -fsSL …/install.sh | sh    # wrong — curl gets it, the script never sees it
 ```
 
-写错那条**不会报错**，它会安安静静装到默认目录去。同理 `HERDR_WEB_INSTALL_VER=v0.1.0` 装指定版本。
+The wrong one **does not fail**; it quietly installs to the default directory. Same shape for `HERDR_WEB_INSTALL_VER=v0.1.0` to pin a version.
 
-装脚本**强制校验 sha256**，没有 `sha256sum`/`shasum` 就直接拒绝装 —— 这东西后面挂着一个登录 shell。
+The installer **always verifies sha256** and refuses to install if neither `sha256sum` nor `shasum` exists — there is a login shell behind this thing.
 
-其它几条路：
+Other ways in:
 
 ```bash
-make build && ./herdr-web             # 从源码（前端 → 拷进 internal/webui/dist → go build）
-HERDR_WEB_HOST=0.0.0.0 ./herdr-web    # 听局域网，顺便在终端画个二维码给手机扫
+make build && ./herdr-web             # from source (frontend → internal/webui/dist → go build)
+HERDR_WEB_HOST=0.0.0.0 ./herdr-web    # listen on the LAN, and print a QR code for your phone
 ```
 
-`go install github.com/zbysir/herdr-web/cmd/herdr-web@latest` 也能装，但**装出来的没有前端** ——
-前端产物是 `make build` 生成后 embed 进去的，不入版本库，所以 `go install` 拿不到。那样装出来的
-只能配 `--web <目录>` 指一份自己构建的前端，或者干脆只用命令行子命令。要能开页面就走上面那三条。
+`go install github.com/zbysir/herdr-web/cmd/herdr-web@latest` works too, but **what you get has no frontend**: the web assets are produced by `make build` and embedded, and they are not in the repo, so `go install` can't see them. That binary is only useful with `--web <dir>` pointing at a frontend you built yourself, or for the CLI subcommands. Use one of the three above if you want the page.
 
-**Windows 没有原生版**，在 WSL 里装。不是懒：浏览器里那个终端需要一个真 PTY（Go 那边用 `creack/pty`，windows 上是个 `return nil, ErrUnsupported` 的空壳），herdr 自己也走 unix socket。WSL 里就是 linux 版，功能完整；浏览器那端本来就跨平台，Windows 上开 `http://localhost:7788/` 照样用。npm 包在 win32 上会直接打出这段提示而不是装一个跑不起来的东西。
+**No native Windows build** — install it inside WSL. Not laziness: the terminal in the browser needs a real PTY (Go side uses `creack/pty`, whose Windows implementation is a `return nil, ErrUnsupported` stub) and herdr itself speaks over a unix socket. Inside WSL it is simply the Linux build, fully functional; the browser end was always cross-platform, so `http://localhost:7788/` on Windows works fine. On win32 the npm package prints that explanation instead of installing something that cannot run.
 
-装成开机自启的常驻服务：[守护进程](#守护进程)。升级：[更新](#更新)。
+To run it as a service that starts at boot, see [Daemon](#daemon). To upgrade, see [Updating](#updating).
 
-**配置只有环境变量这一个来源**（没有配置文件，命令行也只有一个 `--web`）：全部清单、怎么设、几套常见配法在下面的[配置](#配置)。子命令 `herdr-web --help`。
+**Environment variables are the only source of configuration** (no config file; the only flag is `--web`). The full list, how to set it, and a few common setups are under [Configuration](#configuration). Subcommands: `herdr-web --help`.
 
-启动后会打印可用地址；监听 `0.0.0.0` 时会按网卡打分，把手机真能连上的那个标成 `← 手机用这个`（机器上一堆 OrbStack / VPN 虚拟网卡都会被压到后面），二维码编的就是它。
+On startup it prints the addresses you can reach it at. When listening on `0.0.0.0` it scores the interfaces and marks the one your phone can actually reach with `← use this one from your phone` (the pile of OrbStack / VPN virtual interfaces gets pushed to the bottom); that is the address encoded in the QR code.
 
-**一台设备配一次**：启动横幅里有一个一次性配对码（5 分钟过期、用一次就废）和它的二维码，手机扫一下就进去了 —— 零输入，之后书签里没有任何秘密（凭据在 HttpOnly cookie 里），换 Wi-Fi、换网段、重启都不用重来。再配一台就在机器上敲 `herdr-web pair`。
+**Pair each device once.** The startup banner carries a one-time pairing code (5 minutes, single use) and its QR code — scan it from your phone and you are in, zero typing. After that your bookmark holds no secret (the credential lives in an `HttpOnly` cookie), and changing Wi-Fi, changing subnets or rebooting costs you nothing. To pair another device, run `herdr-web pair` on the machine.
 
-扫码有两条路：
+Two ways to scan:
 
-- **相机 App 扫**（到处都能用）：码里就是带 `?pair=` 的链接，扫完直接打开，落地就已经配好。
-- **配对页里的「用相机扫」**：开后摄、对准主机屏幕上那个码，认出来自动配对，不用跳转。这个按钮**能用才出现** —— 它依赖 `BarcodeDetector`（系统自带的解码器，省掉几十 KB 的 JS 库；macOS 走 Vision、Android 走 ML Kit，**iOS Safari 和 Linux 上的 Chrome 没有**）和摄像头（只在 https / localhost 这种安全上下文里给，局域网 http 下浏览器直接不给）。两个条件缺一个就不出这个按钮，也不留一个点了报错的入口。
+- **Your camera app** (works everywhere): the code is just a link with `?pair=`; scanning opens it and you land already paired.
+- **"Scan with camera" inside the pairing page**: opens the rear camera, points at the code on the host screen, pairs on recognition without navigating. This button **only appears when it can work** — it needs `BarcodeDetector` (the system decoder, which saves tens of KB of JS; macOS uses Vision, Android uses ML Kit, and **iOS Safari and Chrome on Linux do not have it**) plus a camera (only granted in a secure context — plain http on a LAN gets nothing). If either is missing the button is not rendered at all, rather than left there to fail on click.
 
-两条都不方便就把那 8 位码抄进配对页的框里，抄够 8 位自动提交。页面内扫出来的内容只取 `pair=` 那一段，走的还是同一个 `POST /auth/pair`，安全模型没变（码照样只有坐在机器前的人能出）。
+If neither is convenient, type the 8-digit code into the pairing page; it submits itself once you have typed 8 characters. What the in-page scanner reads is reduced to the `pair=` part and goes through the same `POST /auth/pair`, so the security model is unchanged (only someone at the machine can produce a code).
 
 ```bash
-herdr-web pair          # 出一个新的一次性配对码 + 二维码
-herdr-web devices       # 列出已配对设备（标签 / 最后活跃 / 最后 IP / 到期）
-herdr-web revoke <id>   # 踢掉某台（all = 全部）；下一个请求立刻 401
-herdr-web unlock        # 解开「失败太多」的全局熔断
+herdr-web pair          # print a fresh one-time pairing code + QR
+herdr-web devices       # list paired devices (label / last seen / last IP / expiry)
+herdr-web revoke <id>   # kick one (all = everything); the next request gets 401
+herdr-web unlock        # clear the global "too many failures" circuit breaker
 ```
 
-网页上顶栏最右那个 ⚙ 是**设置面板**，「设备」页里看谁配过对、**登出这台**、踢掉别的。踢人和全部
-踢掉都要点两下才生效。**网页上不出配对码**（连已配对的设备也不行），理由见下面「安全」。
+The ⚙ at the right end of the top bar is the **settings panel**; its "Devices" page shows who has paired, lets you **sign this device out**, and kick others. Kicking one and kicking everyone both take two clicks. **The web UI never issues a pairing code** (not even to an already-paired device) — see [Security](#security) for why.
 
-**配对码用完了就回机器前** `herdr-web pair`。这不是偷懒 —— 见下。
+**Out of codes? Go back to the machine and run `herdr-web pair`.** That is not laziness either — see below.
 
-原来那把永不过期的 `~/.herdr-web/token` 降级成**只能引导**：旧书签第一次打开会自动换成设备凭据、并把 URL 里的 token 抹掉，之后就该 `rm ~/.herdr-web/token`。细节和为什么这么设计看 [SECURITY.md](SECURITY.md)。
+The old never-expiring `~/.herdr-web/token` is demoted to **bootstrap only**: an old bookmark exchanges it for a device credential on first open and scrubs the token out of the URL, after which you should `rm ~/.herdr-web/token`. Details and reasoning in [SECURITY.md](SECURITY.md) (Chinese).
 
-连上之后**自动敲 `herdr`**。想敲别的、或者不想自动敲：`HERDR_WEB_ONCONNECT`（设成空串就留在 shell 里）。地址栏里加一段路径（`/work`）就是**另一个 herdr session**，见下面「[一个 URL 一个 session](#一个-url-一个-sessionname)」。顶栏原来那个「敲 herdr」按钮去掉了 —— 自动敲之后它一天用不上一次，而软键条预设里有现成的「敲 herdr」键，要就自己放一个上去。
+Once connected it **types `herdr` for you**. To type something else, or nothing: `HERDR_WEB_ONCONNECT` (set it to an empty string to stay in the shell). Adding a path segment to the URL (`/work`) gives you **a different herdr session** — see [One URL, one session](#one-url-one-session-name). The old "run herdr" button in the top bar is gone: with autotyping it earns its place less than once a day, and the soft key bar ships a preset for it if you want one.
 
-**管理页在 `http://127.0.0.1:<端口+1>/`**（启动横幅里有）：看证书状态、点一下签发/续期、生成 DNS 的 `.env` 片段、出配对码、踢设备。它**只绑 loopback，公网上不存在**，所以不需要登录 —— 能连上它的东西已经有你的 shell 了。为什么不做成「主服务上一个需要认证的页面」：认证是会失效的控制，「碰不到」是个性质；而且**管理页不能依赖它自己要管的那个证书**（证书一坏就打不开修证书的页面）。
+**The admin page is at `http://127.0.0.1:<port+1>/`** (also in the startup banner): certificate status, one-click issue/renew, generated DNS `.env` snippets, pairing codes, device kicking. It is **bound to loopback and does not exist on the public internet**, so it needs no login — anything that can reach it already has your shell. Why not "an authenticated page on the main server": authentication is a control that can fail, unreachability is a property; and the admin page must not depend on the very certificate it exists to fix (a broken certificate would lock you out of the page that repairs it).
 
-## 一个 URL 一个 session（`/{name}`）
+## One URL, one session (`/{name}`)
 
-地址栏里加一段就是**另一个 herdr**：
+A path segment is **a different herdr**:
 
 ```
-https://herdr.bysir.top/          默认 session（老行为，敲的是 `herdr`）
-https://herdr.bysir.top/work      敲 `herdr --session work` —— 没有这个 session 就新建一个
-https://herdr.bysir.top/scratch   再来一个，和上面那个互不相干
+https://herdr.bysir.top/          default session (old behaviour, types `herdr`)
+https://herdr.bysir.top/work      types `herdr --session work` — created if it doesn't exist
+https://herdr.bysir.top/scratch   another one, unrelated to the above
 ```
 
-`herdr --session <name>` 是 herdr 自己的**命名持久 session**：各有一个 server 进程、各有一套
-workspace / tab / pane。所以书签存成 `/work` 和 `/scratch`，两个标签页就是两套工作现场，
-关掉浏览器再回来还在（session 是持久的，网页断开只是客户端断开）。
+`herdr --session <name>` is herdr's own **named persistent session**: its own server process, its own workspaces / tabs / panes. So bookmark `/work` and `/scratch` and two browser tabs are two working contexts that survive closing the browser (the session is persistent; disconnecting the page only disconnects a client).
 
-要知道的几条：
+Things to know:
 
-- **发件箱和面板一览跟着 URL 走。** 命名 session 有自己的 socket
-  （`~/.config/herdr/sessions/<name>/herdr.sock`，`herdr session list --json` 里就是这个），
-  所以页面上每个请求都带着 session 名。这是这个功能里唯一真正危险的地方 —— 拿默认 session 的
-  socket 去投一个 `/work` 页面上选的 pane，话会**静默进另一个 herdr**，而两边屏幕上都看不出
-  异常。服务端因此**不给不合法的名字兜底**（不退回默认 session，直接报错）。
-- **名字只能是 `[A-Za-z0-9._-]`、首字符字母数字、最长 40。** 因为它要被拼进一条敲进登录
-  shell 的命令行，也要被拼进 socket 路径。不合法时页面上会直接说，而不是给你开一个别的 session。
-- **`HERDR_WEB_ONCONNECT` 不参与带 session 的 URL**（包括设成空串「什么都别敲」那种）：
-  地址栏里点名要哪个 session，比一个全局默认具体。`/` 还是老规矩。
-- **顶栏左边会显示当前 session 名**（设置 →「终端」页底下也有一行，连着那个 session 的 socket
-  路径）。默认 session 不显示这个标签 —— 没有标签就是默认那个。
-- 一个进程最多同时盯 16 个 session（每个都带一条 agent 状态订阅）。超了会说，重启清空。
-- 「添加到主屏幕」存的是 manifest 里的 `start_url`（`/`），所以从主屏图标进的是默认 session。
-  要一个直达 `/work` 的图标，用浏览器书签。
-- `herdr session list` / `stop` / `delete` 在终端里管这些 session，herdr-web 这边只负责「开/接上」。
+- **The outbox and the pane list follow the URL.** A named session has its own socket (`~/.config/herdr/sessions/<name>/herdr.sock`, the one `herdr session list --json` reports), so every request from the page carries the session name. This is the one genuinely dangerous corner of the feature — using the default session's socket to post into a pane picked on a `/work` page would **silently deliver your words into another herdr**, with nothing looking wrong on either screen. That is why the server **does not fall back** on an invalid name; it errors out instead of quietly using the default session.
+- **Names are `[A-Za-z0-9._-]`, must start alphanumeric, 40 characters max** — the name is interpolated into a command line typed into a login shell, and into a socket path. Invalid names are reported on the page rather than silently redirected to some other session.
+- **`HERDR_WEB_ONCONNECT` does not apply to session URLs** (including when set to the empty "type nothing" value): naming a session in the address bar is more specific than a global default. `/` keeps the old behaviour.
+- **The current session name is shown at the left of the top bar** (and in Settings → Terminal, together with that session's socket path). The default session shows no label — no label means default.
+- One process watches at most 16 sessions at a time (each carries an agent-status subscription). Beyond that it says so; a restart clears it.
+- "Add to Home Screen" stores the manifest `start_url` (`/`), so the home screen icon opens the default session. For an icon that goes straight to `/work`, use a browser bookmark.
+- `herdr session list` / `stop` / `delete` manage these sessions from a terminal; herdr-web only opens and attaches.
 
-## 只开本机 shell
+## Local shell only
 
-要连别的机器就在 herdr 里 ssh —— herdr 自己就能干这事，所以这一层不再实现主机管理和托管私钥（那还得管密钥落盘、`ssh-keygen`、`~/.ssh` 扫描、ssh_config 导入），连带把「浏览器能碰到私钥」这个安全面也一起去掉了。
+To reach another machine, ssh from inside herdr — herdr does that itself, so this layer does not implement host management or key storage (which would drag in key files on disk, `ssh-keygen`, `~/.ssh` scanning, ssh_config import), and along with it the whole "the browser can touch your private keys" attack surface disappears.
 
-## 发件箱（语音投稿）
+## Outbox (voice compose)
 
-页面底下那条带 textarea 的就是发件箱，顶栏 ✎ 开关，**默认开着**。在里面说话打字，改完整段投进 herdr 的某个 pane。它和软键条装在**同一块底部面板**里（一套边框、一个宽度，怎么拖见下面「底部面板」那节）。
+The strip with a textarea at the bottom of the page is the outbox; the ✎ in the top bar toggles it and it is **on by default**. You dictate or type in there, fix what came out wrong, then hand the whole paragraph to one of herdr's panes. It shares **one dock** with the soft key bar (one border, one width — see [The bottom dock](#the-bottom-dock)).
 
-为什么要单独一个框而不是直接对着终端说：终端是字节流，没有 selection 语义，输入法只能往里灌字符。「说错的字**框选重说**」需要一个真正的可编辑字段（有文本模型、有选区，选中后输入法提交会覆盖选区）。xterm.js 的隐藏 textarea 不算，它只把按键转成字节发走。
+Why a separate box instead of talking straight into the terminal: a terminal is a byte stream with no selection semantics, so an IME can only pour characters into it. "**Select the words you got wrong and say them again**" needs a real editable field — a text model, a selection, and an IME commit that replaces the selection. xterm.js's hidden textarea does not count; it only turns keys into bytes and sends them.
 
-| 操作 | 说明 |
+| Control | What it does |
 |---|---|
-| **目标** | 默认「跟随 herdr 当前 pane」——不用选，投给你此刻在 herdr 里激活的那个。也能在下拉里钉死一个 |
-| **投稿** `⌘↵` / `Ctrl↵` | 先清空远端输入行，再整段提交。`Enter` 是换行，不提交 |
-| **拉回** | 把远端输入框里已有的内容抓进 textarea 编辑（远端按过 Tab 补全就用它） |
-| **自动拉回** | 默认 500ms 一拍。切了 pane 自动换成新 pane 的内容；**本地有草稿时绝不覆盖**，只在状态行提示 |
-| **双向** | 本地改动跟着推回远端输入框（不回车）。默认关，见下面的注意事项 |
-| **图** | 传图片，路径插在**光标处**。手机上点它会给「相机 / 相册」；电脑上截完图直接在框里 `⌘V`，或者把文件拖进来。不开发件箱也能传 —— 软键条里配个 `act:img` 或者整页粘贴 |
-| `↑` | 框空时取回上一条投过的（本地留 30 条） |
-| `Esc` | **转发给终端**。Esc 在纯 textarea 里没意义，而 agent 那边到处要用它（`/usage` 之类浮层靠它退出）；焦点不动，可以连按 |
+| **Target** | Defaults to "follow herdr's current pane" — nothing to pick, it goes to whatever you have focused in herdr. You can also pin one from the dropdown |
+| **Post** `⌘↵` / `Ctrl↵` | Clears the remote input line first, then submits the whole thing. `Enter` inserts a newline and does not submit |
+| **Pull back** | Grabs what is already in the remote input line into the textarea for editing (useful when the remote side has been Tab-completing) |
+| **Auto pull** | Every 500ms by default. Switching panes swaps in the new pane's content; **never overwrites a local draft**, it just says so in the status line |
+| **Two-way** | Local edits get pushed back into the remote input line (without Enter). Off by default — see the caveats below |
+| **Image** | Upload an image; the path is inserted **at the cursor**. On a phone it offers camera / library; on a desktop just `⌘V` a screenshot into the box, or drop a file. You do not need the outbox open for this — bind `act:img` on the soft key bar, or paste anywhere on the page |
+| `↑` | With an empty box, recalls the last thing you posted (30 kept locally) |
+| `Esc` | **Forwarded to the terminal.** Esc means nothing inside a plain textarea, while the agent needs it constantly (overlays like `/usage` close with it); focus does not move, so you can press it repeatedly |
 
-**图片是怎么走通的**：herdr 的 socket API 里没有图片概念，能投的只有文本。但 claude 和 codex 都能直接读磁盘上的图片文件（实测两边都描述对了一张 320×200 左红右蓝的测试图，codex 还会打一行 `Viewed Image`）。所以「传图」＝ 存到跑 herdr 那台机器的 `~/.herdr-web/uploads/`，然后把**绝对路径**当文本给出去，agent 自己去读文件。
+**How images actually work**: herdr's socket API has no concept of an image — text is all you can post. But claude and codex both read image files off disk (verified: both described a 320×200 test image, red left half, blue right half; codex even prints `Viewed Image`). So "upload" means: store it under `~/.herdr-web/uploads/` on the machine running herdr, then hand over the **absolute path** as text and let the agent open it.
 
-**传图不用开发件箱**：软键条里配一个 `act:img` 的键就行（设置 →「软键条」页，预设「网页端动作」里有现成的 🖼 传图，位置和标签随便改），而且**整页都能粘贴**（`⌘V` / 长按粘贴，剪贴板里是图就直接传）。路径去哪儿看发件箱开没开 —— 开着就接到草稿末尾（还能接着说话再投），没开就**直接敲进终端**，等于替你把路径打进当前 pane 的输入行。多数时候只是想把刚截的图丢给 agent，为这个专门开一次发件箱不值当。
+**Uploading does not require the outbox**: bind a key to `act:img` (Settings → Soft keys, the "Web actions" preset group ships a 🖼 one; position and label are yours to change), and **the whole page accepts a paste** (`⌘V` or long-press paste — if the clipboard holds an image it is uploaded directly). Where the path lands depends on whether the outbox is open: open, it is appended to your draft (so you can keep dictating and post the lot); closed, it is **typed straight into the terminal**, i.e. into the current pane's input line for you. Most of the time you just want to throw a screenshot at the agent, and opening the outbox for that is not worth it.
 
-入口放在软键条而不是顶栏：顶栏在平板上已经挤了八个按钮，而软键条本来就是「自己配一排常用动作」的地方 —— 要不要这个键、放第几个、叫什么，都归用户。
+The entry point lives on the soft key bar rather than the top bar: the top bar already carries eight buttons on a tablet, and the soft key bar is by definition "a row of actions you arrange yourself" — whether this key exists, where it sits and what it is called all belong to you.
 
-粘贴走的是挂在 window 上的**捕获阶段**监听：得抢在 xterm 那个隐藏 textarea 之前，否则剪贴板里只有图片时它会往终端里粘一段空文本。落在发件箱 textarea 里的粘贴放过去，交给它自己处理（那儿能插在光标处）。
+Pasting is handled by a **capture-phase** listener on `window`: it has to beat xterm's hidden textarea, otherwise an image-only clipboard makes xterm paste an empty string into the terminal. A paste that lands inside the outbox textarea is let through and handled there (that is where it can be inserted at the cursor).
 
-手机照片先在浏览器里缩到长边 2400 再传（顺手把 iPhone 的 HEIC 转成 PNG/JPEG，因为 agent 读不了 HEIC）。服务端按**魔数**认类型，只收 png / jpg / gif / webp，改后缀或改 content-type 骗不过去。上限 25 MB。传过的图不会自动删，攒多了自己清 `~/.herdr-web/uploads/`。
+Phone photos are downscaled to a 2400px long edge in the browser first, and iPhone HEIC is converted to PNG/JPEG (agents cannot read HEIC). The server identifies the type by **magic number** and accepts only png / jpg / gif / webp, so renaming the extension or lying about content-type does not get through. 25 MB cap. Uploads are never garbage collected; clear `~/.herdr-web/uploads/` yourself when it piles up.
 
-状态行会一直显示「这段话现在会投给谁」，`⟳` 表示正在跟随焦点；鼠标悬停能看到当前用的轮询间隔。
+The status line always says where this paragraph is going; `⟳` means it is following focus, and hovering shows the polling interval in use.
 
-### 是轮询，不是推送
+### Polling, not push
 
-herdr 有 `events.subscribe` 推送通道，但 agent 一 working 就是刷屏级的量，所以这里用轮询：每 `HERDR_WEB_POLL_MS`（默认 500ms）问一次「焦点在哪个 pane + 那个输入框里是什么」。
+herdr has an `events.subscribe` channel, but a working agent produces screen-refresh volumes of it, so this uses polling: every `HERDR_WEB_POLL_MS` (500ms default) it asks "which pane has focus, and what is in its input line".
 
-**切 pane 到 textarea 更新的实测延迟**（同机，8 次取样）：
+**Measured latency from switching panes to the textarea updating** (same machine, 8 samples):
 
-| 轮询间隔 | 最快 | 中位 | 最慢 |
+| Poll interval | Fastest | Median | Slowest |
 |---|---|---|---|
 | 200ms | 138ms | 318ms | 550ms |
-| **500ms（默认）** | ~300ms | ~500ms | ~800ms |
+| **500ms (default)** | ~300ms | ~500ms | ~800ms |
 | 1200ms | 408ms | 794ms | 818ms |
 
-地板是一次 sync 的耗时，因为 herdr 的每次调用都可能撞上一个 ~100ms 的 tick（原因见 [HERDR-API.md](HERDR-API.md) 的「100ms 的坎」）。想临时试手感：URL 上加 `?poll=200&push=400`，会覆盖服务端下发的默认值。
+The floor is the cost of one sync, because every herdr call can land on a ~100ms tick (see "the 100ms wall" in [HERDR-API.md](HERDR-API.md)). To try a different feel temporarily, add `?poll=200&push=400` to the URL; it overrides what the server hands down.
 
-几个要知道的：
+Things worth knowing:
 
-- **框里一有你自己写的内容，目标就被钉在当初瞄准的那个 pane 上**，框空了才重新跟随焦点。因为 herdr 会因为 agent 状态变化自己换焦点，不锁定的话「为 A 写的话投进了 B」。自动拉回来还没动过的内容不算草稿，那时候切 pane 照样跟着换。
-- **「双向」只对 claude / codex 这种有真输入框的 pane 生效。** 普通 pane 里跑的可能是 vim 或某个选择器，那里的字符是**命令**不是文本。开着的时候也别同时在那个 pane 里手敲字——本地→远端这个方向本质上是在跟字节流抢缓冲区。
-- **远端正开着选择框 / 确认框时会拒绝投递**（清不空就不投，否则就是「残留 + 新文本」一起回车）。去那个 pane 按 `Esc` 收掉再投。
-- **agent pane 上认不出输入框时也不投**（屏幕上正开着分页器 / 编辑器 / 某个全屏控件）。这时候「拉回」也不会往框里塞东西 —— 认不出就是认不出，不会退回屏幕最后一行。shell pane 天生读不到输入行，那边不受影响，投稿照常。
-- socket 在**跑 herdr server 的那台机器**上。现在只连本机（或 `HERDR_WEB_SOCKET` 指到的路径）。
+- **The moment the box holds something you wrote, the target is pinned** to the pane you were aiming at; it goes back to following focus when the box is empty. herdr moves focus on its own when agent state changes, and without the lock "what you wrote for A gets posted into B". Auto-pulled content you have not touched does not count as a draft — switching panes there still follows along.
+- **"Two-way" only makes sense for panes with a real input line** (claude / codex). An ordinary pane might be running vim or some picker, where characters are **commands**, not text. Also do not type into that pane by hand while it is on — the local→remote direction is essentially fighting a byte stream for the buffer.
+- **Posting is refused while the remote side has a picker or confirmation open** (if it cannot be cleared it will not post, otherwise you get "leftovers + new text" submitted together). Press `Esc` in that pane and post again.
+- **Nothing is posted when no input line can be recognised on an agent pane** either (a pager, an editor or some full-screen widget is up). "Pull back" also stays quiet then — unrecognised is unrecognised, and it will not fall back to "the last line on screen". Shell panes never have a readable input line and are unaffected; posting works as usual.
+- The socket is on **the machine running the herdr server**. For now that is the local one (or whatever `HERDR_WEB_SOCKET` points at).
 
-## 面板一览（手机上换 pane 的那条路）
+## Pane list (how you switch panes on a phone)
 
-顶栏的 ▦（或者软键条上配一个 `act:panes`）打开一张 pane 列表：按 workspace 分组，一行一个
-pane，**点一下就跳过去并铺满全屏**。列表上方能筛（tab 名 / 标题 / 路径 / pane id）、能只看
-跑着 agent 的、能关掉「全屏」（那时候点一行是「切焦点 + 退出放大」）。
+The ▦ in the top bar (or an `act:panes` key on the soft key bar) opens a list of panes grouped by workspace, one row each. **Tap a row and you are there, zoomed full screen.** Above the list you can filter (tab name / title / path / pane id), show only panes running an agent, and turn "zoom" off (a tap then means "move focus, leave zoom alone").
 
-**为什么需要它。** 软键条发的是**按键**，而按键只能表达**相对**导航：下一个 tab、往右切一格。
-「让 `w5:p3` 全屏」这句话用按键说不出来，只能拆成一串相对动作走过去 —— 而中间每一步的屏幕，
-正好都是「未放大的多 pane 布局」那个在手机上根本读不了的状态。本机实测的规模是 48 个 pane /
-38 个 tab / 4 个 workspace，一趟是 workspace → tab → pane → zoom 四段盲走。
+**Why it exists.** The soft key bar sends **keys**, and keys can only express **relative** navigation: next tab, one pane to the right. "Zoom `w5:p3`" is not expressible as a key — you have to decompose it into a walk, and every screen along that walk is exactly the unzoomed multi-pane layout that is unreadable on a phone. The scale measured here is 48 panes / 38 tabs / 4 workspaces; one trip is four blind legs of workspace → tab → pane → zoom.
 
-herdr 的 socket 这层是**按 pane_id 寻址**的：`pane.zoom` 带上 `pane_id` 就能一次跨
-workspace + tab + pane（焦点连着 workspace 和 tab 一起切过去，不用先 `workspace.focus`
-再 `tab.focus`，实测确认）。所以界面上就是点一行。
+herdr's socket layer is **addressed by pane_id**: `pane.zoom` with a `pane_id` crosses workspace + tab + pane in one call (focus follows across workspace and tab; no `workspace.focus` then `tab.focus` needed — verified). So the UI is simply a row you tap.
 
-**它是索引，不是第二个界面。** 点完之后看的还是同一个 herdr 终端 —— 网页接的是整个 TUI，
-herdr 那边一切焦点，画面自己就跟过来了；键盘那套操作一个字都没变，Mac 上照旧敲键盘。这条是
-刻意的：手机端「只接管一个 pane + 做一套图形界面管面板」的做法能做得更花，代价是**两套使用
-习惯**和第二个真相源。所以这个面板只做「去哪儿」，不做增删改。
+**It is an index, not a second interface.** After the tap you are looking at the same herdr terminal — the page is attached to the whole TUI, so when herdr moves focus the picture follows by itself, and every keyboard habit is unchanged. That is deliberate: "take over one pane on mobile and build a graphical pane manager" could be made flashier, at the cost of **two sets of habits** and a second source of truth. So this panel answers "where to", and does not create, rename or delete anything.
 
-### 排序（可切换）
+### Sorting (switchable)
 
-顶上那个按钮点一下换一种，记在本地：
+The button at the top cycles it; the choice is remembered locally:
 
-| 排序 | 规则 |
+| Order | Rule |
 |---|---|
-| **优先级**（默认）| 按「多想让你看一眼」分档：**等你回答 > 跑完了 > 在跑 > 闲着 > 非 agent**，同一档里按最近动过排 |
-| **分组** | 按 workspace 分组，组里是 tab / pane 的原顺序 —— 和你在 herdr 里看到的一样 |
+| **Priority** (default) | By how much it wants your eyes: **waiting on you > finished > running > idle > not an agent**, and within a tier by most recently changed |
+| **Grouped** | By workspace, then the original tab / pane order — the same thing you see inside herdr |
 
-状态点的颜色：**红 = 等你，绿 = 跑完了，黄 = 在跑**，闲着是灰点。「在跑」用黄不用绿，和 herdr
-自己 agents 栏那个黄点一致；绿留给「跑完了」（通用约定，一眼知道是好事）。只有闲着不给颜色 ——
-一列点全是彩的就没有重点了。
+Status dot colours: **red = waiting on you, green = finished, yellow = running**, grey for idle. Running is yellow rather than green to match herdr's own agents column; green is reserved for "finished" (the universal convention: good news). Only idle gets no colour — a column where every dot is coloured has no emphasis left.
 
-`在跑` 单独一档。一开始把它和 `闲着` 合成了一档（理由是两个都不需要你，谁在前面没有客观
-答案，交给「刚动过」去定），实际用起来不对：黄点那个正在跑的会被十几个闲着的埋掉，而列表里
-最想一眼看到的恰恰是它。`等你` / `完成` 两档在行上额外挂一个小标签，别的状态只有那个点的
-颜色 —— 每行都塞标签就没有重点了。
+`Running` gets its own tier. It started merged with `idle` (the reasoning: neither needs you, and there is no objective answer for which comes first, so let "recently changed" decide). In practice that was wrong: the one yellow dot that is actually running gets buried under a dozen idle ones, and it is precisely the row you most want to spot. `Waiting` and `Finished` additionally carry a small label on the row; the other states only have the dot — a label on every row is no emphasis at all.
 
-**同一档里认 `state_change_seq`**（herdr 里的全局递增计数，每次 agent 状态变化推高一格），
-不认时间。因为 herdr 的 API 里**一个时间戳都没有**：`agent.list` 只给这个计数，事件里也不带
-时间。计数一直是对的，所以排序一直是对的。
+**Within a tier the order comes from `state_change_seq`** (herdr's global counter, bumped on every agent state change), not from time. Because there is **not a single timestamp in herdr's API**: `agent.list` only gives that counter, and events carry no time either. The counter is always right, so the ordering is always right.
 
-### 「3 分钟前」那一列
+### The "3 minutes ago" column
 
-时间是 **herdr-web 自己盯着状态变化打的**（`internal/agentwatch`：订一条
-`pane.agent_status_changed`，收到就记 `time.Now()`）。所以：
+Times are **stamped by herdr-web itself** as it watches state changes (`internal/agentwatch`: subscribe to `pane.agent_status_changed`, record `time.Now()` on arrival). Consequences:
 
-- **第一次跑的时候这一列是空的**，随着一次次状态变化填回来。空着是实话 —— 那个变化发生在
-  开始盯之前，没法知道是什么时候，编一个时间比空着糟得多。列表底下会说明这一句。
-- **按 `terminal_id` 存盘**（`~/.herdr-web/agent-seen.json`），所以 herdr-web 自己重启
-  （升级、改配置）不丢时间。不能按 `pane_id` 存：那是 herdr 里的位置编号，pane 一开一关就
-  重新分配给别人了，会张冠李戴。herdr 重启之后终端 id 全是新的，旧记录自然对不上 —— 存盘时
-  只写这会儿还在的终端，文件自己就不会长胖。
-- **状态不存盘**，只存时间。存了状态的话，重启后拿旧状态一比就会把「停机期间变的」记成
-  「刚刚变的」。
-- 订阅没连上（herdr server 没在跑）时，列表底下会说一句，免得空着的时间列看着像坏了。
-- 显示用 `3m` `2h` `4d` 这种紧凑写法（不到 45 秒算「刚刚」），完整时间在 title 里。手机上这一列
-  只有几十像素，「3 分钟前」四个字放不下。
+- **The column is empty on a first run** and fills in as changes happen. Empty is the truth — that change happened before anyone was watching, and inventing a time would be much worse than leaving it blank. A line under the list says so.
+- **Stamps are keyed by `terminal_id`** (`~/.herdr-web/agent-seen.json`), so restarting herdr-web (an upgrade, a config change) does not lose them. It cannot be keyed by `pane_id`: that is a positional number inside herdr, reassigned to someone else as soon as a pane opens or closes, and you would end up attributing one pane's history to another. After a herdr restart every terminal id is new, so old records simply do not match — and only currently-live terminals are written back, so the file never grows fat.
+- **State is not persisted**, only time. Persisting state means that after a restart, comparing against the old state records "changed while we were down" as "changed just now".
+- When the subscription is not connected (no herdr server running), a line under the list says so, otherwise an empty column looks broken.
+- Display is compact (`3m` `2h` `4d`; under 45 seconds is "just now"), full timestamp in the `title`. That column is a few dozen pixels wide on a phone — "3 minutes ago" does not fit.
 
-几个细节：
+A few details:
 
-- **pane id 在手机上也照样显示**。一个 tab 里分了两个 pane 时，两行的 tab 标签和 cwd
-  一模一样（实拍见过），id 是唯一分得开的东西。
-- 第二行给的是 **agent 自己写的会话标题**（Claude Code 那个「图片识别」之类），没有才退回
-  cwd —— shell pane 的标题只是 `user@host:path`，不如路径。
-- **跳完不自动聚焦终端**（手机上那一下会把系统键盘顶出来，而刚跳过去多半是要看）；宽屏上顺手聚上。
-- 投稿目标不用管：默认那条「跟随 herdr 当前 pane」自己就跟过去了。本地有草稿时目标仍然锁在
-  原来那个 pane 上 —— 为 A 写的话不该因为你去 B 看了一眼就投给 B。
-- 「全屏」开关记在本地（`localStorage`）。手机上默认开：多 pane 平铺读不了，去了不放大等于没去。
-- `zoomed` 是**整个 tab** 的状态，不是某个 pane 的（herdr 放大的永远是当前焦点 pane）。
-  所以「这个 tab 只有一个 pane」会回 `zoomed:false`，那不是失败，界面上单独说一句。
+- **Pane ids are shown on phones too.** When a tab is split into two panes, both rows carry the identical tab label and cwd (seen in the wild); the id is the only thing that tells them apart.
+- The second line is the **agent's own session title** (Claude Code's "image recognition" and the like), falling back to cwd — a shell pane's title is just `user@host:path`, which is worth less than the path.
+- **Focus is not stolen after a jump** on phones (that would pop the system keyboard, and you mostly jumped there to look); on wide screens it is.
+- The post target takes care of itself: "follow herdr's current pane" moves along. With a local draft the target stays pinned to the original pane — words written for A should not go to B just because you looked at B.
+- The "zoom" toggle is remembered locally. On by default on phones: a tiled multi-pane layout is unreadable there, so arriving without zooming is the same as not arriving.
+- `zoomed` is a property of **the whole tab**, not of a pane (herdr always zooms the focused one). So "this tab only has one pane" comes back as `zoomed:false`, which is not a failure — the UI says so explicitly.
 
-## 提示：agent 有变化就弹一下（右上角 + 红点）
+## Notices: a card when an agent changes state (top right + red dot)
 
-一个 agent 停下来等你回答（或者刚跑完），右上角就弹一张卡片，**卡片上带它说的那段话**；
-同时顶栏的 ▦ 上点一个红点。点卡片 = 跳到那个 pane（顺带全屏，和面板一览点一行同一个动作、
-同一个「全屏」开关）。
+When an agent stops to wait for you (or has just finished), a card appears in the top right **carrying what it said**, and a red dot lights up on the ▦ in the top bar. Tapping the card jumps to that pane (zoomed — the same action and the same "zoom" toggle as tapping a row in the pane list).
 
-**为什么要这么一块东西。** 页面里 herdr 只有一个 pane 是看得见的（手机上更是只有全屏那
-一个），而同时在跑的 agent 常常有十几个。以前要发现「那个在等我」只能自己去开面板一览翻 ——
-于是 agent 卡在一个 y/n 上等半小时是常事。
+**Why this exists.** Only one of herdr's panes is visible in the page (on a phone, only the zoomed one), while a dozen agents can be running at once. Finding "the one waiting for me" used to mean opening the pane list and scanning it — so an agent stuck on a y/n for half an hour was routine.
 
-**卡片上必须有那段话**，不能只说「有变化」：只说有变化的话你还是得跳过去看一眼才知道要不要
-理它，那等于没提示。而 herdr 的 API 里没有「agent 最后说了什么」这种字段（和「没有输入框
-内容字段」是同一回事），所以这段话是**读屏抽出来的**。
+**The card has to carry the actual text**, not just "something changed": with only "something changed" you still have to jump over to find out whether it needs you, which is the same as no notice at all. herdr's API has no "what did the agent last say" field (same story as "no input line content field"), so this text is **scraped off the screen**.
 
-### 什么时候弹
+### When it fires
 
-| 变化 | 弹不弹 | 为什么 |
+| Change | Fires? | Why |
 |---|---|---|
-| → `blocked`（等你回答）| **弹**，而且不自动消失 | 它是真的停在那儿等你。卡片自己飘走就又回到「不知道谁在等」了 |
-| `working` → `idle` / `done`（跑完了）| 弹，12 秒后自己收掉 | 只是通知，错过也不影响什么 |
-| → `working` | 不弹 | 那多半是你自己刚投进去的，弹一下纯属回声 |
-| `blocked` → `idle` | 不弹 | 你刚回答完，它这会儿正要开工 —— 报「跑完了」是假话 |
+| → `blocked` (waiting on you) | **Yes**, and it does not auto-dismiss | It really is sitting there waiting. A card that floats away by itself puts you back to "no idea who is waiting" |
+| `working` → `idle` / `done` (finished) | Yes, dismissed after 12s | Just a notification; missing it costs nothing |
+| → `working` | No | That is almost always what you just posted — an echo |
+| `blocked` → `idle` | No | You just answered and it is about to start; reporting "finished" would be a lie |
 
-**状态稳 2.5 秒才算数。** claude / codex 干活时状态会短暂抖回 idle，不防抖的话一个长任务
-能弹出十几个假的「跑完了」；而 `pane.read` 的快照本身还有一帧延迟，立刻读会读到上一个任务的
-尾巴。防抖那 2.5 秒里状态又变了（`idle → blocked` 是常见的一串）就报**最后**那个，只弹一条。
+**A state has to hold for 2.5 seconds to count.** claude / codex flicker back to idle while working, and without debouncing one long task produces a dozen false "finished" cards; `pane.read` snapshots also lag by a frame, so reading immediately catches the tail of the previous task. If the state changes again within those 2.5 seconds (`idle → blocked` is a common pair), the **last** one is reported, as a single card.
 
-**herdr 停机后重新连上时不补弹。** 那一刻对底会发现一屏 pane 的状态都和停机前不一样，可那些
-变化是「这半小时里发生的」，当场弹成一片「刚刚跑完了」就是在编时间 —— 和「3 分钟前」那一列
-不肯给旧变化编时间是同一个道理。代价是重订阅那 800ms 窗口里的变化会漏报一条。
+**Nothing is replayed when herdr comes back after being down.** Reconciling at that moment finds a screen full of panes whose state differs from before the outage, but those changes happened "sometime in the last half hour"; firing a burst of "just finished" would be inventing timestamps — the same reason the "3 minutes ago" column refuses to invent times for old changes. The cost is that a change inside the 800ms resubscribe window is missed.
 
-### 那段话是怎么抽的
+### How the text is scraped
 
-按状态分两种（同一屏文字，「等你回答」和「跑完了」要看的地方完全不是一处）：
+Two modes by state — the same screen of text, but "waiting on you" and "finished" live in completely different places:
 
-- **等你回答**：问题在屏幕**最下面**那一块 —— `☐ 要不要装服务` 那种小标题，或者 `╭ … ╰`
-  围起来的框。所以从最后一个 `☐` / `╭` 往下取，取到操作提示（`Enter to select · ↑/↓ …`）
-  为止。**框线剥掉，选项留着**（`❯ 1. …` 里那个 `❯` 标的是当前选中哪个，是有用信息）。
-  屏幕上**没有**对话框时（`agent_status` 判断不了这个，见下面「边界」）退回按「跑完了」那套抽。
-- **跑完了**：取最后一个 `⏺` 块 —— 但**带 `⎿` 的那种要跳过**。`⎿` 是工具输出的记号
-  （`⏺ Searching for 1 pattern…` 后面跟着一屏 `⎿  $ cd …`），那是「它在干活」的流水，
-  不是它对你说的话。真机上抓到过：状态刚翻成 idle 的那一瞬间屏幕底下正好是一串 shell
-  命令，第一版于是把 `cd /private/tmp/…` 当成了「成果」弹出去。往上找到第一个不是工具的
-  块，拿到的才是那句「Go 侧完成（测试通过）。现在写前端。」取到 spinner（`✻ Baked for 20s`）、
-  recap（`※ recap: …`）、输入框那一圈 `────` / `❯` 为止。codex 这类一个 `⏺` 都没有的，
-  退化成取尾部若干行。
+- **Waiting on you**: the question is in the block at the **bottom** of the screen — a small heading like `☐ Install the service?`, or a `╭ … ╰` box. So it takes everything from the last `☐` / `╭` downwards, stopping at the key hints (`Enter to select · ↑/↓ …`). **Box drawing is stripped, options are kept** (the `❯` in `❯ 1. …` marks the current choice, which is information). When there is no dialog on screen (`agent_status` cannot tell — see [Limits](#limits)) it falls back to the "finished" scraper.
+- **Finished**: take the last `⏺` block — but **skip the ones carrying `⎿`**. `⎿` marks tool output (`⏺ Searching for 1 pattern…` followed by a screen of `⎿  $ cd …`), which is the log of it working, not something it said to you. Caught on a real device: at the instant the state flipped to idle, the bottom of the screen happened to be a run of shell commands, and the first version pushed out `cd /private/tmp/…` as "the result". Walking up to the first non-tool block is what gets you "Go side done (tests pass). Writing the frontend now." It stops at the spinner (`✻ Baked for 20s`), the recap (`※ recap: …`) or the `────` / `❯` around the input line. Agents like codex with no `⏺` at all degrade to the last few lines.
 
-超过 12 行 / 600 字就截断（留开头 —— 回答的第一句最有信息量），后面缀一个 `…`。
-**抽不到就只报状态，不硬凑一句话** —— 编内容比空着糟得多。
+Anything over 12 lines / 600 characters is truncated — keeping the beginning, since the first sentence of an answer carries the most — with a trailing `…`. **If nothing can be scraped it reports the state alone rather than manufacturing a sentence**; inventing content is far worse than leaving it out.
 
-抽法是照着[herdr-sight](../herdr-sight) 的 `extractResult` 改的（那边只有「跑完了」一种，
-因为它是「任务交活了收成果」；这里最该弹的恰恰是「等你回答」）。
-`internal/agentwatch/testdata/` 里是**真机抓屏**，改这块必须跑 `go test ./internal/agentwatch/` ——
-这些规则全是照着真屏幕形状挑的，凭想象改一条就会静默抽错（表现是卡片上只有一行 `❯` 或者
-一段状态栏，而日志里什么都不报）。
+The scraper is adapted from `extractResult` in [herdr-sight](../herdr-sight) (which only has the "finished" case, because it is about collecting results from a finished task; here the case that most needs a notice is "waiting on you"). `internal/agentwatch/testdata/` holds **real captured screens**, and changing this code means running `go test ./internal/agentwatch/` — every rule was chosen against the actual shape of those screens, and changing one from imagination breaks the scrape silently (the symptom is a card containing a lone `❯` or a piece of the status bar, with nothing in the logs).
 
-### 卡片
+### The cards
 
-- **点一下 = 跳过去**（顺带全屏，和面板一览点一行同一个动作、同一个「全屏」开关），
-  跳完那张卡自己收掉 —— 已经去看了，留着只挡视线。
-- 右上角最多同时挂 **3 张**，多出来的收成一行「还有 N 条 · 去面板一览」。
-- **「等你回答」排在最上面**，然后才按新旧。不按纯时间排是因为两种卡的寿命不一样：
-  「跑完了」十几秒就自己走了，而「等你回答」一直挂着 —— 按时间排的话，一条刚来的
-  「跑完了」会把那个真的在等你的顶下去，而它恰恰是唯一需要你动手的那张。手里攒满了
-  也是先丢「跑完了」那种。
-- 面板开着的时候整摞先让开：那几块浮层就在同一个角上。
+- **Tap = jump there** (zoomed; same action and same "zoom" toggle as a pane list row), and the card dismisses itself afterwards — you already went, leaving it up only blocks the view.
+- At most **3** stack in the corner; the rest collapse into one line: "N more · open the pane list".
+- **"Waiting on you" sorts to the top**, then by recency. Not purely by time, because the two kinds have different lifetimes: "finished" leaves after a dozen seconds while "waiting on you" stays, so time ordering lets a fresh "finished" push down the one that is actually waiting — the only one that needs you to do anything. When the stack is full, "finished" cards are dropped first.
+- The whole stack gets out of the way while a panel is open: those overlays share the same corner.
 
-### 红点
+### The red dot
 
-- 在顶栏的 ▦ 上；软键条里 `act:panes` 那个键上**也有一个** —— 手机上键盘一弹起来顶栏整条
-  就收掉了，而那正是你在跟 agent 说话、最该知道「另一个在等你」的时候。
-- **开面板一览 = 看过了**（红点唯一的灭法）：那儿就是看这些变化的地方，优先级排序会把
-  「等你 / 完成」顶到最前面。收掉单张卡片**不算**看过 —— 那只是嫌它挡着。
-- 记在 `localStorage`（记的是 seq，不是条数），**刷新页面不丢**：手机上刷一下红点就没了的话，
-  这个提示等于白做。命名 session 各记各的（那是另一个 herdr）。
-- **嫌那个点扎眼可以关**：设置 →「终端」页最后一条「面板图标上的红点」。关掉只是不画那个点，
-  右上角的提示卡照常出 —— 两件事分开：点是一直挂在那儿的，卡是自己会走的。存在本地，
-  一台设备一份。整套提示要关是服务端那侧的 `HERDR_WEB_NOTICE_MS=0`。
-- **打开页面时只点红点、不补弹卡片**：那些变化可能是半小时前的，弹出来像刚发生一样就是编时间。
+- It sits on the ▦ in the top bar, and **also on the `act:panes` key** on the soft key bar — on a phone the top bar collapses the moment the keyboard is up, which is exactly when you are talking to an agent and most need to know another one is waiting.
+- **Opening the pane list marks them seen** (the only way to clear the dot): that is where these changes are meant to be read, and priority sorting puts "waiting / finished" at the top. Dismissing a single card does **not** count as seen — that only means it was in the way.
+- It is stored in `localStorage` (as a seq, not a count), so **a page refresh does not lose it**: on a phone, a dot that vanishes on reload makes the whole feature pointless. Named sessions track their own (that is a different herdr).
+- **The dot can be turned off** if it bothers you: Settings → Terminal, last item, "red dot on the panel icon". That only stops drawing the dot; the cards in the corner still appear — two separate things, because the dot persists while cards leave on their own. Stored locally, per device. To turn the whole feature off, that is `HERDR_WEB_NOTICE_MS=0` on the server side.
+- **Opening the page lights the dot but replays no cards**: those changes may be half an hour old, and showing them as if they just happened is inventing time.
 
-### 边界
+### Limits
 
-- `agent_status` 判断不了「正开着对话框」（实测同一个选择器，一次报 `idle` 一次报 `blocked`，
-  见 [HERDR-API.md](HERDR-API.md)）。所以偶尔会有一条问话被弹成「跑完了」—— 卡片上的内容
-  仍然是那个问题，状态标签错、跳转是对的。
-- 抽取规则跟着 claude 现在的界面走。它改版之后可能抽出一段怪文字；那时候状态和跳转仍然
-  照常，testdata 里换一份新抓屏 + 调规则即可。
-- 关掉整套提示：`HERDR_WEB_NOTICE_MS=0`（前端不再轮询，也不画红点）。
+- `agent_status` cannot tell that a dialog is open (measured: the same picker reported `idle` once and `blocked` another time, see [HERDR-API.md](HERDR-API.md)). So occasionally a question is announced as "finished" — the card still carries the question, only the state label is wrong; the jump is right.
+- The scraping rules follow claude's current UI. After a redesign they may extract something odd; state and jumping still work, and the fix is a fresh capture in testdata plus a rule adjustment.
+- To turn the whole thing off: `HERDR_WEB_NOTICE_MS=0` (the frontend stops polling and stops drawing the dot).
 
-## 文件浏览（看 agent 生成的图）
+## File browsing (looking at what the agent generated)
 
-agent 说「图生成在 `/tmp/plot-3.png`」，**点那行路径就能看**。
+The agent says "the plot is at `/tmp/plot-3.png`" — **tap that path and look at it**.
 
-顶栏的 📁（或者软键条上配一个 `act:files`）是兜底的目录浏览，但主入口不是它 ——
-是终端里那条路径本身。
+The 📁 in the top bar (or an `act:files` key on the soft key bar) is the fallback directory browser, but it is not the main entry point. The path in the terminal is.
 
-### 「图不在当前 workspace 下」是怎么解决的
+### "The image is not under the current workspace"
 
-不解决，因为它压根不该是个问题。三条路各管一段：
+Not solved, because it should never have been a problem. Three routes cover the ground:
 
-| 情况 | 走哪条 |
+| Situation | Route |
 |---|---|
-| 路径打在屏幕上了（绝大多数） | **点它**。绝对路径直接开，`./out/a.png` 这种用**那个 pane 的 cwd** 解析（`pane.list` 里就有） |
-| 路径没看见 / 想翻翻旁边还有什么 | 📁 面板。起点是「各 pane 的 cwd + 上传目录 + 家目录 + 临时目录 + 最近去过」，进去之后 `..` 一路能走到 `/` |
-| 图在一个谁都想不到的地方（`/var/folders/xx/T/…`） | 面板顶上那个框，**粘绝对路径直接开** |
+| The path is on screen (the vast majority) | **Tap it.** Absolute paths open directly; `./out/a.png` resolves against **that pane's cwd** (which `pane.list` provides) |
+| The path is not visible, or you want to look around | The 📁 panel. It starts from "every pane's cwd + the upload directory + home + temp + recently visited", and `..` walks all the way to `/` |
+| The file is somewhere nobody would guess (`/var/folders/xx/T/…`) | The box at the top of the panel: **paste an absolute path and open it** |
 
-所以**默认没有边界**：能打开这个页面的人已经有一个登录 shell（`/pty`），在里面
-`cat` 任何文件都行 —— 白名单挡不住他，只会天天挡路（agent 往 `/tmp`、
-`/var/folders/…`、`~/Downloads` 写东西是常态）。要边界就配
-`HERDR_WEB_FILE_ROOTS`（那才是真 jail），整块不要就 `HERDR_WEB_FILES=0`。
+So **there is no boundary by default**: anyone who can open this page already has a login shell (`/pty`) and can `cat` anything — an allowlist would not stop them, it would only get in the way daily (agents write to `/tmp`, `/var/folders/…` and `~/Downloads` constantly). If you want a boundary, set `HERDR_WEB_FILE_ROOTS` (that one is a real jail); to remove the feature entirely, `HERDR_WEB_FILES=0`.
 
-### 能看什么
+### What it can show
 
-- **图**：png / jpg / gif / webp，按**魔数**认（改后缀骗不过去）。点一下在「铺满」和
-  「原始尺寸」之间切。右上角能复制路径、打开所在目录、在新标签打开（那儿能长按存到相册）、
-  **投给 agent**（把绝对路径插进发件箱 / 敲进终端 —— 和传图完全同一个模型）。
-- **文本 / 代码**：源码原样显示，超过 512 KB 截断并说明。
-- **别的**：只能下载。
+- **Images**: png / jpg / gif / webp, identified by **magic number** (a renamed extension does not fool it). Tap to toggle between "fit" and "actual size". The top right can copy the path, open the containing directory, open it in a new tab (where a long press saves it to the camera roll) and **hand it to the agent** (insert the absolute path into the outbox, or type it into the terminal — exactly the same model as uploading).
+- **Text / code**: shown as-is, truncated past 512 KB with a note.
+- **Anything else**: download only.
 
-### 链接那条路：`/_f/<票>`
+### The link route: `/_f/<ticket>`
 
-图片走的是一条**不带 cookie** 的短时链接。必须这样：`/api/*` 上 cookie 认证的请求要求
-一个自定义头（CSRF 第三道防线），而 `<img src>`、「在新标签打开」、iOS「长按存到相册」
-**都设不了头** —— 走 `/api` 一律 403。
+Images are served over a short-lived link that carries **no cookie**. It has to be: cookie-authenticated requests on `/api/*` require a custom header (the third CSRF layer), and `<img src>`, "open in new tab" and iOS "long press to save" **cannot set headers** — through `/api` they would all be 403.
 
-票是能力凭据不是身份凭据：**绑死一个绝对路径**、15 分钟过期、签名密钥进程起来时随机
-生成且**只在内存里**（重启即全废，磁盘上不多一个长期秘密）。代价说清楚：票在 URL 里，
-所以会进浏览器历史、会出现在截图里，谁拿到那串东西在 15 分钟内就能读那**一个**文件。
+The ticket is a capability, not an identity: **bound to one absolute path**, expiring in 15 minutes, signed with a key generated at process start and **kept in memory only** (a restart invalidates every ticket, and no long-lived secret lands on disk). The trade-off, stated plainly: the ticket is in the URL, so it enters browser history and shows up in screenshots, and whoever holds that string can read that **one** file for 15 minutes.
 
-### 这条路上四条硬规矩
+### Four hard rules on that route
 
-一条都不能少，因为吐出去的是**agent 写的文件**：
+None is optional, because what comes out is **a file the agent wrote**:
 
-1. **绝不以 `text/html` 吐内容。** 同源的 HTML 就是一个能调 `/api/herdr/say` 的跳板
-   （cookie 是 HttpOnly，但它根本不用读 cookie，浏览器会自动带上）—— agent 写个 html
-   你点开就把 herdr 交出去了。只有魔数认出来的那四种图 inline，其余一律
-   `application/octet-stream` + `attachment`。**SVG 不算图**（能跑脚本的「图片」），
-   落到附件那一档。
-2. **只读常规文件。** 点进 `/dev/zero` 就是一条无限流，`/dev/rdisk0` 更糟。设备 /
-   socket / 管道在目录里照样列出来（列表要说实话），只是打不开。
-3. **响应上再压一条 CSP `sandbox`**，覆盖全局那条。前两条哪天被改坏了还有这一层。
-4. **配了 `FILE_ROOTS` 时，前缀检查在 `EvalSymlinks` 之后做**，而且比 `root + 分隔符`
-   —— 少任何一条都是静默放行（软链能指出去、`/home/user` 会放行 `/home/user2`）。
+1. **Never serve content as `text/html`.** Same-origin HTML is a springboard that can call `/api/herdr/say` (the cookie is HttpOnly, but it does not need to read it — the browser attaches it): the agent writes an html file, you open it, and herdr is theirs. Only the four image types confirmed by magic number are served inline; everything else is `application/octet-stream` + `attachment`. **SVG does not count as an image** (a scriptable "image") and lands in the attachment tier.
+2. **Regular files only.** Opening `/dev/zero` is an infinite stream and `/dev/rdisk0` is worse. Devices / sockets / pipes are still listed in a directory (a listing should tell the truth), they just cannot be opened.
+3. **A per-response CSP `sandbox`**, overriding the global one. If either of the first two ever breaks, this layer is still standing.
+4. **With `FILE_ROOTS` set, the prefix check runs after `EvalSymlinks`** and compares against `root + separator`. Drop either half and it silently passes (a symlink can point outside, and `/home/user` would admit `/home/user2`).
 
-### 认路径的几个坑（都在 `web/src/term/paths.ts` 里）
+### Path detection pitfalls (all in `web/src/term/paths.ts`)
 
-- **路径会被折行断开。** 80 列的 pane 里一条长路径就是跨两行的，所以先把逻辑行
-  （连着 `isWrapped` 的那一串）拼回来再找。
-- **拼回来不能用 `translateToString`。** 有中文时它返回的字符数和格子数对不上，
-  下标映射回坐标会整条错位 —— 下划线画在半个词上、点下去取到另一段。所以逐格读。
-- **中文标点得当终止符。** 实测 agent 打的是「生成好了 /tmp/a.png。相对的 …」，中文和
-  路径之间没有空格 —— 不挡 `。` 的话整段 `a.png。相对的` 会被当成一个路径，点开报
-  「没有这个文件」而下划线看着完全正常。汉字照样放行（`/tmp/图表.png` 是合法文件名）。
-- **光秃秃的相对路径必须带扩展名。** 只数斜杠不够：`2026/08/21` 有两个斜杠，按「两段
-  就算」会被画成链接。`and/or`、`100/200` 同理。有根的（`/usr/local/bin`）不受这条限制。
-- **被 `…` 截断过的路径直接不给链接。** 认不出就是认不出，别猜一个短的出来然后报
-  「没有这个文件」。
+- **Paths get broken by wrapping.** In an 80-column pane a long path spans two rows, so logical lines (the `isWrapped` chain) are reassembled before matching.
+- **Reassembly cannot use `translateToString`.** With CJK text its character count does not match the cell count, so mapping an index back to coordinates shifts the whole line — the underline lands on half a word and tapping picks up a different span. Cells are read one by one instead.
+- **CJK punctuation has to terminate a path.** Measured: the agent writes 「生成好了 /tmp/a.png。相对的 …」 with no space between the path and the text — without stopping at `。`, the whole `a.png。相对的` is taken as a path, which opens to "no such file" while the underline looks perfectly fine. CJK characters themselves are still allowed (`/tmp/图表.png` is a legal filename).
+- **A bare relative path must carry an extension.** Counting slashes is not enough: `2026/08/21` has two, and "two segments is enough" would draw a link on it. Same for `and/or` and `100/200`. Rooted paths (`/usr/local/bin`) are exempt.
+- **A path already truncated by `…` gets no link.** Unrecognisable is unrecognisable; do not guess a shorter one and then report "no such file".
 
-## 设置面板
+## Settings panel
 
-顶栏最右的 ⚙ 是全部设置，分三页：**终端**（字号 / 明暗、kitty 协议 / Option 当 Meta / 选中即复制 / 同步输出、面板图标上的红点，加一行后端环境）、**软键条**（下面那节）、**设备**（谁配过对、登出、踢人）。
+The ⚙ at the right end of the top bar holds everything, in three pages: **Terminal** (font size / light-dark, kitty protocol / Option as Meta / copy on select / synchronized output, the red dot on the panel icon, plus a line of backend environment), **Soft keys** (next section), and **Devices** (who has paired, sign out, kick).
 
-「终端」页顶上那排**字号 / 明暗**和顶栏里那三个图标是同一套动作（不是另一份状态）：手机竖屏的顶栏放不下它们，那一档只能从这儿调。
+The font size / light-dark controls at the top of the Terminal page are the same actions as the three icons in the top bar, not a second copy of the state: a phone in portrait has no room for them in the top bar, so that is the only place to reach them.
 
-以前这是三个各自为政的小面板，顶栏为此挂了三个图标 —— 平板上顶栏本来就挤，而且「设置」被切成三块，找起来全靠记哪个图标是哪个。**软键条右下角原来还有一个直通「软键条」页的 ⚙，去掉了**：它常驻在键那一排的右边跟键抢地方（竖屏尤其明显），而改按键是一次调完的事，绕一下顶栏不算负担。
+This used to be three independent little panels with three icons in the top bar — which is crowded on a tablet, and "settings" split three ways means finding anything depends on remembering which icon is which. **The ⚙ that used to sit in the bottom right of the soft key bar (a shortcut to the Soft keys page) is gone too**: it lived permanently at the end of the key row competing for space (especially in portrait), while editing keys is a thing you do once — going through the top bar is not a burden.
 
-## 软键条
+## Soft key bar
 
-手机没有 Ctrl 键，herdr 的 `ctrl+b` 前缀全靠这条。按键**存在服务端**（`~/.herdr-web/softkeys.json`），手机 / 平板 / 电脑共用一份，在设置 →「软键条」页改。
+Phones have no Ctrl key, and herdr's `ctrl+b` prefix depends on one. The keys live **on the server** (`~/.herdr-web/softkeys.json`), so phone / tablet / desktop share one set, edited in Settings → Soft keys.
 
-**一行还是两行是个设置**（存服务端，跟着配置走），不是靠「第二行空不空」猜 —— 空的第二行和「我只要一行」是两件事。两行**各自横向滚动**：手机上一行放得下四五个键，把常用的放第一行、次常用的放第二行，比十几个键排成一条长龙好找 —— 手指知道自己在哪一行，滑一行也不会把另一行带跑。切回一行时第二行的键会**并到第一行末尾**（服务端也是这么算的；「存着但不显示」是最烦人的一种状态）。
+**One row or two is a setting** (server-side, travelling with the config), not a guess based on "is the second row empty" — an empty second row and "I only want one row" are different things. The two rows **scroll horizontally independently**: a phone fits four or five keys per row, so put the common ones on the first row and the rest on the second; that beats a dozen keys in one long queue, because your finger knows which row it is on and scrolling one does not drag the other. Switching back to one row **appends the second row's keys to the end of the first** (the server computes it the same way; "stored but not shown" is the most annoying state there is).
 
-编辑器分两层，落盘也是两层（`{rows, keys, bar}`）：
+The editor has two layers, and so does what gets persisted (`{rows, keys, bar}`):
 
-- **`keys` = 「我的按键」**：所有按键的**定义**，每个带一个 `id`。新增、改名字 / 按键谱 / 宽 / 两下、彻底删掉都在这儿。
-- **`bar` = 软键条**：每行一串 **id**，指向「我的按键」里的定义。
+- **`keys` = "My keys"**: the **definitions**, each with an `id`. Adding, renaming, editing the key spec / width / double-tap, and deleting for good all happen here.
+- **`bar` = the bar**: each row is a list of **ids** pointing into "My keys".
 
-条上存 id 而不是整份定义，为的是「条上的键是从我的按键里**选**出来的」，不是搬过去的：
+The bar stores ids rather than whole definitions so that keys on the bar are **chosen from** your library rather than moved into it:
 
-- 同一个键**能在两行各放一个**（Esc 第一行来一个、第二行也来一个），拖上去库里那个不动；
-- 改一处定义，条上所有引用一起变；
-- ✕ 只是去掉一个引用，定义还在库里，随时再拖上去。删定义会把条上的引用一起清掉（顺手 toast 说清了几处 —— 不然就是「保存完少了个键」）。
+- the same key **can sit on both rows** (an Esc on row one and another on row two), and dragging one up leaves the library copy alone;
+- edit a definition once and every reference on the bar changes with it;
+- ✕ only removes a reference — the definition stays in the library, ready to be dragged up again. Deleting a definition also clears its references from the bar (with a toast saying how many, otherwise it reads as "a key went missing after saving").
 
-**内置预设不单独占一片**：六十多个键铺出去比整页都长，而且看着像能编辑其实不能。现在只有一个「载入预设」按钮，一下把预设全灌进「我的按键」（按「名字 + 干什么」去重），之后每个都能自己改。所以「我的按键」的上限（120）比条上能放的多得多 —— 定义只占一行 JSON，不占屏幕。
+**Built-in presets do not get their own shelf**: sixty-odd keys laid out is longer than the entire page, and they look editable while not being so. There is a single "Load presets" button that pours them all into "My keys" (deduplicated by name + what it does), after which every one of them is yours to edit. That is why the cap on "My keys" (120) is far higher than what fits on the bar — a definition is one line of JSON, it does not cost screen space.
 
-老配置（「排第几行」长在按键上的 `row` / `off`）第一次读到时自动迁成这两层，已经调好的软键条不会因为升级白丢。
+Old configs (where "which row" lived on the key itself as `row` / `off`) are migrated to the two layers on first read, so a bar you already tuned is not lost to an upgrade.
 
-拖动是**按住 250ms 才算拿起**（触屏；鼠标走 6px 就算拖）。这一页要能上下滚，而键本身就是拖动的把手 —— 手指落在键上往下划，是滚页面还是拖这个键，只能靠「有没有按住」区分。给键写死 `touch-action: none` 页面就滚不动了（键铺满整页），`pan-y` 又会把「往下拖到第二行」吃成滚动。拿起来之后在 `touchmove` 上 `preventDefault` 挡住滚动 —— 手指在按住期间没动过，浏览器还没开始滚，这时候拦得住。
+Dragging requires **a 250ms hold** on touch (a mouse only needs 6px of travel). This page has to scroll vertically, and the keys themselves are the drag handles — a finger that lands on a key and moves down is either scrolling the page or dragging that key, and only "did you hold" separates the two. Hard-coding `touch-action: none` on the keys stops the page scrolling (the keys cover it); `pan-y` eats "drag down to the second row" as a scroll. Once picked up, `preventDefault` on `touchmove` blocks scrolling — the finger has not moved during the hold, the browser has not started scrolling yet, so it is still interceptable.
 
-- 「按键」一栏写**按键谱**，空格分隔可以连发多下 —— `ctrl+b c` 就是 herdr 的前缀加 c，一下点出来。
-- 支持 `ctrl+x` `alt+x` `shift+tab`、具名键（`esc tab enter space bs del ins up down left right home end pgup pgdn f1-f12`）、原样文本。
-- 原样文本两种写法等价：`"herdr" enter` 和 `text:/new enter`（`text:` 是给平板手输准备的 —— 编辑器里本来就有 `sticky:` / `act:` 前缀，找引号反而麻烦；带空格的仍要引号：`text:"git status"`）。
-- 预设分 8 组（前缀 / 标签 / Pane / 工作区 / 终端按键 / 文本 / Claude 命令 / 网页端动作），「载入预设」一下全进「我的按键」。herdr 那几组抄的是 `herdr --default-config` 的 `[keys]` 默认值，改过 keybinding 的人自己改；「Claude 命令」是 `/new` `/clear` `/compact` `/usage` `/context` `/model` `/resume` `/cost`，都带回车，一下点完。
-- 每个键有个**「两下」**勾选框：勾上的键要点两次才真发出去 —— 第一下只是举起来（键变红，文字不变，免得按键变宽把手指底下的键挪走），3 秒不点、或者点了别的键就放下。软键条上键挨得近，关 pane / 关标签这种误触没法撤销。预设里 `关 pane` `关标签` `关工作区` `断开` `/clear` 默认就带。
-- `Ctrl` / `Alt` 是**粘滞**的：点一下亮起，再敲一个字母就发出对应组合键，然后自动灭掉。手机虚拟键盘的 keydown 不可靠，所以这层是在数据流上做的，不依赖按键事件。写法是 `sticky:ctrl` / `sticky:alt`。
-- `act:` 是**网页端自己处理**的动作，不发任何字节：`act:kbd` 呼出 / 收起系统键盘，`act:img` 传图（弹相机 / 相册，路径按「发件箱开没开」决定去草稿还是直接敲进终端），`act:panes` 开「面板一览」（上面那节），`act:clip` 把机器上的剪贴板取到手机剪贴板，`act:paste` 把手机剪贴板粘进终端（后两个见「[手机上怎么复制 / 粘贴](#手机上怎么复制--粘贴)」——**手机上这两条只能是点出来的**，浏览器不给定时器碰剪贴板）。服务端只认白名单里这几个，写错了保存时就报错，不会下发一个点了没反应的键。
-  `act:panes` 放在软键条上是有讲究的：手机上键盘一弹起来顶栏整段就收掉了，那时候顶栏那个入口点不到，而软键条正好在拇指底下。
-- 按键谱在**服务端**解析成字节再下发，前端只管照发；写错了保存时会告诉你是第几个按键、哪里不认。回包里 `send` 是**解析好的字节**、`spec` 是你写的谱 —— 编辑器回传时两个字段都在，服务端**认 `spec`**。拿 `send` 当谱重解一次的话，Tab 的 `"\t"` 去掉空白就是空串，报「按键谱是空的」而用户什么都没改（踩过）。
+- The "Keys" field takes a **key spec**; space-separated entries fire in sequence — `ctrl+b c` is herdr's prefix plus c, one tap.
+- Supports `ctrl+x` `alt+x` `shift+tab`, named keys (`esc tab enter space bs del ins up down left right home end pgup pgdn f1-f12`) and literal text.
+- Two equivalent ways to write literal text: `"herdr" enter` and `text:/new enter` (`text:` exists for typing on a tablet — the editor already has `sticky:` / `act:` prefixes, and hunting for quote characters is worse; text with spaces still needs quotes: `text:"git status"`).
+- Presets come in 8 groups (Prefix / Tabs / Pane / Workspace / Terminal keys / Text / Claude commands / Web actions); "Load presets" drops all of them into "My keys". The herdr groups are copied from the `[keys]` defaults of `herdr --default-config` — if you changed your keybindings, change these too. "Claude commands" is `/new` `/clear` `/compact` `/usage` `/context` `/model` `/resume` `/cost`, all with Enter, one tap each.
+- Every key has a **"double-tap"** checkbox: those keys only fire on the second tap — the first only arms it (the key turns red, the label does not change, so the key does not get wider and shove its neighbours out from under your finger), and it disarms after 3 seconds or when you tap something else. Keys sit close together on this bar, and misfiring "close pane" or "close tab" cannot be undone. `Close pane`, `Close tab`, `Close workspace`, `Detach` and `/clear` ship with it on.
+- `Ctrl` / `Alt` are **sticky**: tap once to light it up, then type a letter and the combination is sent, after which it turns itself off. Mobile virtual keyboards produce unreliable `keydown`, so this layer works on the data stream rather than on key events. The spec is `sticky:ctrl` / `sticky:alt`.
+- `act:` actions are **handled in the browser** and send no bytes: `act:kbd` shows/hides the system keyboard, `act:img` uploads an image (camera / library; the path goes to your draft or straight into the terminal depending on whether the outbox is open), `act:panes` opens the pane list (previous section), `act:clip` fetches the machine's clipboard into your phone's clipboard, and `act:paste` pastes your phone's clipboard into the terminal (the last two are explained in [Copy and paste on a phone](#copy-and-paste-on-a-phone) — **on a phone these two can only be tapped**, browsers do not let a timer touch the clipboard). The server only accepts this whitelist; a typo is rejected at save time rather than shipped as a key that does nothing when tapped.
+  `act:panes` on the bar is deliberate: on a phone the whole top bar collapses the moment the keyboard comes up, so the top-bar entry is unreachable exactly when the soft key bar is right under your thumb.
+- Key specs are parsed into bytes **on the server** and handed down; the frontend just sends them. A bad spec is reported at save time, telling you which key and where it stopped making sense. In the response `send` is **the parsed bytes** and `spec` is what you wrote — the editor sends both back and the server **trusts `spec`**. Re-parsing `send` as a spec would turn Tab's `"\t"` into an empty string after trimming and report "the key spec is empty" while the user changed nothing (been there).
 
-## 手机
+## Phones
 
-xterm.js 的触屏支持基本只有「点一下聚焦隐藏 textarea」，剩下全靠自己补。有程序在收鼠标上报时（herdr 这种），触屏手势整个由本项目接管：
+xterm.js's touch support is essentially "tap to focus the hidden textarea"; the rest is ours. When a program has mouse reporting on (herdr does), touch gestures are taken over entirely by this project:
 
-| 手势 | 行为 |
+| Gesture | Behaviour |
 |---|---|
-| 单指纵向滑动 | 按行高换算成 SGR 滚轮上报 `CSI < 64/65 ; col ; row M` 发给程序；没开鼠标上报时滚本地 scrollback |
-| 单击 | 有鼠标上报时发 `CSI < 0 ; col ; row M/m` 给程序（点 pane、点 tab 都好使）且**不弹系统键盘**；没有鼠标上报时聚焦隐藏 textarea（点一下就是想打字）|
-| 长按（≈380ms）| **抓住**：按下左键不松手 + `CSI < 32` 上报移动，之后滑动就是拖 —— herdr 的「拖 pane 边框改大小」在手机上靠这条。松手补 `m` 发松开 |
-| 双击 | 显示 / 收起系统键盘 |
+| One-finger vertical swipe | Converted to SGR wheel reports by line height — `CSI < 64/65 ; col ; row M` — and sent to the program; with mouse reporting off it scrolls the local scrollback |
+| Tap | With mouse reporting, sends `CSI < 0 ; col ; row M/m` (clicking panes and tabs both work) and **does not pop the system keyboard**; without it, focuses the hidden textarea (a tap there does mean "I want to type") |
+| Long press (≈380ms) | **Grab**: press the left button and hold, plus `CSI < 32` motion reports, so moving afterwards is a drag — this is how you resize herdr's pane borders on a phone. Releasing sends the matching `m` |
+| Double tap | Show / hide the system keyboard |
 
-抓取**只认长按**。曾经试过「手指落在框线附近就立刻抓」，翻车了：agent 自己画的框（Claude Code 每个 pane 一个圆角框）竖边同样贯穿整屏，从字符层面和 herdr 的 pane 边框分不出来，于是在框边上一划就变成往 agent 里拖鼠标 —— 手指想滚屏，屏幕上却在选文字。**滑动永远是滑动**，换挡要先按住。
+Grabbing **only happens on a long press**. "Grab immediately when the finger lands near a border" was tried and failed: agents draw their own boxes (Claude Code puts a rounded frame around each pane) whose vertical edges also run the full height, indistinguishable from herdr's pane borders at the character level — so a swipe along a frame turned into dragging the mouse inside the agent: the finger wanted to scroll, the screen was selecting text. **A swipe is always a swipe**; changing gear requires holding first.
 
-按住之后按**像素吸附**到附近的贯穿线（`SNAP_PX = 24`，约一根手指的落点误差），不是按格数。这条也是踩出来的：原来只允许差一格，而平板上 211 列宽的屏幕一格才 ~6px，手指偏十几个 px 就把 press 落进 pane 里，agent 收到一次拖动、屏幕上什么也没发生 —— 表现就是「手机上根本拖不动 pane」。
+After the hold it **snaps by pixels** to a nearby full-length line (`SNAP_PX = 24`, about the error of one fingertip), not by cells. Also learned the hard way: it used to allow one cell of error, but a tablet 211 columns wide has ~6px cells, so being a dozen pixels off dropped the press inside the pane — the agent got a drag, the screen did nothing, and it felt like "you simply cannot drag panes on a phone".
 
-只认**贯穿的长线**（框线字符占了这一列 / 这一行 70% 以上、至少 6 格），agent 画的短横线（消息分隔、「2 new messages」那种）都挡在外面。挡不住的是 agent 的外框竖边，但既然只是「按下点挪最多 24px」，猜错了也就是这一次拖动落在框边上。代价：2×2 布局里那条横向分界只占半屏宽，吸不到，得按准一点。
+Only **full-length lines** count (box-drawing characters covering 70% or more of that column / row, at least 6 cells), which keeps out the short rules agents draw (message separators, "2 new messages"). What it cannot keep out is the agent's own outer frame, but since the effect is "the press moves at most 24px", guessing wrong just means this one drag lands on a frame. The cost: in a 2×2 layout the horizontal divider is only half the screen wide, so it does not snap and you have to be accurate.
 
-长按期间允许手指飘 16px（`HOLD_SLOP`）。原来是 8px，太苛刻 —— 按住不动的手指本来就会飘十几个 px，一飘长按就被撤销，表现是「长按没反应」。没开鼠标上报的普通 shell 下不抓取（那儿拖一下没有意义），长按仍然是「什么都不做」。
+The finger is allowed to drift 16px during the hold (`HOLD_SLOP`). It was 8px, which was too strict — a finger holding still drifts a dozen pixels anyway, and any drift cancelled the long press, which reads as "long press does nothing". With mouse reporting off (a plain shell) there is no grabbing, and a long press keeps doing nothing.
 
-端到端验过：在一个独立的 herdr session 里竖分屏，长按分界线**右边 3 格**再拖，分界从第 45/46 列移到 40/41 列；正好在贯穿竖线上竖划，发出去的仍然只有滚轮上报。
+Verified end to end: in a separate herdr session with a vertical split, long-pressing **3 cells to the right** of the divider and dragging moved it from column 45/46 to 40/41; swiping vertically right on the divider still emitted nothing but wheel reports.
 
-### 手机上怎么复制 / 粘贴
+### Copy and paste on a phone
 
-先说结论：手机上要**两个软键**（设置 →「软键条」→ 载入预设，「网页端动作」组里的
-**📋 取** 和 **📥 粘**，拖到条上）。原因是下面两条，一条比一条反直觉。
+The conclusion first: on a phone you want **two soft keys** (Settings → Soft keys → Load presets; **📋 Fetch** and **📥 Paste** in the "Web actions" group, dragged onto the bar). The two reasons below get progressively less intuitive.
 
-**第一条：herdr 复制到的是「跑 herdr 那台机器」的剪贴板，不是手机的。**
+**First: herdr copies to the clipboard of the machine running herdr, not your phone's.**
 
-手机上长按拖选（那一下会被翻成鼠标拖动发给 herdr，配上 herdr 自己的 `copy_on_select` 就是
-一次复制），herdr 弹「copied 84 chars to clipboard」——**那 84 个字进的是 Mac 的剪贴板**
-（`pbpaste` 读出来一字不差），浏览器一无所知，手机上哪儿都粘不出来。看着像「复制失败」，
-其实是复制成功了、只是落在另一台设备上。
+Long-press and drag to select on a phone (that gets translated into a mouse drag for herdr, and with herdr's own `copy_on_select` it is a copy), herdr says "copied 84 chars to clipboard" — and **those 84 characters went into the Mac's clipboard** (`pbpaste` reads them back verbatim). The browser knows nothing about it and there is nowhere on the phone to paste it. It looks like copying failed; it succeeded, just onto another device.
 
-所以有了 **📋 取**（`act:clip`）：点一下，服务端读机器上的剪贴板（`pbpaste` /
-`wl-paste` / `xclip`，见 `internal/clip`）交给网页，网页写进手机剪贴板。之后在手机上随便哪儿
-长按粘贴都是它。
+Hence **📋 Fetch** (`act:clip`): tap it, the server reads the machine's clipboard (`pbpaste` / `wl-paste` / `xclip`, see `internal/clip`) and hands it to the page, which writes it into the phone's clipboard. From there, long-press-paste anywhere on the phone gets you that text.
 
-反方向是 **📥 粘**（`act:paste`）：点一下读手机剪贴板，按**括号粘贴**送进终端（多行不会被
-当成一行一次回车）。触屏上没法 `⌘V`，也没法长按呼出终端的粘贴菜单（单指手势被接管了），
-这个键是唯一的入口。
+The other direction is **📥 Paste** (`act:paste`): tap it to read the phone's clipboard and send it into the terminal as a **bracketed paste** (so several lines are not treated as one line plus an Enter). Touch has no `⌘V`, and it cannot long-press to raise the terminal's own paste menu either (single-finger gestures are taken over), so this key is the only way in.
 
-**为什么不能做成一个「自动同步」**：浏览器只在**用户手势**里给读写剪贴板，定时器里偷偷做
-一律被拒 —— 而且是静默的。所以两个方向各要一次点击，这一下是浏览器的硬要求，不是没做。
+**Why this cannot be an automatic sync**: browsers only grant clipboard access inside **a user gesture**, and a timer trying to do it quietly is denied — silently. So each direction costs one tap. That tap is a browser requirement, not a missing feature.
 
-触屏上**选不了字**（单指手势整个被上面那套接管了），所以另一条复制路径是 **herdr 自己的
-COPY 模式**：`ctrl+b` 前缀进去，`hjkl` 选、`y` 复制。它走 **OSC 52** —— 终端里的程序把文本推给
-网页，网页再写系统剪贴板。
+Touch **cannot select text at all** (single-finger gestures are entirely taken over), so the other copy route is **herdr's own COPY mode**: `ctrl+b` prefix to enter, `hjkl` to select, `y` to copy. That goes through **OSC 52** — the program inside the terminal pushes text to the page, and the page writes the system clipboard.
 
-**但浏览器不一定让写，而且以前是静默失败的。** 两条限制叠在一起：`navigator.clipboard` 只在
-安全上下文里存在（局域网 http 上压根没这个对象），而且手机浏览器要求这一次写发生在**用户
-手势**里。COPY 模式和「选中即复制」的触发点都不是点击，于是在手机上被拒 —— 屏幕上选区好好的、
-一句提示都没有，剪贴板里还是上一次的东西。
+**But the browser may refuse to write, and it used to fail silently.** Two constraints stack: `navigator.clipboard` only exists in a secure context (over plain http on a LAN the object is simply absent), and mobile browsers require the write to happen inside **a user gesture**. Neither COPY mode nor "copy on select" is triggered by a click, so on a phone it was denied — a perfectly good selection on screen, not a word of feedback, and the clipboard still holding whatever it held before.
 
-现在写不进去就在底部出一条**「点一下复制」**：那一下点击本身就是手势，按一下就进剪贴板。
-连 `execCommand` 也被拒的话，它把文本摊在一个**已经全选好**的框里，长按 → 「拷贝」。
+Now, when the write fails, a **"tap to copy"** strip appears at the bottom: that tap is itself the gesture, and one press puts it in the clipboard. If even `execCommand` is denied, it lays the text out in a box that is **already fully selected**, ready for long-press → "Copy".
 
-还有一个**桌面上也会踩**的坑：**标签页不可见时 Chrome 让 `writeText` 那个 promise 永远挂着**
-（实测 26 秒既不 resolve 也不 reject，剪贴板也确实没变）。光 `await` 的话「写不进去」永远发现
-不了，所以那一步有 1.2 秒上限，超时就当失败、往后面两条路走。
+There is one more that **bites on the desktop too**: **while the tab is not visible, Chrome leaves that `writeText` promise pending forever** (measured: 26 seconds, neither resolved nor rejected, and the clipboard really had not changed). A plain `await` there means "it failed to write" is never discovered, so that step has a 1.2 second cap and treats a timeout as failure, falling through to the two routes above.
 
-两条相关的：
+Two related notes:
 
-- **「选中即复制」是鼠标那一档的设置**，触屏上没有选区，手机上开它不起作用。
-- 想在电脑上看那条提示长什么样：URL 上加 **`?nocopy=1`**，两条写剪贴板的路都当成失败
-  （和 `?poll=` / `?push=` 一样是调试参数）。
+- **"Copy on select" is a mouse-era setting**; touch has no selection, so turning it on does nothing on a phone.
+- To see what that strip looks like on a desktop, add **`?nocopy=1`** to the URL: both clipboard-write routes are forced to fail (a debug parameter, like `?poll=` / `?push=`).
 
-为什么要这么绕：xterm.js 只把 `wheel` 翻译成鼠标上报、完全不管 touch，所以 herdr 这种「占着备用屏幕（本地没 scrollback 可滚）+ 开了鼠标上报」的程序在手机上两头都不响应，彻底滚不动。而点击和长按又都会落到隐藏 textarea 上，浏览器顺手就把键盘顶出来 —— 在 TUI 里十次里有九次只是想点个 pane，不是想打字。
+Why all this ceremony: xterm.js only translates `wheel` into mouse reports and ignores touch entirely, so a program like herdr — sitting on the alternate screen (no local scrollback to scroll) with mouse reporting on — responds to neither on a phone and simply cannot be scrolled. Meanwhile taps and long presses land on the hidden textarea, and the browser helpfully pops the keyboard — while in a TUI, nine times out of ten you were only trying to tap a pane.
 
-做法是在 `touchstart` 上**无条件** `preventDefault`（单指手势），一次性掐掉聚焦、长按气泡、双击缩放和浏览器补发的兼容鼠标事件，然后自己在 `touchend` 里按位移和时长把手势分成上面几类。
+The approach is to `preventDefault` **unconditionally** on `touchstart` (single-finger gestures), which kills focusing, the long-press bubble, double-tap zoom and the browser's synthesized mouse events in one go, and then classify the gesture ourselves in `touchend` by distance and duration.
 
-**为什么连「没有鼠标上报」的时候也要吃掉**：不吃的话浏览器会补发兼容鼠标事件，xterm 当成「按下 + 拖选」——手指一滑变成选中文字、终端一动不动（还没 attach herdr、或者 pane 里跑着不收鼠标的程序时必现）。触屏上想滚屏远比想选字常见，所以这里选滚屏。代价：触屏不再能拖选（要复制用桌面鼠标，或者 herdr 自己的 COPY 模式），点一下也不再由浏览器顺手聚焦 textarea，改成自己在 `touchend` 里 focus。
+**Why swallow it even when there is no mouse reporting**: otherwise the browser synthesizes mouse events, xterm reads them as "press + drag-select", and a swipe turns into selected text with a motionless terminal (guaranteed to happen before herdr is attached, or when the pane runs something that ignores the mouse). Wanting to scroll is far more common than wanting to select on touch, so scrolling wins. The cost: touch can no longer drag-select (use a desktop mouse, or herdr's COPY mode), and a tap no longer focuses the textarea for free — we focus it ourselves in `touchend`.
 
-**手势时长用事件自带的时间戳**（`e.timeStamp`），不是处理函数里的 `Date.now()`。终端忙着重绘时定时器和事件派发都会被推后，实测一次 60ms 的点击在处理函数里量出来是 994ms，于是被「超过 500ms 算长按，什么都不做」挡掉 —— 表现就是「输出一多点哪儿都没反应」。事件时间戳是事件产生时打的，不受处理延迟影响。
+**Gesture duration comes from the event's own timestamp** (`e.timeStamp`), not `Date.now()` in the handler. When the terminal is busy repainting, both timers and event dispatch get pushed back: a 60ms tap measured 994ms inside the handler and was rejected by "over 500ms is a long press, do nothing" — which reads as "when there is a lot of output, nothing responds anywhere". The event timestamp is taken when the event is created and is immune to handler delay.
 
-**换 pane 不靠盲敲**：顶栏 ▦ 或软键条上的 `act:panes` 开「面板一览」，点一行直接跳过去并铺满
-（见上面那节）。按键那条通道只能表达「下一个 tab」这种相对导航，而中间每一步的屏幕正好都是
-手机上读不了的那个平铺状态。
+**Switching panes does not have to be blind**: ▦ in the top bar or `act:panes` on the soft key bar opens the pane list, and a tap takes you there zoomed (see that section). The key channel can only express relative navigation like "next tab", and every screen along the way is exactly the tiled state you cannot read on a phone.
 
-连上时也不自动抢焦点（触屏设备），否则一连上键盘就顶出来。要打字：双击终端，或点软键条最左边的 ⌨。键盘状态跟着 textarea 的 focus/blur 走，所以用户自己收起键盘时按钮高亮也会跟着灭。
+Focus is not stolen on connect on touch devices, otherwise the keyboard pops up the moment you arrive. To type: double-tap the terminal, or tap the ⌨ at the left end of the soft key bar. Keyboard state follows the textarea's focus/blur, so dismissing the keyboard yourself also unlights the button.
 
-**顶栏在手机上收成一行**：状态只留那个彩点（完整文字进 `title`）、连上之后不显示「连接」、字号 `A−/A+` 和明暗 `◐` 挪进设置 →「终端」页。七个图标在 393px 上排不下，折成两行就白吃掉 ~36px（约三行终端），而这三个都是一次调完的东西。
+**The top bar collapses to one line on phones**: status keeps only the coloured dot (full text moves into `title`), "Connect" disappears once connected, and font size `A−/A+` plus light-dark `◐` move into Settings → Terminal. Seven icons do not fit in 393px, and wrapping to two lines burns ~36px (about three terminal rows) for three things you adjust once.
 
-**键盘一弹起来，顶栏整条收掉**，只留 8px 的一条缝（点一下放回来）。那一刻可见高度只剩 ~430px，而顶栏里的东西那时候一个都用不上 —— 正在打字的人要的是软键条和发件箱，「连接」是连之前的事。收起是临时的：手动点开只管这一次，键盘一收就自动恢复常态，不留状态（否则下次打字时顶栏在不在全靠碰）。
+**When the keyboard comes up, the whole top bar collapses** to an 8px sliver (tap to bring it back). Visible height is down to ~430px at that moment, and nothing in the top bar is of any use then — someone who is typing wants the soft key bar and the outbox; "Connect" was a before-you-connected concern. The collapse is temporary: opening it by hand is for this once, and it returns to normal when the keyboard goes away, with no state left behind (otherwise whether the top bar is there next time you type is a coin flip).
 
-判断键盘弹没弹用的是 **visualViewport 被压掉多少**（`hooks/useKeyboardUp.ts`，阈值 0.8），不是「xterm 那个隐藏 textarea 聚焦了没有」：这个项目最常见的姿势是**在发件箱里口述**，那时候焦点在发件箱上，终端那边一无所知，而键盘照样占掉半个屏幕。两个信号一起用（对着终端打字时前者不动、后者认得出来）。认不出来也不影响正确性 —— 那儿就退化成「顶栏不收」。
+Whether the keyboard is up is decided by **how much visualViewport shrank** (`hooks/useKeyboardUp.ts`, threshold 0.8), not by "is xterm's hidden textarea focused": the most common posture in this project is **dictating into the outbox**, where focus is on the outbox and the terminal knows nothing, while the keyboard still eats half the screen. Both signals are used together (typing into the terminal moves the second, not the first). Failing to detect it costs no correctness — it degrades to "the top bar does not collapse".
 
-**虚拟键盘不会再盖住内容**：页面高度跟 `visualViewport` 走，并给 viewport meta 加了 `interactive-widget=resizes-content`。光重排终端不够 —— iOS 的键盘**从不**缩布局视口，`height:100%` 指的是没缩过的那个，键盘会直接盖住软键条和发件箱。
+**The virtual keyboard no longer covers content**: page height follows `visualViewport`, and the viewport meta carries `interactive-widget=resizes-content`. Reflowing the terminal alone is not enough — iOS **never** shrinks the layout viewport for the keyboard, `height:100%` refers to the unshrunk one, and the keyboard would simply cover the soft key bar and the outbox.
 
-**但这套不是每个浏览器都认**（实测某些国产浏览器里页面高度纹丝不动，发件箱照样被埋一半），所以底下那块能用手拖，不依赖浏览器行为。
+**But not every browser honours this** (measured: in some browsers the page height does not budge and half the outbox stays buried), so the dock down there can be dragged by hand and does not depend on browser behaviour.
 
-### 底部面板
+### The bottom dock
 
-发件箱和软键条是**同一块面板**（`web/src/components/Dock.tsx`）：一套边框、一个宽度，一次调完。
+The outbox and the soft key bar are **one dock** (`web/src/components/Dock.tsx`): one border, one width, adjusted once.
 
-以前它们各管各的 —— 发件箱能抓着 ⠿ 从底部「撕」下来变成浮动面板（自己一套位置 / 大小 / 边框），软键条自己一套左右留白和高度。两块叠在一起就是两条边框、两种宽度、两套把手，看着像错位的两层，而「把底下这一坨从输入法上挪开」得分别调两次。现在整块一起缩：
+They used to be independent — the outbox could be torn off the bottom by its ⠿ handle into a floating panel (its own position / size / border) and the soft key bar had its own insets and height. Stacked, that is two borders, two widths and two sets of handles, looking like two misaligned layers, and "move this stuff off the IME" had to be done twice. Now the whole block shrinks together:
 
-- **左 / 右两条侧边**左右拖，改那一边的边界（横向改宽度）。输入法连着它那圈工具条常常压住半边屏幕，把整块面板缩到剩下的空地上，比整条通屏挤在键盘底下有用。
-- **键那一区上边缘的三个把手是两轴的**：上下拖 = 软键条多高（**最多半屏**，放不下的部分上下滚），左右拖 = 左边那个动左边界、右边那个动右边界、中间那个整条平移（宽度不变）。每个方向都有 3px 死区，只想横着拖不会顺手把高度锁成定高。
-- 软键条按键**换行**排（不再是一条横向滚动的长龙）。没拖过高度是自动的、封顶两排（不留空白）；拖过之后是定高 —— 用户明确要求「更高」就别自作聪明缩回内容高度。任意把手**双击复位**（宽度和高度一起）。
-- 面板里的东西按**面板自己的宽度**折行（`@container` + `@max-3xl:`），不是按视口宽度：缩到半屏之后视口还是那么宽，按视口算的话发件箱那排控件会挤成一团。
-- 左右留白换了个存储键（`dockInset`，旧的 `softkeysInset` 不再读）：以前那份只缩键那一条，现在缩的是整块，语义不一样 —— 直接套过来的话升级后一开页面会发现发件箱莫名其妙只剩半屏宽。
+- **The left and right edges** drag horizontally to move that side's boundary (width). An IME plus its toolbar routinely covers half the screen; shrinking the whole dock into the space that is left beats keeping it full width under the keyboard.
+- **The three handles on the top edge of the key area are two-axis**: dragging vertically sets the soft key bar's height (**half the screen max**, overflow scrolls), dragging horizontally moves the left boundary (left handle), the right boundary (right handle) or the whole dock (middle, width unchanged). Each direction has a 3px dead zone, so a purely horizontal drag does not accidentally pin the height. **Double-tap any handle to reset** (width and height together).
+- Soft keys **wrap** rather than forming one long horizontally-scrolling queue. Untouched, the height is automatic and capped at two rows (no empty space); once dragged, it is fixed — when the user explicitly asked for "taller", do not helpfully shrink back to content height.
+- Content inside the dock wraps by **the dock's own width** (`@container` + `@max-3xl:`), not the viewport's: after shrinking to half the screen the viewport is still as wide as ever, and viewport-based breakpoints would cram the outbox controls together.
+- The insets moved to a new storage key (`dockInset`; the old `softkeysInset` is no longer read): the old one only shrank the key row, the new one shrinks the whole dock, and the semantics differ — reusing it would mean opening the page after an upgrade to find the outbox mysteriously half a screen wide.
 
-**手机竖屏（< 440px）是另一档**：一整套把手都不出，面板通屏，软键条**一行横滑**、键小一号（字号 13→11.5px，高 35→28px）。
+**Phones in portrait (< 440px) are a different tier**: no handles at all, the dock spans the full width, and the soft key bar becomes **one horizontally-scrolling row** with smaller keys (13→11.5px, 35→28px high).
 
-- 那么窄的屏上把手是负收益：三条把手加起来 24px 高（约两行终端），而左右本来就没有空地可让 —— 那一档的输入法是整条压在底下的，不是压半边。
-- 键**换行**更亏：每多一排就少一排终端。横滑只花一次划的功夫，而且常用的那几个键本来就在最前面（顺序你自己排）。要两行就在设置里明确开两行（见「软键条」那节），每行各自横滑。
-- 断点写在两处，改一个就得改另一个：`index.css` 的 `--breakpoint-phone`（给 Tailwind 的 `max-phone:` 变体）和 `hooks/usePhone.ts` 的 `PHONE_MAX`（给行内 style 和「要不要渲染把手」——这两样 CSS 盖不掉）。
-- 宽度一过线（转横屏、平板、桌面）把手和存着的那份尺寸自己就回来了，两档互不影响。
+- On a screen that narrow the handles are a net loss: three of them add 24px (about two terminal rows), and there is no free space at the sides to give away anyway — at that size the IME covers the full width, not half.
+- Wrapping keys costs more: every extra row is one less terminal row. Scrolling costs one swipe, and the keys you use are at the front anyway (you ordered them). If you want two rows, turn them on explicitly (see [Soft key bar](#soft-key-bar)); each row scrolls on its own.
+- The breakpoint is written in two places and both must change together: `--breakpoint-phone` in `index.css` (for Tailwind's `max-phone:` variant) and `PHONE_MAX` in `hooks/usePhone.ts` (for inline styles and for "render the handles at all" — CSS cannot override those).
+- Cross the width threshold (rotate, tablet, desktop) and the handles plus your stored sizes come back on their own. The two tiers do not affect each other.
 
-**浮动发件箱去掉了。** 想把它挪出输入法的话现在只有「整块横向缩」这一条路（这也是实际在用的那条：那台平板的输入法压的是半边屏幕）。真需要竖着挪，再把 `useFloatBox` 那套加回来 —— 但别再让它自己长一套边框。
+**The floating outbox is gone.** Moving it away from the IME now has exactly one route: shrink the whole dock horizontally (which is the route actually in use — that tablet's IME covers half the screen). If moving it vertically ever becomes necessary, bring `useFloatBox` back — but do not let it grow its own border again.
 
-**把手不能贴着屏幕边**（`EDGE_SAFE = 14`）。安卓手势导航把屏幕左右各一条划给了侧滑返回 / 前进，那一条系统先吃，网页连 `touchstart` 都收不到 —— 贴边的把手就是拖不动（实测）。所以把手离屏幕边不足这么多时往里让，面板里的东西跟着让出同样的内边距，免得控件钻到把手底下；面板自己已经缩进来了就不用让。数值是真机上试的：按系统标称的 24dp 让，让出来那条太宽、看着像错位，而实际有效的侧滑判定比标称窄。哪天侧边把手又拖不动了，先怀疑这个数。
+**Handles must not touch the screen edge** (`EDGE_SAFE = 14`). Android gesture navigation claims a strip along each side for back/forward; the system takes it first and the page does not even receive `touchstart` — a handle on the edge simply cannot be dragged (measured). So handles inset themselves when they would come closer than that, and the dock's contents take the same padding so controls do not slide under a handle; a dock already shrunk inward needs no inset. The number came from a real device: insetting by the nominal 24dp left a strip that looked misaligned, and the effective swipe region is narrower than the nominal one. The day a side handle stops dragging again, suspect this number first.
 
-**横屏一套、竖屏一套**（`web/src/lib/oriented.ts`）。同一块面板在两种朝向下想要的尺寸位置根本不是一回事，共用一份的话每次转屏都得重摆，还会把另一份覆盖掉。所以底部面板的高度和左右留白按朝向分开存，转屏就换成那一份再收边（**读**那一份，而不是把手上这份挪一挪）。朝向按宽高比判断，不用 `screen.orientation` —— 桌面窗口、平板分屏下宽高比才是真正决定布局的东西。老版本存的那份（不带朝向后缀）会在第一次读到时迁到当前朝向名下，已经调好的设置不会因为升级丢掉。
+**One set for landscape, one for portrait** (`web/src/lib/oriented.ts`). The same dock wants entirely different sizes and positions in the two orientations; sharing one set means re-arranging it on every rotation and clobbering the other one. So the dock's height and insets are stored per orientation, and rotating swaps in that set and then clamps it (**reading** that set, not nudging the current one). Orientation is decided by aspect ratio rather than `screen.orientation` — with desktop windows and tablet split-screen, the aspect ratio is what actually decides the layout. Anything stored by an older version (without the orientation suffix) is migrated to the current orientation on first read, so a dock you already tuned survives the upgrade.
 
-横屏比竖屏好用很多（列数够）；字号用顶栏 `A− / A+` 调；顶栏还有个**全屏**按钮，地址栏和工具条一去终端能多好几行。iOS Safari 不给网页全屏（只有视频能），那边点了会提示改用「添加到主屏幕」，从主屏打开一样没有地址栏。
+Landscape is far more usable than portrait (enough columns); font size is on the top bar's `A− / A+`; the top bar also has a **fullscreen** button, and losing the address bar and toolbars is worth several terminal rows. iOS Safari does not grant fullscreen to web pages (only to video), so there it suggests "Add to Home Screen" instead — opening from the home screen has no address bar either.
 
-## 实测结论：herdr 在浏览器里是能正常用的
+## Verdict: herdr is genuinely usable in a browser
 
-herdr 启动时会请求这些终端能力（用 PTY 抓下来的），对照现在的实现：
+herdr requests these terminal capabilities at startup (captured off a PTY), against what is implemented here:
 
-| 序列 | 用途 | 状态 |
+| Sequence | Purpose | Status |
 |---|---|---|
-| `CSI ? 1049 h` | 备用屏幕 | xterm.js 原生 |
-| `CSI ? 1000/1002/1003 h` + `1006` | 鼠标点击/拖拽/移动 + SGR 坐标 | xterm.js 原生 |
-| `CSI ? 2004 h` | 括号粘贴 | xterm.js 原生 |
-| `CSI ? 1004 h` | 焦点进出上报 | xterm.js 原生 |
-| `CSI ? 2026 h` | 同步输出（防画面撕裂） | xterm.js 原生，另加了重绘看门狗（见下） |
-| `OSC 8` | 终端超链接 | xterm.js 原生，点击在新标签页打开 |
-| `OSC 52` | 程序写系统剪贴板 | ClipboardAddon |
-| `OSC 10;? / 11;?` | 查询前景/背景色（判断明暗） | xterm.js 不回，**本项目自己回** |
-| `CSI ? 2031 h` | 主题变更通知 | xterm.js 不支持，**本项目自己发** `CSI ? 997 ; 1/2 n` |
-| `CSI > 7 u` | kitty 键盘协议 | xterm.js 不支持，**本项目补了消歧子集** |
+| `CSI ? 1049 h` | Alternate screen | native to xterm.js |
+| `CSI ? 1000/1002/1003 h` + `1006` | Mouse click/drag/motion + SGR coordinates | native |
+| `CSI ? 2004 h` | Bracketed paste | native |
+| `CSI ? 1004 h` | Focus in/out reporting | native |
+| `CSI ? 2026 h` | Synchronized output (no tearing) | native, plus a repaint watchdog (below) |
+| `OSC 8` | Terminal hyperlinks | native; clicks open in a new tab |
+| `OSC 52` | Program writes the system clipboard | ClipboardAddon |
+| `OSC 10;? / 11;?` | Query foreground/background colour (to detect light/dark) | xterm.js does not answer — **this project does** |
+| `CSI ? 2031 h` | Theme change notification | unsupported by xterm.js — **this project emits** `CSI ? 997 ; 1/2 n` |
+| `CSI > 7 u` | kitty keyboard protocol | unsupported by xterm.js — **this project implements the disambiguate subset** |
 
-那几个开关在顶栏最右的 ⚙ →「终端」页里。**「程序请求的终端能力」那张列表去掉了**：它是当初补协议时的调试视图，日常没人看（能力本身还照样记着，`DEC 2031` 的主题通知要用）。
+Those switches live under ⚙ → Terminal. **The "capabilities the program requested" list was removed**: it was a debugging view from the days of implementing the protocols and nobody reads it day to day (the capabilities are still tracked — `DEC 2031` theme notifications need them).
 
-## 键盘
+## Keyboard
 
-herdr 的快捷键基本都是 `ctrl+b` 前缀加一个普通键，legacy 编码就能表达，所以不依赖 kitty 协议。kitty 协议补的是 legacy 表达不了的组合，默认开着（设置 →「终端」里可关）：`Ctrl+Shift+字母` → `CSI 编码;6u`、`Ctrl+数字` → `CSI 编码;5u`、`Ctrl+Enter` / `Shift+Enter` / `Ctrl+Tab`。
+herdr's shortcuts are almost all `ctrl+b` plus an ordinary key, which legacy encoding can express, so they do not depend on the kitty protocol. What kitty adds is the combinations legacy cannot express; it is on by default (turn it off in Settings → Terminal): `Ctrl+Shift+letter` → `CSI code;6u`, `Ctrl+digit` → `CSI code;5u`, `Ctrl+Enter` / `Shift+Enter` / `Ctrl+Tab`.
 
-**每个 herdr session 有自己的 socket**：默认 session 是 `~/.config/herdr/herdr.sock`，`herdr --session x` 是 `~/.config/herdr/sessions/x/herdr.sock`。发件箱连的是 `HERDR_WEB_SOCKET`「那一个」，所以要对着非默认 session 用发件箱，得把这个变量指过去。
+**Each herdr session has its own socket**: the default one is `~/.config/herdr/herdr.sock`, and `herdr --session x` is `~/.config/herdr/sessions/x/herdr.sock`. The outbox connects to whichever `HERDR_WEB_SOCKET` names, so using the outbox against a non-default session means pointing that variable at it.
 
-**`Esc` 也在里面，而且是最要紧的一个**：程序声明 kitty 的 disambiguate flag（`CSI > 1 u`，herdr 和 Claude Code 都会）之后，Esc 必须编成 `CSI 27 u`。bare `0x1b` 是**所有**转义序列的前缀，程序收到它没法立刻判断这是一次真实的 Esc 还是一段序列的开头，只能等超时或者丢掉 —— 表现就是「网页上按 Esc 没反应」，`/usage` 之类的浮层退不出来。软键条上的 `Esc` 和发件箱里转发的 Esc 走同一套编码（服务端解析出来的字节不知道 kitty 开没开，所以孤立的 ESC 到前端会按当前模式重编）。
+**`Esc` is in there too, and it is the important one**: once a program declares kitty's disambiguate flag (`CSI > 1 u` — herdr and Claude Code both do), Esc must be encoded as `CSI 27 u`. A bare `0x1b` is the prefix of **every** escape sequence, so a program receiving it cannot tell immediately whether this is a real Esc or the start of a sequence; it has to wait for a timeout or drop it — which shows up as "Esc does nothing on the web page" and overlays like `/usage` that will not close. The soft key bar's `Esc` and the one forwarded from the outbox use the same encoding (bytes parsed on the server do not know whether kitty is on, so a lone ESC is re-encoded on the frontend according to the current mode).
 
-抢不回来的键（浏览器自己吃掉）：macOS 上是 `⌘W` `⌘T` `⌘N` `Ctrl+Tab`；Windows/Linux 上还多 `Ctrl+W` `Ctrl+T` `Ctrl+N` `Ctrl+Shift+I/J/C`。真要用这些，把页面装成 PWA 能拿回一部分。
+Keys the browser keeps for itself: on macOS `⌘W` `⌘T` `⌘N` `Ctrl+Tab`; on Windows/Linux also `Ctrl+W` `Ctrl+T` `Ctrl+N` `Ctrl+Shift+I/J/C`. Installing the page as a PWA gets some of them back.
 
-复制 `⌘C`（或 `Ctrl+Shift+C`）· 粘贴 `⌘V` · 清屏 `⌘K` · `Option` 默认当 Meta。
+Copy `⌘C` (or `Ctrl+Shift+C`) · paste `⌘V` · clear `⌘K` · `Option` is Meta by default.
 
-## 代码结构
+## Code layout
 
 ```
-cmd/herdr-web/        main：flag、子命令、监听、启动横幅、网卡打分
+cmd/herdr-web/        main: flags, subcommands, listeners, startup banner, interface scoring
 internal/
-  config/             环境变量（viper，只认 env）、路径、部署形态（TLS 档位 / 暴露声明 / 白名单）
-  auth/               配对码 + 设备凭据（只存哈希）+ 限速封锁（gate.go）
-  acme/               DNS-01 自动签发和续期（只 import 用到的 provider，见包注释）
-  tlsgen/             本地 CA + 短期叶子证书 / 指定的真证书，都带热重载
-  ctl/                ~/.herdr-web/ctl.sock：子命令和跑着的服务之间的通道
-  herdr/              herdr socket 客户端（一次调用一条连接）
-  composer/           按 agent 分派抽输入框 + testdata 里的真机抓屏
-  agentwatch/         盯 agent 状态变化：打时间戳（面板一览的「几分钟前」）+ 攒提示
-                      （notice.go 防抖 / extract.go 读屏抽话，testdata 是真机抓屏）
-  outbox/             列目标 / 拉回 / 清空 / 投稿 / 推草稿
-  softkeys/           软键条配置 + 按键谱解析（data.go 是从旧 JS 版生成的，不是手抄的；
-                      testdata/js-snapshot.json 存着当时的快照，测试比对前 6 组）
-  uploads/            图片落盘（按魔数认类型）
-  files/              文件浏览：起点 / 列目录 / 按魔数认类型 / 短时签名链接（sign.go）。
-                      默认不设边界，配了 FILE_ROOTS 才是 jail —— 为什么、以及那四条
-                      「绝不 text/html」的硬规矩，都在包注释里
-  clip/               读这台机器的剪贴板（pbpaste / wl-paste / xclip）—— herdr 的复制
-                      落在**跑 herdr 那台机器**上，手机要拿到只能由这一侧读出来
-  server/             HTTP 路由 + PTY/WebSocket + 静态资源
-                      guard.go 是门卫（Host 白名单 / Origin / 安全响应头）
-                      authapi.go 是配对和设备管理的口
-                      session.go 是「一个 URL 一个 herdr session」的分派（每个 session
-                      一个 socket、一份发件箱、一条状态订阅）
-                      filesapi.go 是文件浏览的口 + /_f/ 那条**不带 cookie**的吐字节路
-  webui/              embed 前端产物（dist 由 make build 拷进来）
-  qr/                 启动时在终端画二维码
-  version/            版本号的唯一出处（goreleaser 用 ldflags 注进来）
-  selfupdate/         查 GitHub Releases + 缓存 + 下载校验 + 原地换二进制
-  service/            装成 launchd / systemd 常驻服务（plist / unit 生成 + 环境快照）
-assets/               图标（herdr 的羊关在浏览器窗口里）。**别手改 svg**，
-                      改 assets/make-logo.py 再跑一遍 —— 羊的剪影是从 herdr 复用的
-                      一条 1800+ 字符描图路径，而同一份图形要出圆角版 / 方角版 / 三种 png
-web/                  Vite + React + TS + Tailwind v4 + shadcn 风格组件
-  public/             图标和 manifest（Vite 原样拷进 dist，走 / 根路径）
-  src/term/           xterm.js 胶水：补协议、触屏手势、重绘看门狗（命令式，不套 React）
-                      paths.ts 把终端里的文件路径变成可点的链接（折行拼回、中文标点
-                      当终止符、截断过的不给链接 —— 每条都是实测踩出来的）
-  src/hooks/          useCompose（发件箱状态机）、useNotices（提示轮询 + 红点）、
+  config/             env vars (viper, env only), paths, deployment shape (TLS tier / exposure / allowlist)
+  auth/               pairing codes + device credentials (hashes only) + rate limiting (gate.go)
+  acme/               DNS-01 issuance and renewal (only imports the providers in use, see package doc)
+  tlsgen/             local CA + short-lived leaf, or a real certificate you supply; both hot-reload
+  ctl/                ~/.herdr-web/ctl.sock: the channel between subcommands and the running service
+  herdr/              herdr socket client (one connection per call)
+  composer/           per-agent input-line scraping + real captured screens in testdata
+  agentwatch/         watches agent state changes: stamps times (the pane list's "3 minutes ago")
+                      and queues notices (notice.go debounces, extract.go scrapes the screen;
+                      testdata holds real captures)
+  outbox/             list targets / pull back / clear / post / push draft
+  softkeys/           soft key config + key spec parsing (data.go is generated from the old JS version,
+                      not retyped; testdata/js-snapshot.json holds that snapshot and the test diffs
+                      the first 6 groups against it)
+  uploads/            image storage (type by magic number)
+  files/              file browsing: starting points / directory listing / type by magic number /
+                      short-lived signed links (sign.go). No boundary by default — FILE_ROOTS is
+                      the jail; why, and the four "never text/html" rules, are in the package doc
+  clip/               read this machine's clipboard (pbpaste / wl-paste / xclip) — herdr's copy lands
+                      on **the machine running herdr**, so the phone can only get it from this side
+  server/             HTTP routes + PTY/WebSocket + static assets
+                      guard.go is the doorman (Host allowlist / Origin / security headers)
+                      authapi.go is the pairing and device management endpoint
+                      session.go dispatches "one URL, one herdr session" (per session: a socket,
+                      an outbox, a status subscription)
+                      filesapi.go is the file browsing endpoint plus /_f/, the **cookie-less**
+                      byte-serving route
+  webui/              embedded frontend build (dist is copied in by make build)
+  qr/                 draws the QR code in the terminal at startup
+  version/            the single source of the version number (injected by goreleaser ldflags)
+  selfupdate/         query GitHub Releases + cache + download verification + in-place binary swap
+  service/            install as a launchd / systemd service (plist / unit generation + env snapshot)
+assets/               icons (herdr's sheep, caged in a browser window). **Do not hand-edit the svg** —
+                      edit assets/make-logo.py and rerun it: the sheep silhouette is an 1800+ character
+                      traced path reused from herdr, and one shape has to produce rounded / square
+                      variants plus three pngs
+web/                  Vite + React + TS + Tailwind v4 + shadcn-style components
+  public/             icons and manifest (copied verbatim into dist by Vite, served from /)
+  src/term/           xterm.js glue: protocol gap-filling, touch gestures, repaint watchdog
+                      (imperative, deliberately not wrapped in React)
+                      paths.ts turns file paths in the terminal into tappable links (reassembling
+                      wrapped lines, terminating on CJK punctuation, refusing truncated ones —
+                      every rule learned the hard way)
+  src/hooks/          useCompose (outbox state machine), useNotices (notice polling + red dot),
                       useViewportHeight
-  src/components/     Dock.tsx 是底部面板的外壳（发件箱 + 软键条共用的边框 / 宽度 / 高度）
-                      Notices.tsx 是右上角那几张提示卡
-                      FilesPanel.tsx 是文件浏览（起点列表 + 目录 + 粘路径的框）
-                      FileViewer.tsx 是看一个文件（图 / 文本），铺满整屏
-                      Pairing.tsx 是配对页（没配对时只渲染它）
-                      SettingsPanel.tsx 是设置面板，软键条编辑器和设备管理是它的两页
-                      QrScan.tsx 是配对页里的扫码器（BarcodeDetector + 后摄）
-reference/            最早的 Python 原型，那三份文档里的「已验证」都是拿它验的
-npm/herdr-web/        npm 根包 @bysir/herdr-web：一个 JS 壳，按平台找二进制
-scripts/npm-*.mjs     把 goreleaser 产物摊成 npm 包 / 按顺序发布
-install.sh            没有 node 时的装法（下载 + 强制校验 sha256）
-.goreleaser.yaml      交叉编译 + archive + checksums（只出 darwin / linux）
-.github/workflows/    ci.yml 每次推都跑；release.yml 打 tag 就发 GitHub + npm
+  src/components/     Dock.tsx is the bottom dock shell (border / width / height shared by the
+                      outbox and the soft key bar)
+                      Notices.tsx is the stack of cards in the top right
+                      FilesPanel.tsx is file browsing (starting points + directories + the paste box)
+                      FileViewer.tsx shows one file (image / text), full screen
+                      Pairing.tsx is the pairing page (the only thing rendered when unpaired)
+                      SettingsPanel.tsx is the settings panel; the soft key editor and device
+                      management are two of its pages
+                      QrScan.tsx is the in-page scanner (BarcodeDetector + rear camera)
+reference/            the original Python prototype; "verified" in the three companion docs means
+                      verified against it
+npm/herdr-web/        the npm root package @bysir/herdr-web: a JS shim that finds the right binary
+scripts/npm-*.mjs     turn goreleaser output into npm packages / publish them in order
+install.sh            the no-node install path (download + mandatory sha256 verification)
+.goreleaser.yaml      cross-compile + archive + checksums (darwin / linux only)
+.github/workflows/    ci.yml runs on every push; release.yml publishes to GitHub + npm on a tag
 ```
 
-命令行是 [cobra](https://github.com/spf13/cobra)（`cmd/herdr-web/main.go`）：根命令起服务，`pair` / `devices` / `revoke` / `unlock` / `version` / `update` / `service` 是子命令，`--help` 和补全脚本白送。**标志只有一个** `-w, --web`（开发时指前端目录），别的配置一律环境变量 —— 同一个设置两个入口就得规定谁盖谁，不值当。
+The CLI is [cobra](https://github.com/spf13/cobra) (`cmd/herdr-web/main.go`): the root command starts the server, and `pair` / `devices` / `revoke` / `unlock` / `version` / `update` / `service` are subcommands, with `--help` and completion scripts for free. **There is exactly one flag**, `-w, --web` (point at a frontend directory during development); everything else is an environment variable — two entry points for one setting means having to specify which one wins, and it is not worth it.
 
-`make test` 跑 Go 测试 + 前端 typecheck。`make dev` 前端热更新（后端另开一个 `go run ./cmd/herdr-web`，vite 把 `/api` 和 `/pty` 转过去）。
+`make test` runs the Go tests plus a frontend typecheck. `make dev` gives frontend hot reload (run the backend separately with `go run ./cmd/herdr-web`; vite proxies `/api` and `/pty` to it).
 
-### 发版
+### Releasing
 
 ```bash
-make release-dry        # 本地把整条链跑一遍：交叉编译 → archive → npm 包 → npm publish --dry-run
-make release V=v0.1.0   # 打 tag 并推上去，剩下的 GitHub Actions 干
+make release-dry        # run the whole chain locally: cross-compile → archive → npm packages → npm publish --dry-run
+make release V=v0.1.0   # tag and push; GitHub Actions does the rest
 ```
 
-推上 tag 之后 `release.yml` 会：`make test` → goreleaser（交叉编译 4 个平台、出 archive 和 `checksums.txt`、建 GitHub Release）→ 把 archive 摊成 npm 包 → **先发 4 个平台子包、最后发根包**。顺序反了会有一段时间 `npm install` 装出一个没有二进制的壳。
+Once the tag lands, `release.yml` runs `make test` → goreleaser (cross-compile 4 platforms, produce archives and `checksums.txt`, create the GitHub Release) → turn the archives into npm packages → **publish the 4 platform packages first and the root package last**. In the other order there is a window where `npm install` produces a shim with no binary.
 
-**Release 建好了但 npm 那步挂了**（发过一次，见下）用同一个 workflow 补发，不重新编译：
+**Release created but the npm step failed** (happened once) — rerun the same workflow to publish without recompiling:
 
 ```bash
 gh workflow run release.yml -f tag=v0.1.0
 ```
 
-它会去下已经发出去的那批 archive 再打包，所以补发的二进制和 Release 里的**逐字节相同**。
+It downloads the archives that were already published, so the re-published binaries are **byte-identical** to the ones in the Release.
 
-**发布 workflow 只能有一个，别再拆出去。** npm 的 Trusted Publisher（OIDC）一个包只能绑一个
-workflow 文件名，绑的就是 `release.yml`；再开一个会发包的 workflow，从它发就对不上 OIDC。
+**There can only be one publishing workflow; do not split it up.** npm's Trusted Publisher (OIDC) binds one package to one workflow filename, and that filename is `release.yml`; a second workflow that publishes would not match the OIDC claim.
 
-需要一个仓库 secret：`NPM_TOKEN`（**Automation** 类型 —— 另外两档在开了 2FA 的账号上发包会要交互式
-验证码，CI 里没人输）。配了 Trusted Publisher 之后可以去掉它，但**先发一版确认 OIDC 真的生效**再删。
+One repository secret is needed: `NPM_TOKEN` (**Automation** type — the other two kinds ask for an interactive 2FA code when publishing from an account with 2FA on, and CI has nobody to type it). Once Trusted Publisher is configured you can drop it, but **publish one release first to confirm OIDC actually works** before deleting it.
 
-Trusted Publisher 是**按包**配的，5 个包（根包 + 4 个平台子包）每个都要配一遍，都填 `release.yml`、
-Environment name **留空**（我们的 workflow 没声明 environment，填了任何值 OIDC 都会对不上）。
-少配一个的表现是下次发版在「发 npm」那步中途失败。
+Trusted Publisher is configured **per package**, so all 5 (root + 4 platform packages) need it, each pointing at `release.yml` with the Environment name **left empty** (our workflow declares no environment; any value there makes the OIDC claim mismatch). Missing one shows up as the next release failing halfway through the npm step.
 
-**tag 要推到装着 `release.yml` 的那个远端**，也就是 GitHub。这个仓库有两个远端（`origin`
-是自建 git，`github` 才是 GitHub），所以 `make release` **不写死 origin** —— 它按 push URL 里的
-`github.com` 认，认不出来就拒绝发版。推错远端是最难查的一种：tag 打上去了、命令也成功了，
-Actions 那边一直没动静，而「没动静」和「还在排队」长得一模一样。要覆盖：
-`make release V=vX.Y.Z RELEASE_REMOTE=xxx`。
+**Push the tag to the remote that holds `release.yml`** — that is GitHub. This repository has two remotes (`origin` is a self-hosted git; `github` is GitHub), so `make release` **does not hardcode origin**: it recognises the remote by `github.com` in the push URL and refuses to release if it cannot find one. Pushing to the wrong remote is the worst kind to debug: the tag lands, the command succeeds, and Actions simply never starts — and "never started" looks exactly like "still queued". To override: `make release V=vX.Y.Z RELEASE_REMOTE=xxx`.
 
-三处名字必须对得上，改一个就要改另外两个：`.goreleaser.yaml` 的 `name_template`、`internal/selfupdate.AssetName`（自更新下载）、`scripts/npm-build.mjs`。对不上的表现是 `herdr-web update` 下载 404。
+Three names must agree, and changing one means changing the other two: `name_template` in `.goreleaser.yaml`, `internal/selfupdate.AssetName` (used by self-update downloads), and `scripts/npm-build.mjs`. A mismatch shows up as `herdr-web update` downloading a 404.
 
-`make release-dry` 跑完会**把工作区还回去**：`npm-build.mjs` 把版本号写进入库的
-`npm/herdr-web/package.json`（干跑时是 `0.1.1-next` 这种快照号）。不还的话紧接着
-`make release` 会说「工作区不干净」而你什么都没改，或者那个 `-next` 版本号被顺手提交进去。
+`make release-dry` **restores the working tree** when it finishes: `npm-build.mjs` writes the version into the committed `npm/herdr-web/package.json` (a snapshot number like `0.1.1-next` during a dry run). Without the restore, the `make release` right after it says "the working tree is dirty" when you changed nothing — or that `-next` version gets committed by accident.
 
-发版路上踩过、已经修掉的三个（都是**静默**失败）：
+Three release-path traps already hit and fixed (all **silent** failures):
 
-- `web/tsconfig.tsbuildinfo` 曾经入库。它是 `tsc -b` 的增量缓存，`make test` 每跑一次就改写它，
-  紧接着 goreleaser 判定 `git is in a dirty state` 直接拒绝发版。构建缓存一律不入库。
-- `make web` 里那句 `rm -rf $(WEBDIST)` 会删掉入库的 `internal/webui/dist/.gitkeep`。那个文件是
-  承重的：空目录上 `go:embed all:dist` 报 `cannot embed directory dist: contains no embeddable
-  files`，新 clone 连 `go build` 都过不了。所以 `web` 和 `clean` 两个目标都会把它写回来。
-- 首发之后有几分钟，npm 的 packument 读路径还没物化（`version` 端点和 search 都查得到，packument
-  却 404）。这时候 `npm i` 拿到 404 会**静默跳过** optional 依赖，装出一个没有二进制的壳。
-  等几分钟重装就好，壳里那段报错会提示重装。
+- `web/tsconfig.tsbuildinfo` used to be committed. It is `tsc -b`'s incremental cache, rewritten by every `make test` run, after which goreleaser declares `git is in a dirty state` and refuses to release. Build caches never get committed.
+- `rm -rf $(WEBDIST)` in `make web` deletes the committed `internal/webui/dist/.gitkeep`. That file is load-bearing: on an empty directory `go:embed all:dist` fails with `cannot embed directory dist: contains no embeddable files`, and a fresh clone cannot even `go build`. So both the `web` and `clean` targets write it back.
+- For a few minutes after a first publish, npm's packument read path has not materialized yet (the `version` endpoint and search both find it while the packument 404s). An `npm i` that gets a 404 **silently skips** the optional dependency and installs a shim with no binary. Reinstall a few minutes later; the error message inside the shim tells you to.
 
-**为什么终端那层不是 React 组件**：它要直接摸 xterm 的 parser、逐字节收 WebSocket、按 rAF 补重绘 —— 套上 React 的渲染周期只会碍事。React 那边只拿一个 ref 挂载它，再订阅几个状态回调。
+**Why the terminal layer is not a React component**: it touches xterm's parser directly, consumes the WebSocket byte by byte, and repaints on rAF — React's render cycle would only be in the way. React holds a ref to mount it and subscribes to a few state callbacks.
 
-### 配色（改界面之前先看这段）
+### Colours (read this before touching the UI)
 
-token 全定在 `web/src/index.css` 的 `@theme` 里（暗亮各一份），组件里**不写具体颜色**，只用这些名字：
+All tokens live in `@theme` in `web/src/index.css` (one set for dark, one for light). Components **never write a literal colour**, only these names:
 
-- 灰阶四档：`bg`（画布 / 终端）→ `bar`（顶栏、底部面板、浮层）→ `ctl`（控件）→ `ctl-hi`（控件 hover）；
-  分隔线 `line` / `line-hi`；文字 `fg` / `muted` / `faint`。全是 S=0 的**纯灰** —— 原来那套偏蓝的板岩灰
-  和终端里的彩色输出叠在一起会显脏。
-- 绿只当强调色：`brand` 给文字 / 图标 / 描边，`brand-bg` + `brand-line` + `brand-fg` 是主按钮那一套填充。
-  **打开 / 选中态是「淡绿底 + 绿边 + 绿字」，不是整块涂满** —— 顶栏上五六个图标可能同时是打开的，
-  涂满的话整条栏全是色块，什么都不突出。饱和填充只留给一屏一个的主操作（投稿 / 保存 / 配对）和粘滞
-  修饰键那种「按下去了必须一眼看见」的状态。
-- 圆角两档：控件 `rounded-md`（6px）、浮层 `rounded-card`（12px）。字号：正文 13px，次要一律 `text-xs`，
-  别再写 `text-[11.5px]` 这种一次性数值。
-- 终端只有**灰阶和光标**跟着 token 走（`src/term/themes.ts`）：底色 = `bg`、光标 = 品牌绿、选区是半透明的绿。
-  红黄蓝品青那六个色相一个都没动 —— 那是别人程序的输出颜色，diff 的红绿、agent 的高亮全靠它们。
-- `accent` 是旧名字（原来那个亮蓝），现在留成 `brand` 的别名防止漏改，新代码别用它。
+- Four greys: `bg` (canvas / terminal) → `bar` (top bar, dock, overlays) → `ctl` (controls) → `ctl-hi` (control hover); dividers `line` / `line-hi`; text `fg` / `muted` / `faint`. All **pure grey** (S=0) — the old blue-ish slate looked dirty stacked against the terminal's coloured output.
+- Green is only an accent: `brand` for text / icons / outlines, and `brand-bg` + `brand-line` + `brand-fg` for the filled primary button. **On / selected states are "pale green fill + green border + green text", not a solid block** — five or six icons in the top bar can be on at once, and solid fills turn the whole bar into colour blocks with nothing standing out. Saturated fills are reserved for the one primary action on screen (post / save / pair) and for sticky modifiers, where "you pressed it" must be unmissable.
+- Two radii: controls `rounded-md` (6px), overlays `rounded-card` (12px). Type: 13px body, `text-xs` for everything secondary; stop writing one-off values like `text-[11.5px]`.
+- In the terminal only **the greys and the cursor** follow the tokens (`src/term/themes.ts`): background = `bg`, cursor = brand green, selection = translucent green. The six hues (red, yellow, blue, magenta, cyan) are untouched — those are other programs' output colours, and diff red/green and agent highlighting depend on them.
+- `accent` is the old name (the original bright blue), kept as an alias of `brand` so nothing silently breaks. Do not use it in new code.
 
-## 几个坑（已经处理了，记下来免得回头再踩）
+## Traps (already handled; noted so nobody walks back into them)
 
-- **WebSocket 不能并发写，写崩了是整个进程一起死。** gorilla/websocket 撞上并发写会
-  `panic: concurrent write to websocket connection`，而这个 panic 发生在 handler 自己起的
-  goroutine 里 —— net/http 只兜得住 handler 本身那一层，所以**进程直接退出，所有人的终端
-  一起断**。一条 PTY 连接上有三个写者：PTY 数据、25 秒一次的 ping、退出时的 exit + close。
-  线上炸过一次，是 ping 正好撞上一批二进制帧（和「开了几个浏览器」无关，每条连接各有自己的
-  conn；但连接越多、重连越频繁越容易撞）。现在全部收口到 `wsWriter`，`ws_test.go` 里那个
-  并发测试去掉锁就会复现同一条 panic。顺带两件：写入加了 10 秒超时（手机断网时 TCP 缓冲
-  填满会让 `WriteMessage` 一直阻塞、把锁也占着，那样 PTY 读循环都推不动了），ping 的
-  goroutine 改成 select 到 done 上（`Ticker.Stop()` 不关 channel，光 Stop 那个 goroutine
-  会永远卡在接收上，连着 conn 一起泄漏 —— 手机频繁重连时一条一个地攒）。
+- **A WebSocket cannot be written concurrently, and a bad write takes the whole process down.** gorilla/websocket panics with `panic: concurrent write to websocket connection`, and that panic happens on a goroutine the handler started — net/http only recovers the handler's own frame, so **the process exits and everybody's terminal drops at once**. A PTY connection has three writers: PTY data, a ping every 25 seconds, and the exit + close on teardown. It blew up in production once, a ping landing on a batch of binary frames (unrelated to "how many browsers are open" — each connection has its own conn; but more connections and more reconnects make a collision likelier). Everything now funnels through `wsWriter`, and the concurrency test in `ws_test.go` reproduces the same panic if you remove the lock. Two things came along: writes got a 10 second timeout (when a phone loses signal, a full TCP buffer leaves `WriteMessage` blocked forever while holding the lock, which stalls the PTY read loop), and the ping goroutine now selects on a done channel (`Ticker.Stop()` does not close the channel, so a stopped goroutine parks on the receive forever and leaks along with its conn — one per reconnect, which a phone produces plenty of).
 
-- **`HERDR_*` 会让 herdr 拒绝启动**。如果本服务是在 herdr 的 pane 里起的，子进程继承到就会报 `nested herdr is disabled by default`。`internal/server/pty.go` 的 `dropEnv` 把 `HERDR_* / TMUX / ZELLIJ / ITERM_* / CLAUDECODE` 这些痕迹都清了。
-- **xterm.js 6.0 会「收下重绘请求但不画」**：DEC 2026 同步输出开着时把范围攒起来等 ESU；绘制在 rAF 里，后台标签页完全不跑。herdr 常驻开着 2026、一帧几 KB 还会被拆成多次 write，攒漏一次屏幕上就留一块空白。缓冲区没坏，所以只补重绘：数据流停下来 180ms 后强制画一次，2026 卡着就自己补个 ESU。频繁出现可以在设置 →「终端」里关掉同步输出。
-- **改尺寸会闪一下全黑，要拿「冻帧」盖住**。呼输入法（`visualViewport` 一变就重排）时最明显。原因是叠起来的：xterm 的 WebGL 渲染器一改 `canvas.width` 绘制缓冲就清空、`FitAddon.fit()` 在 resize 前还主动 `renderService.clear()` 一次，而重画最快也要等下一个 rAF（2026 同步输出开着时得等 ESU）；herdr 收到 SIGWINCH 之后自己又清屏重绘一遍，加起来几十毫秒。xterm 没有同步重绘的口子，所以延迟一个都去不掉 —— 改尺寸之前把 `.xterm-screen` 里那几层 canvas 合成一张图铺在终端上，等新画面画上（`onRender`）再多留 120ms 淡出。两个前提：WebGL 要开 `preserveDrawingBuffer`（合成完不丢缓冲，否则 `drawImage` 拿到的是空图），以及**快照读不出东西时要放弃冻帧**（后台标签页 rAF 不跑、画布压根没画过，糊一张空图上去比闪一下更糟）。另外行列数没变就不碰 xterm：键盘动画期间 `visualViewport` 会连着报好几次，白 resize 一次就白闪一次。
-- **herdr 的主题不跟浏览器切换**：`~/.config/herdr/config.toml` 里 `[theme] auto_switch = false`。改成 `true` 之后，网页上切明暗就能直接切 herdr 的配色。
-- **别把 `HERDR_WEB_SETTLE_MS` 调成 0**：详见「配置」那节。
-- **锁屏断连没法「修」，只能自己连回来。** 手机 / 平板锁屏时系统把页面挂起，WebSocket 跟着断 —— 页面里没有任何开关能留住它（Web Lock、keepalive 都不管这事）。以前解锁回来就是一句「已断开」加一次手点，而重连本来**没有任何代价**：一条 WebSocket 一个 PTY，重连拿到的是新的登录 shell，但 herdr 的 pane 都活在 herdr server 里，`herdr` 一敲就 attach 回去，屏幕和断开前一样。所以现在断了自己连（`web/src/term/session.ts` 的 `retry` / `wake`）：退避 0.4→8 秒最多 8 次，**页面不可见时压根不试**（iOS 后台定时器基本不跑，就算连上了也马上被系统再掐掉，还白起一个登录 shell），等回到前台 / 网络回来那一下再从最短那档重新数；连不上就把原来那套诊断（后端没在跑 / 凭据没了 / 反代没转发 Upgrade）摊在遮罩上。**凭据被撤销那种不重试** —— 重连一万次也一样，而每次 `term.reset()` 还会把真正的原因刷掉。另外 `connect()` 里往 sessionStorage 记了一笔「这个标签页连过」：iOS 锁屏久了 Safari 会把整个页面丢掉重载，回来时靠这个直接连上，而不是又停在「点连接」那一屏（sessionStorage 只对这个标签页有效，新开一个还是要手点）。
-- **锁屏回来的 WebSocket 常常是「僵」的**：`readyState` 还是 OPEN、`send()` 也不报错，但对面早就没了 —— 这时候只看 readyState 会以为连着，敲什么都没反应。协议层的 ping/pong 是浏览器自己处理的，网页里读不到（拿它判断这条路不存在），所以在应用层补了一帧：回到前台时发 `{"t":"p"}`，3 秒内没有任何回音就当断了，收掉重连。服务端的回音在 `internal/server/pty.go` 的 `case "p"`，**丢了这一行的表现是「每次解锁都白重连一次」**，屏幕上看不出异常 —— 所以 `TestPTYAnswersProbe` 是端到端拨一条真连接来验的。
-- **重连必须先把终端复位**。一条 WebSocket 对应一个 PTY，断开时服务端就把 PTY 杀了，所以每次「连接」都是一个**全新的登录 shell**；但 xterm 实例是复用的，上一次 herdr 打开的私有模式还留在里面。表现是重连之后屏幕不但没好，还往命令行里灌乱码：鼠标移动上报（1003+1006）还开着，指针 / 手写笔一动就发 `ESC [ < 35;120;36 M`，zsh 的 ZLE 把认不出的 `ESC [ <` 前缀吃掉、余下的自插进命令行，于是屏幕上是 `35;120;36M35;115;37M…`（实测复现过：`➜  ~ 35;16;5M35;26;8M`）。kitty 键盘协议的 flags 同理留着，Esc 会被编成 `CSI 27 u`，新 shell 里显示 `[27u`。`connect()` 现在先 `term.reset()` 再连，顺手清掉我们自己攒的 kitty flags / 能力清单 / 粘滞修饰键。
-- **「连接」按钮随时能按，所以连之前要自己收掉旧连接**。不收：服务端会再起一个登录 shell，两个 shell 的输出往同一个 xterm 里灌，屏幕当场花掉，而且旧 PTY 只要连接还在就一直活着。旧连接的回调也要一起摘掉 —— close 是异步的，旧连接的 `onclose` 会把新连接的状态改成「已断开」。
+- **`HERDR_*` makes herdr refuse to start.** If this service was started from inside a herdr pane, the child inherits them and reports `nested herdr is disabled by default`. `dropEnv` in `internal/server/pty.go` strips `HERDR_* / TMUX / ZELLIJ / ITERM_* / CLAUDECODE`.
+- **xterm.js 6.0 will "accept a repaint request and not paint"**: with DEC 2026 synchronized output on it accumulates ranges waiting for ESU, and painting happens in rAF, which does not run at all in a background tab. herdr keeps 2026 on permanently and a single frame of a few KB gets split across several writes, so one dropped accumulation leaves a blank patch on screen. The buffer is fine, so the fix is only a repaint: 180ms after the data stream stops, force one; if 2026 is stuck, emit an ESU ourselves. If it happens often, turn synchronized output off in Settings → Terminal.
+- **Resizing flashes black, and a "freeze frame" has to cover it.** Most visible when the IME comes up (`visualViewport` changes and everything reflows). The causes stack: xterm's WebGL renderer clears the drawing buffer as soon as `canvas.width` changes, `FitAddon.fit()` actively calls `renderService.clear()` before resizing, and the repaint cannot happen before the next rAF at the earliest (later still with 2026 waiting for ESU); then herdr receives SIGWINCH and clears and redraws on its own. Tens of milliseconds all told. xterm offers no synchronous repaint, so none of that latency can be removed — instead, before resizing, the canvas layers inside `.xterm-screen` are composited into one image laid over the terminal, and it fades out 120ms after the new frame arrives (`onRender`). Two prerequisites: WebGL needs `preserveDrawingBuffer` (or `drawImage` gets an empty picture after compositing), and **if the snapshot comes back empty the freeze frame must be abandoned** (in a background tab rAF never ran and the canvas was never painted; pasting an empty image over the terminal is worse than the flash). Also, if rows and columns did not change, xterm is not touched at all: `visualViewport` fires several times during the keyboard animation, and a pointless resize is a pointless flash.
+- **herdr's theme does not follow the browser** unless `[theme] auto_switch = true` in `~/.config/herdr/config.toml`. With it on, toggling light/dark on the page switches herdr's colours too.
+- **Never set `HERDR_WEB_SETTLE_MS` to 0** — see [Configuration](#configuration).
+- **A reconnect must reset the terminal first.** One WebSocket is one PTY, and the server kills the PTY on disconnect, so every "connect" is **a brand-new login shell** — but the xterm instance is reused and still carries the private modes the previous herdr turned on. The symptom is not just a broken screen after reconnecting but garbage typed into the command line: mouse motion reporting (1003+1006) is still on, so any pointer or stylus movement emits `ESC [ < 35;120;36 M`, zsh's ZLE swallows the unrecognised `ESC [ <` prefix and self-inserts the rest, and the screen fills with `35;120;36M35;115;37M…` (reproduced: `➜  ~ 35;16;5M35;26;8M`). kitty keyboard flags linger the same way, so Esc gets encoded as `CSI 27 u` and shows up as `[27u` in the new shell. `connect()` now calls `term.reset()` before connecting, and clears the kitty flags / capability list / sticky modifiers we track ourselves.
+- **The "Connect" button is always clickable, so connecting must tear down the old connection first.** If it does not: the server starts a second login shell, two shells pour output into one xterm, the screen is instantly garbage, and the old PTY stays alive as long as its connection does. The old connection's callbacks have to be detached too — close is asynchronous, and the old connection's `onclose` would set the new connection's state to "disconnected".
 
-## 配置
+## Configuration
 
-**配置只有一个来源：环境变量。** 没有配置文件，命令行也只有一个 `--web`（开发时指前端目录）。用 [viper](https://github.com/spf13/viper) 收口在 `internal/config/`（`SetEnvPrefix("HERDR_WEB")` + `AutomaticEnv()`），配置项和变量名一一对应。
+**Environment variables are the only source of configuration.** There is no config file, and the only flag is `--web` (point at a frontend directory during development). It is funnelled through [viper](https://github.com/spf13/viper) in `internal/config/` (`SetEnvPrefix("HERDR_WEB")` + `AutomaticEnv()`), so settings and variable names map one to one.
 
-不读配置文件是故意的：这个口后面是一个登录 shell，「现在生效的到底是哪份配置」必须一眼看得见 —— 环境变量在 `ps` / systemd unit / launchd plist 里都是明摆着的，再多一个「某个目录下可能还有个 yaml」，出事时先得花半天确认哪份生效。同理也不做「命令行标志盖过环境变量」那一套：一个设置两个入口，就得规定谁盖谁。
+Not reading a config file is deliberate: there is a login shell behind this port, so "which configuration is actually in effect" has to be visible at a glance — environment variables are right there in `ps`, in the systemd unit, in the launchd plist. Add "there might also be a yaml in some directory" and the first half day of any incident goes into finding out which one won. Same reason there is no "flags override environment": one setting with two entry points means having to specify precedence.
 
-### 怎么设
+### How to set it
 
 ```bash
-# 试一下：写在命令前面，只对这一次生效
+# Try something: prefix the command, applies to this run only
 HERDR_WEB_PORT=8000 HERDR_WEB_ONCONNECT= ./herdr-web
 
-# 常驻：写进 ~/.zshrc（自己在终端里手起的时候）
+# Permanent: in ~/.zshrc (when you start it by hand in a terminal)
 export HERDR_WEB_HOST=0.0.0.0
 export HERDR_WEB_TLS=auto
 
-# 常驻：launchd（macOS）在 plist 的 EnvironmentVariables 里；
-# systemd 在 unit 的 Environment= / EnvironmentFile= 里
+# Permanent: launchd (macOS) in the plist's EnvironmentVariables;
+# systemd in the unit's Environment= / EnvironmentFile=
 ```
 
-三条规则，都和「猜」有关：
+Three rules, all about not guessing:
 
-- **显式设成空串算数。** `HERDR_WEB_ONCONNECT=` 就是「连上什么都不敲」，不会退回默认值 `herdr`。有默认值的开关全靠这条才关得掉。
-- **整数写错了当没设**（退回默认值），而不是静默变成 0；低于下限的夹到下限。`HERDR_WEB_DEVICE_TTL_DAYS=9O`（字母 O）不会把设备凭据变成「永不过期」。
-- **开关认 `1` / `true`**（大小写随意），别的都算关。
+- **An explicit empty string counts.** `HERDR_WEB_ONCONNECT=` means "type nothing on connect"; it does not fall back to the default `herdr`. Every switch with a default depends on this to be turnable off.
+- **A malformed integer is treated as unset** (falls back to the default) rather than silently becoming 0; below-minimum values are clamped. `HERDR_WEB_DEVICE_TTL_DAYS=9O` (letter O) will not turn device credentials into "never expires".
+- **Booleans accept `1` / `true`** (any case); anything else is off.
 
-改完重启进程才生效，配置只在启动时读一次。想确认读到了什么，看启动横幅：shell、数据目录、herdr socket、TLS 档位、已配对设备数都印在上面。
+Changes take effect on restart — configuration is read once at startup. To confirm what was read, look at the startup banner: shell, data directory, herdr socket, TLS tier and paired device count are all printed there.
 
-### 基本
+### Basics
 
-| 变量 | 默认 | 说明 |
+| Variable | Default | Meaning |
 |---|---|---|
-| `HERDR_WEB_PORT` | `7788` | 端口 |
-| `HERDR_WEB_HOST` | `127.0.0.1` | 监听地址，`0.0.0.0` 开局域网 |
-| `HERDR_WEB_TOKEN` | 读 `~/.herdr-web/token` | **旧机制**，只够引导一次（换成设备凭据）。新装不再自动生成 |
-| `HERDR_WEB_SHELL` | `$SHELL` | PTY 里跑的 shell |
-| `HERDR_WEB_ONCONNECT` | `herdr` | 连上就自动往 PTY 里敲这一行（自带回车）。**显式设成空串就不敲**（`HERDR_WEB_ONCONNECT=`）。**地址栏里带 session 的 URL 不看这一项**（`/work` 一律敲 `herdr --session work`，见「[一个 URL 一个 session](#一个-url-一个-sessionname)」）—— 想固定进某个 session 就把 URL 存书签，别写在这儿 |
-| `HERDR_WEB_ONCONNECT_MS` | `250` | 上面那行等多久再敲。等的是「shell 吐出第一批输出之后」再加这么多 —— rc 里动 `stty` 或者补全插件初始化会**静默吞掉**早敲的字符。自动敲的那行没进去就调大它 |
-| `HERDR_WEB_DIR` | `~/.herdr-web` | 数据目录，分两层：配置和文件（`softkeys.json` / `tls/` / `uploads/`）在根上，**内部数据**（设备凭据、passkey 公钥）在 `data/` 里 —— 那两个用户不该手改，被改了会在终端告警。**路径别太深**：里面要开一个 unix socket（`ctl.sock`），全长超过 ~100 字节就 bind 不上，子命令会用不了 |
-| `HERDR_WEB_FILES` | 开 | `=0` 关掉文件浏览：`/api/files/*` 和 `/_f/` 全部 404，顶栏那个 📁 也不画（点开一片 404 比没有入口更糟） |
-| `HERDR_WEB_FILE_ROOTS` | 空 | 逗号分隔的目录，配了就是**真白名单**（jail），只有这几棵树看得到。**空 = 不设边界**，理由见「[文件浏览](#文件浏览看-agent-生成的图)」。展开 `~`，非绝对路径直接扔掉（相对谁？留着只会让前缀检查在意想不到的地方通过） |
+| `HERDR_WEB_PORT` | `7788` | Port |
+| `HERDR_WEB_HOST` | `127.0.0.1` | Listen address; `0.0.0.0` opens it to the LAN |
+| `HERDR_WEB_TOKEN` | reads `~/.herdr-web/token` | **Legacy**; only good for bootstrapping once (exchanged for a device credential). Not generated on new installs |
+| `HERDR_WEB_SHELL` | `$SHELL` | The shell run inside the PTY |
+| `HERDR_WEB_ONCONNECT` | `herdr` | Typed into the PTY on connect (Enter included). **Set it to an empty string to type nothing.** **Session URLs ignore this** (`/work` always types `herdr --session work`, see [One URL, one session](#one-url-one-session-name)) — to always land in a session, bookmark the URL rather than setting this |
+| `HERDR_WEB_ONCONNECT_MS` | `250` | How long to wait before typing that line. The wait starts **after the shell's first output** — an rc file touching `stty`, or a completion plugin initialising, **silently swallows** characters typed too early. If the auto-typed line does not land, raise it |
+| `HERDR_WEB_DIR` | `~/.herdr-web` | Data directory, in two layers: configuration and files (`softkeys.json` / `tls/` / `uploads/`) at the root, **internal data** (device credentials, passkey public keys) under `data/` — those two are not meant to be hand-edited, and tampering is reported in the terminal. **Keep the path short**: a unix socket (`ctl.sock`) is opened inside it, and beyond ~100 bytes it cannot bind, which breaks the subcommands |
+| `HERDR_WEB_FILES` | on | `=0` turns file browsing off: `/api/files/*` and `/_f/` all 404, and the 📁 in the top bar is not drawn (an entry point that opens onto a wall of 404s is worse than no entry point) |
+| `HERDR_WEB_FILE_ROOTS` | empty | Comma-separated directories. Set, this is **a real allowlist** (a jail) and only those trees are visible. **Empty means no boundary** — the reasoning is in [File browsing](#file-browsing-looking-at-what-the-agent-generated). `~` is expanded; non-absolute entries are discarded (relative to what? keeping them only makes the prefix check pass somewhere surprising) |
 
-### 发件箱 / 和 herdr 对接
+### Outbox / talking to herdr
 
-| 变量 | 默认 | 说明 |
+| Variable | Default | Meaning |
 |---|---|---|
-| `HERDR_WEB_SOCKET` | `$HERDR_SOCKET_PATH` 或 `~/.config/herdr/herdr.sock` | 发件箱连的 herdr socket。**别依赖 `HERDR_SOCKET_PATH`**：`dropEnv` 会把 `HERDR_*` 清掉，而本进程也可能不是从 herdr pane 里起的 |
-| `HERDR_WEB_POLL_MS` | `500` | 发件箱多久对一次「焦点在哪 + 输入框里是什么」。下限 200 |
-| `HERDR_WEB_PUSH_MS` | `700` | 开着「双向」时，停手多久把草稿推到远端。下限 100 |
-| `HERDR_WEB_NOTICE_MS` | `4000` | 提示（右上角弹窗 + 红点）多久问一次「有没有新的」。**`0` = 关掉整套提示**，前端不再轮询。低于 1000 一律按 1000 算 —— 这一拍在服务端只读内存（不打 herdr socket），但提示天生比状态晚 2.5 秒（防抖），问得再勤也快不过那一段 |
-| `HERDR_WEB_SETTLE_MS` | `120` | 两次 `pane.read` 之间等多久（对付快照的一帧延迟）。**别调成 0**：herdr 响应有时只要 1-2ms，两次读会落在同一帧上，清空循环会误判成「清不空」。清空那条路自己有 120ms 保底 |
+| `HERDR_WEB_SOCKET` | `$HERDR_SOCKET_PATH` or `~/.config/herdr/herdr.sock` | The herdr socket the outbox connects to. **Do not rely on `HERDR_SOCKET_PATH`**: `dropEnv` strips `HERDR_*`, and this process may not have been started from a herdr pane at all |
+| `HERDR_WEB_POLL_MS` | `500` | How often the outbox checks "where is focus, what is in the input line". Minimum 200 |
+| `HERDR_WEB_PUSH_MS` | `700` | With "two-way" on, how long after you stop typing the draft is pushed. Minimum 100 |
+| `HERDR_WEB_NOTICE_MS` | `4000` | How often notices (the cards and the red dot) ask "anything new". **`0` turns the whole notice feature off** and the frontend stops polling. Anything under 1000 is treated as 1000 — this tick only reads memory on the server (it does not touch the herdr socket), but a notice is inherently 2.5 seconds behind the state change (debounce), so polling harder cannot beat that |
+| `HERDR_WEB_SETTLE_MS` | `120` | How long to wait between two `pane.read` calls (to defeat the one-frame snapshot lag). **Never 0**: herdr sometimes answers in 1-2ms, both reads land on the same frame, and the clear loop misreads that as "cannot be cleared". The clear path has its own 120ms floor |
 
-### 暴露 / TLS / 凭据
+### Exposure / TLS / credentials
 
-细节见 [SECURITY.md](SECURITY.md)。
+Details in [SECURITY.md](SECURITY.md) (Chinese).
 
-| 变量 | 默认 | 说明 |
+| Variable | Default | Meaning |
 |---|---|---|
-| `HERDR_WEB_EXPOSED` | 关 | `=1` **声明这个口能从公网碰到**（frp / 端口转发 / 隧道）。走 frp 时本进程往往只监听 127.0.0.1，「监听地址是不是本机」这个判据完全失效，没法自动测，只能你自己说。声明之后：强制要求 TLS、关掉本机免配对 |
-| `HERDR_WEB_TLS_CERT` / `_KEY` | 空 | 用指定的证书。自己有域名、DNS-01 签了张真证书就走这条 —— 浏览器零警告、不用装描述文件，最省事 |
-| `HERDR_WEB_ACME_DNS` | 空 | 让 herdr-web **自己去签证书**，值是 DNS 服务商：`cloudflare` / `alidns` / `tencentcloud` / `route53` / `digitalocean` / `huaweicloud`。走 DNS-01，所以不需要外网能连进来 —— NAT 后面、甚至域名指到内网地址都能签。**各家 token 怎么拿、要给什么权限：[DNS.md](DNS.md)** |
-| `HERDR_WEB_ACME_EMAIL` | 空 | ACME 账号邮箱。可以空着，但那样到期提醒也收不到 |
-| `HERDR_WEB_ACME_STAGING` | 关 | `=1` 用 Let's Encrypt 测试环境。**调试时一定先开**：正式环境同一组域名一周只给 5 张证书，试几次就把自己锁一周 |
-| `HERDR_WEB_TLS` | 见说明 | `auto` 自签（本地 CA + 397 天叶子，IP 变了自动重签）/ `off` 明文 / `proxy` 前置已经终止了 TLS。默认：暴露或听局域网 → `auto`，纯本机 → `off` |
-| `HERDR_WEB_HOSTNAME` | 空 | 允许出现在 `Host` 头里的域名，逗号分隔。**IP 一律放行，域名必须在名单里** —— 这是 DNS rebinding 的唯一防线，不在名单里直接 421 |
-| `HERDR_WEB_PUBLIC_URL` | 空 | 你**实际访问**的地址（`https://herdr.example.com:17788`）。frp 的公网端口和本地端口经常不是一个，不给就横幅上的二维码是废的。里面的域名自动进白名单 |
-| `HERDR_WEB_DEVICE_TTL_DAYS` | `90` | 设备凭据多久不活跃就失效（每次用都续期）。`0` = **永不过期** |
-| `HERDR_WEB_RPID` | 推导 | passkey 绑定的域名。默认取 `HERDR_WEB_HOSTNAME` 的第一个，纯本机时是 `localhost`。**裸 IP 不是合法值**，那种部署用不了 passkey |
-| `HERDR_WEB_REAUTH_HOURS` | `24` | 注册过 passkey 之后，一份会话凭据在「上次生物验证」之后还能用多久。`0` = 不要求重验（passkey 只当登录/换设备的入口）。**一把 passkey 都没注册时这条完全不生效** |
-| `HERDR_WEB_LEGACY_TOKEN` | `on` | `on` / `loopback`（旧 token 只在本机有效）/ `off`。迁移完建议直接删掉 token 文件 |
-| `HERDR_WEB_TRUST_LOOPBACK` | 关 | `=1` 让来自 127.0.0.1 的请求免配对。**套 frp / 反代时千万别开** —— 那时候公网请求的源地址就是 127.0.0.1，等于谁都是「本机」。开着时还额外要求 `Host` 也是 loopback 字面量 |
-| `HERDR_WEB_TRUST_PROXY` | 关 | `=1` 才读 `X-Forwarded-For`。没有可信前置时开着，攻击者自带一个头就能伪造源 IP、把按 IP 的限速绕干净 |
-| `HERDR_WEB_INSECURE` | 关 | `=1` 允许「暴露出去但没有 TLS」。除了临时调试没有正当用途 |
-| `HERDR_WEB_UPDATE_CHECK` | 开 | `=0` 关掉自动查更新。关掉之后这个进程**不会有任何出站请求** —— 内网机器不该主动连外网那类环境的硬要求。只是不自动查，手动 `herdr-web update --check` 照样能查 |
+| `HERDR_WEB_EXPOSED` | off | `=1` **declares that this port is reachable from the internet** (frp / port forwarding / tunnels). Behind frp the process usually listens on 127.0.0.1 and every request also comes from 127.0.0.1, so "is the listen address local" tells you nothing; it cannot be detected, only declared. Once declared: TLS is mandatory and loopback-without-pairing is turned off |
+| `HERDR_WEB_TLS_CERT` / `_KEY` | empty | Use the certificate you supply. If you own a domain and got a real certificate via DNS-01, take this route — zero browser warnings, no profiles to install, least friction |
+| `HERDR_WEB_ACME_DNS` | empty | Let herdr-web **get its own certificate**; the value is the DNS provider: `cloudflare` / `alidns` / `tencentcloud` / `route53` / `digitalocean` / `huaweicloud`. It uses DNS-01, so nothing has to reach you from outside — behind NAT, or with the domain pointed at a LAN address, it still works. **Where to get each provider's token and what scope it needs: [DNS.md](DNS.md)** (Chinese) |
+| `HERDR_WEB_ACME_EMAIL` | empty | ACME account email. Can be empty, but then you get no expiry reminders either |
+| `HERDR_WEB_ACME_STAGING` | off | `=1` uses Let's Encrypt staging. **Turn it on while debugging**: production allows 5 certificates per domain set per week, and a few attempts lock you out for a week |
+| `HERDR_WEB_TLS` | see notes | `auto` self-signed (local CA + 397-day leaf, re-issued automatically when the IP changes) / `off` plaintext / `proxy` something in front already terminated TLS. Default: exposed or listening on the LAN → `auto`, purely local → `off` |
+| `HERDR_WEB_HOSTNAME` | empty | Domains allowed in the `Host` header, comma separated. **IPs always pass, domains must be listed** — this is the only defence against DNS rebinding, and anything else gets a 421 |
+| `HERDR_WEB_PUBLIC_URL` | empty | The address you **actually visit** (`https://herdr.example.com:17788`). With frp the public port is often not the local one, and without this the QR code in the banner is useless. The domain in it is allowlisted automatically |
+| `HERDR_WEB_DEVICE_TTL_DAYS` | `90` | How long a device credential survives without use (renewed on every use). `0` = **never expires** |
+| `HERDR_WEB_RPID` | derived | The domain a passkey is bound to. Defaults to the first `HERDR_WEB_HOSTNAME`, or `localhost` when purely local. **A bare IP is not a valid value** — such deployments cannot use passkeys |
+| `HERDR_WEB_REAUTH_HOURS` | `24` | Once a passkey is registered, how long a session credential remains valid after the last biometric check. `0` = no re-verification (passkeys serve only as the login / new-device path). **Does nothing at all while no passkey is registered** |
+| `HERDR_WEB_LEGACY_TOKEN` | `on` | `on` / `loopback` (the old token only works locally) / `off`. Once migrated, just delete the token file |
+| `HERDR_WEB_TRUST_LOOPBACK` | off | `=1` exempts requests from 127.0.0.1 from pairing. **Never turn this on behind frp or a reverse proxy** — there, public requests also arrive from 127.0.0.1, i.e. everyone is "local". When on, it additionally requires `Host` to be a loopback literal |
+| `HERDR_WEB_TRUST_PROXY` | off | `=1` is required to read `X-Forwarded-For`. With no trusted proxy in front, leaving it on lets an attacker forge the source IP with a header and walk around per-IP rate limiting |
+| `HERDR_WEB_INSECURE` | off | `=1` permits "exposed but no TLS". No legitimate use beyond temporary debugging |
+| `HERDR_WEB_UPDATE_CHECK` | on | `=0` disables automatic update checks. With it off the process makes **no outbound requests at all** — a hard requirement in the kind of environment where an internal machine must not dial out. Only the automatic check is disabled; `herdr-web update --check` still works |
 
-### 排查
+### Troubleshooting
 
-| 变量 | 默认 | 说明 |
+| Variable | Default | Meaning |
 |---|---|---|
-| `HERDR_WEB_DEBUG_INPUT` | 关 | `=1` 时把写进 PTY 的每一批字节 hex 打到日志（包括自动敲的那行，前缀 `onconnect`）。排「某个键到底发出去了什么」只能靠它 —— 猜是猜不出来的 |
+| `HERDR_WEB_DEBUG_INPUT` | off | `=1` logs every batch of bytes written into the PTY as hex (including the auto-typed line, prefixed `onconnect`). The only way to answer "what exactly did that key send" — guessing does not work |
 
-### 不带 `HERDR_WEB_` 前缀、但会被读到的
+### Read but not prefixed with `HERDR_WEB_`
 
-| 变量 | 什么时候用 |
+| Variable | When it matters |
 |---|---|
-| `SHELL` | `HERDR_WEB_SHELL` 没给时，PTY 里跑的就是它（再没有就 `/bin/zsh`） |
-| `HERDR_SOCKET_PATH` | `HERDR_WEB_SOCKET` 没给时的 herdr socket 兜底。**别指望它在**：`dropEnv` 会把 `HERDR_*` 从子进程里清掉（防嵌套启动），而本进程也可能不是从 herdr pane 里起的 |
+| `SHELL` | The shell run inside the PTY when `HERDR_WEB_SHELL` is unset (falling back to `/bin/zsh`) |
+| `HERDR_SOCKET_PATH` | Fallback herdr socket when `HERDR_WEB_SOCKET` is unset. **Do not count on it being there**: `dropEnv` strips `HERDR_*` from child processes (to prevent nesting), and this process may not have started from a herdr pane |
 
-### 几套常见的配法
+### A few common setups
 
 ```bash
-# 1. 纯本机（默认）：明文 http，loopback 上本来就是 secure context
+# 1. Purely local (default): plain http, since loopback is a secure context anyway
 ./herdr-web
 
-# 2. 局域网里的手机 / 平板：自签 TLS，扫横幅上的二维码配对
+# 2. Phone / tablet on the LAN: self-signed TLS, pair by scanning the banner QR
 HERDR_WEB_HOST=0.0.0.0 ./herdr-web
 
-# 3. 走 frp / 隧道暴露到公网：EXPOSED 必须自己声明（进程只监听 127.0.0.1，
-#    它自己看不出来外面有没有人能碰到），PUBLIC_URL 决定二维码编的是哪个地址
+# 3. Exposed through frp / a tunnel: EXPOSED must be declared (the process only
+#    listens on 127.0.0.1 and cannot tell whether anyone outside can reach it),
+#    PUBLIC_URL decides which address the QR code encodes
 HERDR_WEB_EXPOSED=1 HERDR_WEB_TLS=proxy \
 HERDR_WEB_PUBLIC_URL=https://herdr.example.com \
 HERDR_WEB_HOSTNAME=herdr.example.com ./herdr-web
 
-# 4. 自己有域名 + 真证书（浏览器零警告，最省事）
+# 4. Your own domain + a real certificate (zero browser warnings, least friction)
 HERDR_WEB_HOST=0.0.0.0 HERDR_WEB_HOSTNAME=herdr.example.com \
 HERDR_WEB_TLS_CERT=/etc/ssl/herdr/fullchain.pem \
 HERDR_WEB_TLS_KEY=/etc/ssl/herdr/privkey.pem ./herdr-web
 
-# 5. 不想一连上就进 herdr（留在 shell 里）
+# 5. Do not drop into herdr on connect (stay in the shell)
 HERDR_WEB_ONCONNECT= ./herdr-web
 ```
 
-## 守护进程
+## Daemon
 
-装成 user 级常驻服务，开机自启：
+Install it as a user-level service that starts on boot:
 
 ```bash
-herdr-web service install     # macOS → launchd LaunchAgent；Linux → systemd user unit
-herdr-web service status      # 装没装、跑没跑、PID、日志在哪
-herdr-web service logs        # tail -f 日志
-herdr-web service restart     # 换过二进制之后要这一步
-herdr-web service uninstall   # 停掉并删掉（数据和日志不动）
+herdr-web service install     # macOS → launchd LaunchAgent; Linux → systemd user unit
+herdr-web service status      # installed? running? PID? where are the logs?
+herdr-web service logs        # tail -f the log
+herdr-web service restart     # needed after replacing the binary
+herdr-web service uninstall   # stop and remove (data and logs untouched)
 ```
 
-**配置是装的那一刻从当前 shell 抄进去的。** 所以顺序是「先把环境配对，再 install」；改了配置要重新 `install`（幂等，就是覆盖 + 重启）。想从文件读：
+**Configuration is copied out of the current shell at install time.** So the order is "get the environment right, then install"; changing configuration means installing again (it is idempotent — overwrite and restart). To read it from a file:
 
 ```bash
 herdr-web service install --env-file .env
 ```
 
-抄进去的是所有 `HERDR_WEB_*`，加上 `PATH` / `SHELL` / `HOME` / `USER` / `LOGNAME` / `LANG` / `LC_ALL` / `TERM` / `HERDR_SOCKET_PATH`。`install` 会把这份清单全打出来 —— 以后「这台机器上服务到底在用哪套配置」只能靠 plist / unit 回答，装的时候看一眼最省事。
+What gets copied is every `HERDR_WEB_*`, plus `PATH` / `SHELL` / `HOME` / `USER` / `LOGNAME` / `LANG` / `LC_ALL` / `TERM` / `HERDR_SOCKET_PATH`. `install` prints the whole list — from then on, "which configuration is this machine's service actually using" can only be answered by the plist / unit, so it is cheapest to read it at install time.
 
-**签证书那条路（C / D 档）必须用 `--env-file`。** DNS provider 的凭据（`CLOUDFLARE_DNS_API_TOKEN`、`ALICLOUD_ACCESS_KEY` 这些）既不带 `HERDR_WEB_` 前缀、也不在上面那张白名单里，所以**从 shell 抄不进去**：你在 `.zshrc` 里 export 得再对，装出来的服务照样签不出证书，而且要等到第一次签发才炸。`--env-file` 里的 key 是**整份**进去的（还盖过当前环境），这是唯一能把 token 交给服务的路。文件只在 `install` 那一刻读，之后不再碰。
+**Certificate issuance (tiers C / D) requires `--env-file`.** DNS provider credentials (`CLOUDFLARE_DNS_API_TOKEN`, `ALICLOUD_ACCESS_KEY` and friends) neither carry the `HERDR_WEB_` prefix nor appear in the allowlist above, so **they are not copied from the shell**: however correctly you exported them in `.zshrc`, the installed service still cannot get a certificate — and it only blows up at the first issuance. Keys in `--env-file` go in **wholesale** (and override the current environment), which makes it the only way to hand the token to the service. The file is read at `install` time only and never touched again.
 
-plist / unit 是 **0600** 的 —— 里面就是这份环境变量的明文。
+The plist / unit is **0600** — its contents are exactly that environment in plaintext.
 
-**抄 `PATH` 是必须的，这是装成服务后最常见的故障**：launchd 给的默认 `PATH` 只有 `/usr/bin:/bin:/usr/sbin:/sbin`，于是 `HERDR_WEB_ONCONNECT=herdr` 变成 `herdr: command not found`，而页面上只看到一个空 shell，完全看不出为什么。
+**Copying `PATH` is mandatory, and it is the most common failure after installing as a service**: launchd's default `PATH` is only `/usr/bin:/bin:/usr/sbin:/sbin`, so `HERDR_WEB_ONCONNECT=herdr` turns into `herdr: command not found` while the page just shows an empty shell with no clue why.
 
-为什么是 user 级不是系统级：这个进程会开一个**你的** shell。跑成 root 的系统服务意味着浏览器里那个终端是 root 的，权限一步到位放到最大，而且 `~/.herdr-web`、`~/.config/herdr/herdr.sock` 这些路径全指到别人家去了。
+Why user-level rather than system-level: this process opens **your** shell. Running it as a root system service means the terminal in the browser is root's, permissions jump straight to maximum, and `~/.herdr-web` and `~/.config/herdr/herdr.sock` all point at somebody else's home.
 
-两个平台各自的坑：
+Platform-specific traps:
 
-| | 文件 | 注意 |
+| | File | Note |
 |---|---|---|
-| macOS | `~/Library/LaunchAgents/io.github.zbysir.herdr-web.plist` | LaunchAgent 是**登录时**起，不是开机时起。开了自动登录的机器上二者等价；没开的话得登录一次。真要「无人登录也起」只能用 `/Library/LaunchDaemons` 里的系统级 daemon，但那样 shell 就是 root 的，这个项目不做。 |
-| Linux | `~/.config/systemd/user/herdr-web.service` | `install` 会顺手 `loginctl enable-linger`。**不开 linger 的话，你 ssh 退出登录之后服务会被停掉** —— 对一台要随时能连进去的机器来说那等于没常驻。失败会提示你手动 `sudo loginctl enable-linger $USER`。 |
+| macOS | `~/Library/LaunchAgents/io.github.zbysir.herdr-web.plist` | A LaunchAgent starts **at login**, not at boot. On a machine with automatic login the two are equivalent; otherwise you have to log in once. "Start with nobody logged in" would require a system-level daemon in `/Library/LaunchDaemons`, which makes the shell root's — this project does not do that. |
+| Linux | `~/.config/systemd/user/herdr-web.service` | `install` also runs `loginctl enable-linger`. **Without linger the service is stopped when you log out of ssh** — for a machine you want to reach at any time, that is the same as not running at all. If it fails it tells you to run `sudo loginctl enable-linger $USER`. |
 
-日志两个平台都在 `~/.herdr-web/logs/herdr-web.log`（故意统一，文档和 `service logs` 只有一套说法）。Linux 上 `journalctl --user -u herdr-web` 一样能看。
+Logs are at `~/.herdr-web/logs/herdr-web.log` on both platforms (deliberately identical, so the docs and `service logs` have one answer). On Linux `journalctl --user -u herdr-web` works as well.
 
-`service status` 显示「装了但没在跑」就是**起来就崩**，原因只在日志里 —— launchd 和 systemd 都会按几秒的退避一直重试，不看日志会以为它在跑。
+`service status` reporting "installed but not running" means **it crashes on start**, and the reason is only in the log — launchd and systemd both keep retrying with a few seconds of backoff, so without looking you would assume it is running.
 
-Windows / 没有 systemd 的 Linux（容器、WSL1）会明确告诉你用不了以及该怎么办，不会装一个跑不起来的东西。WSL2 里加 `[boot] systemd=true` 到 `/etc/wsl.conf` 然后 `wsl --shutdown` 重开就能用。
+Windows, and Linux without systemd (containers, WSL1), are told clearly that this cannot work and what to do instead, rather than being given something that will not run. On WSL2, add `[boot] systemd=true` to `/etc/wsl.conf` and `wsl --shutdown` to restart, and it works.
 
-## 更新
+## Updating
 
 ```bash
-herdr-web update            # 查 + 升
-herdr-web update --check    # 只查，不动
-herdr-web update --restart  # 升完顺手重启服务
-herdr-web version           # 当前版本 + 当初是怎么装的
+herdr-web update            # check and upgrade
+herdr-web update --check    # check only, change nothing
+herdr-web update --restart  # upgrade, then restart the service
+herdr-web version           # current version + how it was installed
 ```
 
-**怎么升取决于当初怎么装的**，`update` 自己判断（看可执行文件路径，symlink 会先解开）：
+**How it upgrades depends on how it was installed**, and `update` works that out itself (from the executable's path, resolving symlinks first):
 
-| 装法 | 升级动作 |
+| Installed via | Upgrade action |
 |---|---|
-| npm | 调 `npm install -g @bysir/herdr-web@latest` |
-| homebrew | 调 `brew upgrade herdr-web` |
-| `go install` | 调 `go install …@latest` |
-| release archive / install.sh | **本程序自己来**：下载 → 校验 sha256 → 同目录写临时文件 → `rename` 原子替换 |
+| npm | runs `npm install -g @bysir/herdr-web@latest` |
+| homebrew | runs `brew upgrade herdr-web` |
+| `go install` | runs `go install …@latest` |
+| release archive / install.sh | **does it itself**: download → verify sha256 → write a temp file in the same directory → atomic `rename` |
 
-包管理器装的不自己动文件，是因为去改 `node_modules` / `Cellar` 里的东西，下次那个包管理器一升级就盖回去了，白忙一场。
+Package-manager installs are not touched directly because editing things inside `node_modules` / `Cellar` gets overwritten the next time that package manager runs — wasted effort.
 
-自己换的那条路有三个点是刻意的：**先校验再落地**（`checksums.txt` 对不上就整个放弃）、**临时文件必须同目录**（跨目录 `rename` 会 EXDEV）、**不删旧的**（unix 上 rename 覆盖一个正在运行的可执行文件是允许的，老 inode 还被进程持着，所以当前进程能安全跑到自己退出）。
+Three things about the self-managed path are deliberate: **verify before landing** (a `checksums.txt` mismatch aborts everything), **the temp file must be in the same directory** (a cross-directory `rename` gives EXDEV), and **the old file is not deleted** (on unix, renaming over a running executable is allowed, the old inode is still held by the process, so the current process runs safely until it exits).
 
-**换完文件不等于换了正在跑的那个进程。** 重启才生效，而重启会掐掉所有正在用的终端会话 —— 所以这一步默认不做，`--restart` 才做。
+**Replacing the file is not the same as replacing the running process.** Only a restart takes effect, and a restart kills every terminal session in use — so it is not done by default, only with `--restart`.
 
-新版本提示出现在三个地方：
+New-version notices appear in three places:
 
-- **启动横幅**最后一行（用缓存，不在启动路径上发请求 —— 网络慢的时候那会变成「启动卡十秒」）；
-- **管理页**最上面横一条，带当前版本、该敲哪条命令、更新说明链接；
-- 服务在跑的时候，后台每天查一次，发现新版本往**日志**里写一行（同一个版本只提一次，不会天天刷）。
+- the last line of the **startup banner** (from cache, so no request is made on the startup path — on a slow network that would turn into "startup hangs for ten seconds");
+- a strip at the top of the **admin page**, with the current version, the command to run and a link to the release notes;
+- while the service is running, a daily background check writes one line to the **log** when a new version appears (once per version, not daily nagging).
 
-查更新走 GitHub Releases 的匿名接口，结果缓存在 `~/.herdr-web/update.json`（落盘的，所以频繁重启不会变成每次都查；查失败也记时间戳，网络不通的机器不会每次启动都撞一次超时）。`HERDR_WEB_UPDATE_CHECK=0` 彻底关掉自动查 —— 关掉之后这个进程不会有任何出站请求。本地构建（`version` 显示 `dev`）不查也不提示。
+Checks go to GitHub Releases' anonymous API, with results cached in `~/.herdr-web/update.json` (on disk, so frequent restarts do not mean checking every time; failures are stamped too, so a machine with no connectivity does not eat a timeout on every start). `HERDR_WEB_UPDATE_CHECK=0` disables the automatic check entirely — with it off, this process makes no outbound requests at all. Local builds (where `version` reports `dev`) neither check nor nag.
 
-## 安全
+## Security
 
-**这个东西等于一个 HTTP 上的 shell**（发件箱那条路即使不开 PTY 也能让 agent 跑命令），所以门是按这个前提设计的。设计文档和威胁模型在 [SECURITY.md](SECURITY.md)，这里只写现在**已经实现**的：
+**This thing amounts to a shell over HTTP** (the outbox alone can make an agent run commands, even without a PTY), so the door is designed on that premise. The design document and threat model are in [SECURITY.md](SECURITY.md) (Chinese); what follows is only what is **already implemented**:
 
-- **一台设备配一次**。一次性配对码（40 位、5 分钟、用一次就废，只在内存里）换一份 per-device 凭据，放 `HttpOnly; SameSite=Strict` cookie。服务端 `~/.herdr-web/devices.json` 里**只存 sha256** —— 这台机器上跑的 agent 天天读不可信内容，凭据文件被 prompt injection 读走在这儿是日常风险，不是理论风险。
-- **凭据绑设备，不绑 IP。** 按 IP 记住信任两头都输：DHCP 会把你批准过的地址分给别人（客人连一下 Wi-Fi 就进你的 shell），而你自己换个 Wi-Fi 就要重新配对。
-- **URL 里没有秘密。** `?pair=` / 旧 `?token=` 进来就换成 cookie 再 302 洗掉，所以浏览器历史、书签云同步、截图都不再是泄露渠道。
-- **能撤销。** 命令行 `herdr-web devices` / `revoke`，网页上是设置 →「设备」里的「登出」/「踢掉」，下一个请求立刻 401。
-- **配对码只能由坐在机器前的人产生**（`herdr-web pair` 或启动横幅），网页上任何路径都不出码，连已配对的设备也不行。两个理由：① 码创造的是一份**不随创造者一起被撤销**的独立凭据 —— 手机被人拿去一次、他配一台自己的进来，你之后把手机踢掉，他那台还在，等于绕过撤销做了持久化；② 码是打在终端里的，而那个终端往往是个 herdr pane，同 session 的 agent 能 `pane.read` 读到它 —— 要是外面的人能远程触发「打一个码」，「触发打印 + 被注入的 agent 读走」就是一条完整的远程配对链，人根本不用碰机器。在 L2 的第二因子做出来之前，「能读到那个终端」是系统里**唯一的带外因子**，不能动。
-- **暴露出去又没 TLS 就拒绝启动**（以前只打一行警告，警告没人看）。自签走本地 CA + 397 天叶子，IP 变了自动重签、但设备信任的是 CA，所以不用重新点「继续访问」。
-- **Host 白名单**挡 DNS rebinding（IP 一律放行，域名必须在 `HERDR_WEB_HOSTNAME` 里，否则 421）、**Origin 校验** + `SameSite=Strict` + 一个自定义头三道挡 CSRF、`/pty` 上没有 Origin 的 cookie 请求直接拒。
-- **限速和封锁**：猜配对码前两次免罚，之后指数退避；15 分钟里 10 次封该 IP 15 分钟（重犯翻倍，上限 24 小时），换源 IP 的分布式尝试会触发全局熔断（只拒新配对，不动已有会话），终端上打告警。只数「猜短凭据」的失败 —— cookie 认不出来不算，不然刚 revoke 一台旧手机就把自己封了。**本机默认永不封**（否则解锁的入口也在门后面），但**声明了 `EXPOSED` 之后这个豁免自动关掉** —— 见下面 frp 那节，穿透进来的源 IP 全是 127.0.0.1，留着它整层限速就是空转。
-- 安全响应头（CSP / nosniff / no-referrer / DENY）、PTY 并发上限 8、OSC 8 链接只放 `http/https/mailto`（终端上显示什么是程序说了算的）。
-- **故意不发 HSTS**：自签证书配上 HSTS 会把「继续访问」那个口也焊死，而且清不掉。
+- **Pair each device once.** A one-time code (40 bits, 5 minutes, single use, memory only) is exchanged for a per-device credential in an `HttpOnly; SameSite=Strict` cookie. The server's `~/.herdr-web/devices.json` **stores only sha256** — the agents on this machine read untrusted content all day, so "the credential file gets read by prompt injection" is a daily risk here, not a theoretical one.
+- **Credentials are bound to a device, not an IP.** Remembering trust by IP loses both ways: DHCP hands an address you approved to somebody else (a guest joins the Wi-Fi and is in your shell), and changing your own Wi-Fi means pairing again.
+- **No secrets in URLs.** `?pair=` and the legacy `?token=` are exchanged for a cookie and scrubbed with a 302, so browser history, bookmark sync and screenshots stop being leak channels.
+- **Revocable.** `herdr-web devices` / `revoke` from the CLI, or Settings → Devices → "Sign out" / "Kick" on the web; the next request gets 401.
+- **Only someone at the machine can produce a pairing code** (`herdr-web pair` or the startup banner). No path on the web issues one, not even to an already-paired device. Two reasons: ① a code creates an independent credential that **is not revoked along with its creator** — someone borrows your phone once, pairs their own device, and after you kick the phone theirs is still in: persistence that bypasses revocation; ② the code is printed into a terminal, and that terminal is often a herdr pane, where an agent in the same session can `pane.read` it — so if an outsider could remotely trigger "print a code", "trigger the print + let an injected agent read it" is a complete remote pairing chain with nobody ever touching the machine. Until the second factor at L2 exists, "can see that terminal" is **the only out-of-band factor in the system** and must not be weakened.
+- **Refuses to start when exposed without TLS** (it used to be a warning line, and warnings go unread). Self-signed uses a local CA + a 397-day leaf; a changed IP re-issues automatically, but devices trust the CA, so nobody has to click "proceed" again.
+- **A Host allowlist** blocks DNS rebinding (IPs always pass, domains must be in `HERDR_WEB_HOSTNAME` or get a 421); **Origin checks** plus `SameSite=Strict` plus a custom header make three layers against CSRF; a cookie-bearing request to `/pty` with no Origin is rejected outright.
+- **Rate limiting and lockout**: the first two wrong pairing codes are free, then exponential backoff; 10 failures within 15 minutes bans that IP for 15 minutes (doubling for repeat offenders, capped at 24 hours), and distributed attempts from rotating source IPs trip a global breaker (which only refuses new pairings and leaves existing sessions alone) with a warning printed in the terminal. Only **short-credential guessing** counts as failure — an unrecognised cookie does not, otherwise revoking an old phone would immediately lock you out. **Loopback is never banned by default** (the unlock path is behind the same door), but **declaring `EXPOSED` turns that exemption off automatically** — see the frp section below: everything tunnelled in has source IP 127.0.0.1, and leaving the exemption on would make the entire rate-limiting layer a no-op.
+- Security headers (CSP / nosniff / no-referrer / DENY), a cap of 8 concurrent PTYs, and OSC 8 links restricted to `http/https/mailto` (what a terminal displays is up to the program).
+- **HSTS is deliberately not sent**: with a self-signed certificate, HSTS would weld the "proceed anyway" route shut, and it cannot be cleared.
 
-- **passkey**（第二因子）。设置 → 设备 → passkey → 添加。服务端**只存公钥**，所以凭据文件被同机 agent 读走也没用（TOTP 的共享密钥做不到这一点，这是选它的主要原因）。加完之后：换新设备不用回机器前（同步的 passkey 在你所有设备上都有），而且会话凭据的寿命可以从三个月压到一天。要求用域名访问 —— 裸 IP 不是合法的 WebAuthn 标识。
+- **Passkeys** (second factor). Settings → Devices → passkey → add. The server **stores only the public key**, so an agent on the same machine reading the credential file gains nothing (TOTP's shared secret cannot offer that, which is the main reason for choosing this). Once added: moving to a new device does not require going back to the machine (a synced passkey is on all of your devices), and session credential lifetime can drop from three months to one day. It requires a domain — a bare IP is not a valid WebAuthn identity.
 
-还没做（按值排序）：审计日志、令牌滚动轮换 + 重用检测、`panic` 一键断开。
+Not built yet (in order of value): audit logging, token rotation with reuse detection, a `panic` disconnect-everything button.
 
-### 从公网连（frp / 隧道）
+### Reaching it from the internet (frp / tunnels)
 
-> 完整的公网访问方案、分档简化路线、以及实际部署时踩的运维坑：[DEPLOY.md](DEPLOY.md)。
+> The complete public-access design, the simplification tiers, and the operational traps hit in a real deployment: [DEPLOY.md](DEPLOY.md) (Chinese).
 
-推荐 **frp 的 `type = tcp` + herdr-web 自己拿真证书**：TLS 端到端，frps 那台 VPS 上只看得到密文。用 frp 的 https 模式就是在 VPS 上解密，那台机器能看到你的整个终端画面。
+The recommendation is **frp's `type = tcp` plus herdr-web holding a real certificate**: TLS end to end, and the VPS running frps only ever sees ciphertext. frp's https mode decrypts on the VPS, which means that machine can watch your entire terminal.
 
 ```bash
 HERDR_WEB_EXPOSED=1 HERDR_WEB_TLS_CERT=~/certs/herdr.example.com/fullchain.pem HERDR_WEB_TLS_KEY=~/certs/herdr.example.com/privkey.pem HERDR_WEB_HOSTNAME=herdr.example.com HERDR_WEB_PUBLIC_URL=https://herdr.example.com:17788 ./herdr-web
 ```
 
-证书用 DNS-01 签（`lego` / `certbot` 都行）：**不需要公网可达，只要能改一条 TXT 记录**，所以把 A 记录指到内网地址也能拿到浏览器默认信任的证书 —— 手机上零警告、是 secure context（剪贴板和 `OSC 52` 跟着正常）、passkey 的域名门槛也一起解决了。
+Get the certificate via DNS-01 (`lego` or `certbot`): **nothing needs to reach you, you only need to edit one TXT record**, so even with the A record pointing at a LAN address you get a certificate browsers trust by default — zero warnings on the phone, a secure context (so the clipboard and `OSC 52` behave), and the passkey domain requirement solved in one move.
 
-⚠️ **`HERDR_WEB_EXPOSED=1` 必须自己声明**：走 frp 时 frpc 从本机连过来，herdr-web 看到的监听地址是 `127.0.0.1`、每个请求的源地址也是 `127.0.0.1`，「是不是本机」这个判据彻底失效。没声明的话「暴露了却检测不到」和「本机免配对把公网请求也放进来」这两个洞会同时开着。前者靠这个变量兜，后者已经改成**默认关**了。
+⚠️ **`HERDR_WEB_EXPOSED=1` has to be declared by you**: behind frp, frpc connects from localhost, so herdr-web sees a listen address of `127.0.0.1` and a source address of `127.0.0.1` on every request — "is this local" is useless. Without the declaration, "exposed but undetectable" and "loopback-without-pairing lets public requests in" are both open at once. The variable covers the first; the second is now **off by default**.
 
-⚠️ **frp 的 tcp 模式拿不到客户端真实 IP**：所有请求在 herdr-web 眼里都来自 `127.0.0.1`（frpc 在容器里时也一样）。这有两个后果：
+⚠️ **frp's tcp mode cannot see the client's real IP**: as far as herdr-web is concerned every request comes from `127.0.0.1` (same when frpc runs in a container). Two consequences:
 
-1. 按 IP 的限速会把所有人算成同一个。封锁只挡新配对、不碰已有会话，所以最坏是「十五分钟内配不了新设备」，`herdr-web unlock` 解开。
-2. **「本机永不封」这个豁免必须关掉**，否则整层限速是空转 —— 看起来配了，一次都不生效。`HERDR_WEB_EXPOSED=1` 会自动关掉它，这也是这个变量必须声明的另一个理由。
+1. Per-IP rate limiting counts everyone as the same person. Lockout only blocks new pairings and leaves existing sessions alone, so the worst case is "you cannot pair a new device for fifteen minutes"; `herdr-web unlock` clears it.
+2. **The "never ban loopback" exemption must be turned off**, otherwise the whole rate-limiting layer is a no-op — configured, and never once effective. `HERDR_WEB_EXPOSED=1` turns it off automatically, which is the other reason that variable must be declared.
 
-想要真实 IP 就在 frpc 上开 `transport.proxyProtocolVersion = "v2"`（herdr-web 还得会解 PROXY 协议头，现在不会），或者用 http 模式让 frps 加 `X-Forwarded-For`（那时候才配 `HERDR_WEB_TRUST_PROXY=1`）。**没有可信前置千万别开那个变量** —— 攻击者自带一个头就能伪造源 IP。
+If you want real IPs, enable `transport.proxyProtocolVersion = "v2"` on frpc (herdr-web would also need to parse the PROXY header, which it does not yet), or use http mode so frps adds `X-Forwarded-For` (only then set `HERDR_WEB_TRUST_PROXY=1`). **Never set that variable without a trusted proxy in front** — an attacker just brings their own header.
 
-### 别的
+### Odds and ends
 
-http 不是安全上下文，`navigator.clipboard` 不可用，所以手机上 `OSC 52` 会失效、`⌘C` 退回 `execCommand('copy')` 兜底。上了 HTTPS 就都正常。
+http is not a secure context, so `navigator.clipboard` does not exist: on a phone `OSC 52` stops working and `⌘C` falls back to `execCommand('copy')`. Over HTTPS everything behaves.
 
-cookie **不区分端口**：同一台主机上另一个端口的 web 服务也会收到这个 cookie（`HttpOnly` 只挡 JS 读，挡不住浏览器发）。没有解法，别在同一台机器上跑不可信的 web 服务。
+Cookies **do not distinguish ports**: another web service on a different port of the same host also receives this cookie (`HttpOnly` only stops JS from reading it, not the browser from sending it). There is no fix — do not run untrusted web services on the same machine.
 
-**配对码打在终端里，如果那是个 herdr pane，同 session 的别的 agent 能用 `pane.read` 读到它**（这个项目自己的发件箱就是这么读 pane 的）。窗口是 5 分钟 + 一次性，而且只有你主动出码时才存在（正因为这条，远程触发出码的口子被去掉了）；再不放心就在 herdr 之外的终端里 `herdr-web pair`。
+**The pairing code is printed into a terminal, and if that terminal is a herdr pane, other agents in the same session can `pane.read` it** (this project's own outbox reads panes exactly that way). The window is 5 minutes and single use, and it only exists when you actively ask for a code (which is why remotely triggering one was removed). If that still bothers you, run `herdr-web pair` in a terminal outside herdr.
