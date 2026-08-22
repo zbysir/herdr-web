@@ -950,6 +950,17 @@ token 全定在 `web/src/index.css` 的 `@theme` 里（暗亮各一份），组�
 
 ## 几个坑（已经处理了，记下来免得回头再踩）
 
+- **Android 上「tap 手势本身就会把输入法顶回来」，`preventDefault` 拦不住。** Chromium 处理完一个
+  GestureTap 之后**无条件**调 `ShowVirtualKeyboard()`（`WebFrameWidgetImpl::DidHandleGestureEvent`，
+  不看事件被没被取消），浏览器那侧只判「此刻聚焦的元素可不可编辑」。而**用返回键 / 系统手势收键盘
+  不会 blur 页面元素** —— 终端那个隐藏 textarea 还聚着焦，于是点任何一个「刻意不改焦点」的按钮
+  （顶栏那排、软键条、键盘收起时顶栏留的那条 8px 缝）都会把 IME 重新弹出来。两条治法都在用：
+  ① 那条缝**原生吃掉 touchstart**（React 的 `onTouchStart` 是 passive 的，`preventDefault` 不生效；
+  吃 touchend 也不行 —— 「touchend 被 handled + Android」本身是弹键盘的另一个触发条件），
+  touchstart 一被取消，Chromium 会丢掉整条手势序列，连 click 都没有，所以展开动作在那儿自己做；
+  ② 视口长回去（键盘没了）而焦点还在输入框上时**主动 blur**，让状态和事实一致 —— 顶栏自己就回来了，
+  而且没有可编辑元素可弹。②的判据只在「这个浏览器确实会因为键盘压缩视口」时才生效（有的浏览器
+  纹丝不动，见上面「手机」那节）。
 - **触屏上「点了没反应 / 键盘自己弹出来 / 焦点被拽走」这一类，别用合成事件验。** 这条是三轮没修掉
   同一个 bug 换来的：`dispatchEvent` 派出去的合成事件**不会派生兼容鼠标事件**，于是我手动补了一个
   `touchend` —— 而真机上那一下恰恰是唯一必然丢失的事件（浮层在 `pointerup` 的处理里被卸掉，而 touch

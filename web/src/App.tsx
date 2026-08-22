@@ -466,6 +466,25 @@ export default function App() {
   useEffect(() => { if (!typing) setPeek(false) }, [typing])
   const barHidden = phone && typing && !peek
 
+  /**
+   * **系统把输入法收掉时，顺手把焦点也摘掉。**
+   *
+   * Android 上用返回键 / 系统手势收键盘**不会 blur 页面元素** —— 终端那个隐藏输入框还聚着
+   * 焦，于是 `kbdUp` 一直是 true：顶栏一直收成那条缝（键盘明明已经没了），而且再点任何一个
+   * 「不改焦点」的按钮，Chromium 都会把 IME 重新弹出来（处理完 tap 手势之后无条件
+   * `ShowVirtualKeyboard()`，只看此刻聚焦的元素可不可编辑，`preventDefault` 拦不住）。
+   * 焦点一摘，这两件事同时消失：状态回到「没在打字」，而且没有可编辑元素可弹。
+   *
+   * 判据是「视口刚才被压过、这会儿长回去了」，而且**只在这个浏览器确实会压视口时才认**
+   * （`sawRoom`）：有的浏览器键盘弹出时页面高度纹丝不动（见 README「手机」那节），那儿
+   * `kbRoom` 恒 false，拿它当判据会把正在打字的人的焦点摘掉。
+   */
+  const sawRoom = useRef(false)
+  useEffect(() => {
+    if (kbRoom) { sawRoom.current = true; return }
+    if (sawRoom.current) blurInput()
+  }, [kbRoom])
+
   /* --------------------------------------------------------- 配对门 */
   useEffect(() => {
     // 凭据随时可能没了（在别的地方 revoke 过、浏览器数据被清过），不只是启动时要查。
@@ -960,7 +979,32 @@ export default function App() {
           data-testid="header-peek"
           className="flex h-2 shrink-0 items-center justify-center border-b border-line bg-bar"
           title="点一下展开顶栏"
-          onClick={() => setPeek(true)}
+          /**
+           * **touchstart 必须自己原生吃掉，展开也在那儿做。**
+           *
+           * 用户报过：键盘收着（Android 上用返回键收的）、顶栏收成这条缝，点一下展开 ——
+           * 输入法自己又弹出来了。那一下不是页面里任何代码干的：Chromium 处理完一个
+           * **GestureTap** 之后**无条件**调 `ShowVirtualKeyboard()`（`WebFrameWidgetImpl::
+           * DidHandleGestureEvent`，不看事件有没有被 preventDefault），浏览器那边只看
+           * 「此刻聚焦的元素可不可编辑」—— 而 Android 用返回键收键盘时**不会 blur**，终端
+           * 那个隐藏 textarea 还聚着焦，于是 IME 被重新顶出来。所以 click / mousedown 上
+           * 的 preventDefault 一律拦不住，只有**让这条手势序列压根不产生**才行：touchstart
+           * 被 preventDefault 之后 Chromium 会丢掉整条序列（没有 GestureTap、也没有兼容
+           * 鼠标事件和 click）—— 这也是点终端本体从来不会这样弹的原因（`term/touch.ts`
+           * 的 onStart 就是这么做的）。
+           *
+           * 两个坑：React 的 `onTouchStart` 挂在 root 上、是 **passive** 的，
+           * `preventDefault()` 不生效，必须原生监听 `{ passive: false }`；改成吃 touchend
+           * 也不行 —— 「touchend 被 handled + Android」本身就是 Chromium 弹键盘的另一个
+           * 触发条件（`WidgetBaseInputHandler`）。
+           */
+          ref={(el) => {
+            if (!el) return
+            const onTouch = (e: TouchEvent) => { e.preventDefault(); setPeek(true) }
+            el.addEventListener('touchstart', onTouch, { passive: false })
+            return () => el.removeEventListener('touchstart', onTouch)
+          }}
+          onClick={() => setPeek(true)} // 桌面鼠标 / 键盘激活走这条（触屏那条已经在上面接了）
           onMouseDown={(e) => e.preventDefault()}
         >
           <span className="h-0.5 w-10 rounded-full bg-line-hi" />
