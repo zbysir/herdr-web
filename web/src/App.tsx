@@ -152,13 +152,17 @@ export default function App() {
   /** 系统通知：**人正看着这一页时也弹**。默认关（那时候右上角那张卡已经在说了） */
   const [noticeOSFg, setNoticeOSFg] = useState(() => lsBool('noticeOSFg', false))
   /**
-   * 呼出键盘就自动全屏（**收起键盘不退出**）。默认关。
+   * 呼出键盘就自动全屏（**收起键盘不退出**）。**默认开。**
    *
    * 手机上打字那一下最缺高度：键盘吃掉半屏，地址栏和工具条又占一截，剩下的终端只有
    * 三五行。全屏能把后者要回来。**收键盘不退出**是刻意的 —— 每打一次字闪进闪出一次
    * 全屏，比不全屏还难受；退出全屏用顶栏那个按钮，一次的事。
+   *
+   * 默认开的代价是「浏览器不给全屏」的人会白挨一次提示，所以那条提示**一台设备只说一次**
+   * （见 fullWarned）：默认开的功能反复吐 toast 就成了噪音，而一次都不说又会变成
+   * 「这开关点了没反应」那种查不出来的毛病。桌面上没有软键盘，这个开关等于不存在。
    */
-  const [kbdFull, setKbdFull] = useState(() => lsBool('kbdFull', false))
+  const [kbdFull, setKbdFull] = useState(() => lsBool('kbdFull', true))
   /** 「跑完了」那种卡片挂多久（ms）；0 = 一直挂着。「等你回答」的永远挂着，不受这个管 */
   const [noticeMs, setNoticeMs] = useState(
     () => Number(localStorage.getItem('noticeCardMs') ?? AUTO_MS_DEFAULT) || 0,
@@ -323,7 +327,21 @@ export default function App() {
         onStatus: (text, cls) => setStatus({ text, cls }),
         onOverlay: (msg, btn) => setOverlay(msg === null ? null : { msg, btn: btn ?? '连接' }),
         onHeal: setHeals,
-        onKeyboardChange: setKbdUp,
+        onKeyboardChange: (up) => {
+          setKbdUp(up)
+          /*
+           * **双击终端唤起的键盘也算「呼出键盘」。** 这一条是漏掉过的：我只接了输入框的
+           * pointerdown 和 ⌨ 键，而手机上从终端进键盘最顺手的就是双击。
+           *
+           * 挂在这儿是因为 `toggleKeyboard()` 会**同步**回调过来，而双击那一下就在
+           * touchend 里 —— 手势还没过期，requestFullscreen 才给过（挂在「视口变矮」上
+           * 就是因为脱离了手势才一直失败）。
+           *
+           * 读 localStorage 而不是闭包里的 kbdFull：这个回调是建 Session 时传进去的，
+           * 只在 gate 变化时重建，闭包里那份很快就是旧的。
+           */
+          if (up && lsBool('kbdFull', true)) enterFull(true)
+        },
         onCopyBlocked: setPendingCopy,
         onPath: (raw) => void openPath(raw),
         onSwitchPanel: () => openPanesRef.current(),
@@ -546,8 +564,17 @@ export default function App() {
   // iOS Safari 只认 webkit 前缀那套（iPhone 上更是压根没有），所以两套都试，
   // 都没有就直说 —— 按钮点了没反应比没有这个按钮更糟。
   const [full, setFull] = useState(false)
-  // 全屏失败只吵一次：键盘那条路每弹一次键盘就会试一次
-  const fullWarned = useRef(false)
+  /**
+   * 全屏失败说过没有。**记在 localStorage 而不是内存**：这个开关默认开，而手机上页面
+   * 重开是家常便饭 —— 只记在内存的话，浏览器不给全屏的人每开一次页面就挨一条 toast。
+   * 一台设备说明白一次就够了。
+   *
+   * 存的是**失败原因本身**（不只是「说过了」）：手机上没有控制台，「为什么没全屏」只能
+   * 靠这一句 —— 设置里那条开关下面会把它显示出来（`kbdFullErr`）。
+   */
+  const fullWarned = useRef(!!localStorage.getItem('kbdFullErr'))
+  /** 有一次 requestFullscreen 还在路上：挡住同一下手势里的第二次请求（见 enterFull） */
+  const fullPending = useRef(false)
   useEffect(() => {
     const d = document as FsDoc
     const sync = () => {
@@ -573,18 +600,36 @@ export default function App() {
     const d = document as FsDoc
     const el = document.documentElement as FsEl
     if (d.fullscreenElement ?? d.webkitFullscreenElement) return
+    // 同一下手势会从两条路进来（点输入框的 pointerdown + 键盘状态回调），而
+    // `fullscreenElement` 要等请求真的落地才有值 —— 不挡住第二次的话，浏览器会拒掉它，
+    // 于是「明明全屏成功了，设置里却写着上次没成功」（实拍见过）。
+    if (fullPending.current) return
+    fullPending.current = true
     const say = (m: string) => {
+      localStorage.setItem('kbdFullErr', m) // 原因留着给设置面板显示（手机上没有控制台）
       if (quiet && fullWarned.current) return
       fullWarned.current = true
       toast(m)
     }
     const req = el.requestFullscreen ?? el.webkitRequestFullscreen
     if (!req) {
+      fullPending.current = false
       say('这个浏览器不给网页全屏。iPad / iPhone 上把页面「添加到主屏幕」，从主屏打开就没有地址栏了')
       return
     }
     // 用户手势之外调用、或者被策略挡住都会 reject，别让它变成一个没人看见的报错
-    void Promise.resolve(req.call(el)).catch((e: unknown) => say('全屏失败：' + (e as Error).message))
+    void Promise.resolve(req.call(el))
+      .then(() => {
+        // 成功过一次就把旧的失败记录清掉，不然设置里一直挂着一句过期的话
+        localStorage.removeItem('kbdFullErr')
+        fullWarned.current = false
+      })
+      // 被拒但**人已经在全屏里**（另一条路先成了）不算失败，别去写那条记录
+      .catch((e: unknown) => {
+        if (d.fullscreenElement ?? d.webkitFullscreenElement) return
+        say('全屏失败：' + (e as Error).message)
+      })
+      .finally(() => { fullPending.current = false })
   }
 
   const toggleFull = () => {
@@ -610,6 +655,32 @@ export default function App() {
     // enterFull 只读 ref 和 document，不必进依赖
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kbdFull, kbRoom])
+
+  /*
+   * 真正靠得住的触发点：**点输入框那一下本身**。
+   *
+   * 上面那个「视口被压掉了就全屏」是兜底，实际很容易失手 —— `requestFullscreen` 要的是
+   * **用户手势**，而键盘引起的 visualViewport resize 是那一下点击的**后果**，跑在另一个
+   * 任务里，那时候手势往往已经过期或者被别的调用消耗掉了（桌面上模拟一下就报
+   * `Permissions check failed`，真机上的表现就是「开了开关也不全屏」）。
+   *
+   * pointerdown 是捕获阶段、在 focus 之前，所以顺序正好：先进全屏，再聚焦、再弹键盘 ——
+   * 键盘是在全屏之后升起来的，不会被全屏那一下的重排顶掉。
+   *
+   * 只认真正会弹键盘的东西（textarea / input）。**终端那一块不算** —— 手机上点终端多半
+   * 是要看、要滚，不是要打字，点一下就全屏太粗暴；从终端进键盘走的是软键条那个 ⌨ 键，
+   * 那条路单独接（见 onKeyboard）。
+   */
+  useEffect(() => {
+    if (!kbdFull) return
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as HTMLElement | null
+      if (t?.closest('textarea, input:not([type=checkbox]):not([type=radio])')) enterFull(true)
+    }
+    document.addEventListener('pointerdown', onDown, true)
+    return () => document.removeEventListener('pointerdown', onDown, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kbdFull])
 
   /* --------------------------------------------------------- 顶栏动作 */
   const connect = () => {
@@ -800,7 +871,8 @@ export default function App() {
     files: { on: filesOpen, run: () => (filesOpen ? setFilesOpen(false) : openFiles()), hide: state?.files === false },
     compose: { on: showCompose, run: () => toggleCompose(!showCompose) },
     keys: { on: showKeys, run: () => toggleKeys(!showKeys) },
-    kbd: { on: kbdUp, run: () => sess.current?.toggleKeyboard() },
+    // 这一下是用户手势，正好在这儿进全屏（键盘那条路见 kbdFull 的注释）
+    kbd: { on: kbdUp, run: () => { if (kbdFull && !kbdUp) enterFull(true); sess.current?.toggleKeyboard() } },
     img: { run: () => picker.current?.click() },
     clip: { run: () => void pullClip() },
     paste: { run: () => void pastePhone() },
@@ -1070,7 +1142,7 @@ export default function App() {
               kbdUp={kbdUp}
               onSend={(b) => { sess.current?.sendKey(b); if (kbdUp) sess.current?.focus() }}
               onSticky={(w) => sess.current?.toggleSticky(w)}
-              onKeyboard={() => sess.current?.toggleKeyboard()}
+              onKeyboard={() => { if (kbdFull && !kbdUp) enterFull(true); sess.current?.toggleKeyboard() }}
               onImage={() => picker.current?.click()}
               onPanes={openPanes}
               notice={noticeDot ? notices.unread.length : 0}

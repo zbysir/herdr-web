@@ -152,6 +152,8 @@ function TermSection({
   scheme: 'dark' | 'light'
   onScheme: () => void
 }) {
+  // 上次自动全屏失败的原因（成功过就没有了）。面板一开读一次就够
+  const kbdErr = localStorage.getItem('kbdFullErr')
   // 浏览器那侧的通知权限。面板一开就问一次真实值（用户可能在浏览器设置里撤掉过）
   const [perm, setPerm] = useState<NotifyState>(notifyState)
   useEffect(() => { setPerm(notifyState()) }, [])
@@ -207,6 +209,8 @@ function TermSection({
           <span className="mt-0.5 block text-xs text-faint">
             收起键盘<b>不</b>退出（退出用顶栏那个按钮）。键盘吃掉半屏时，地址栏那一截最值钱
           </span>
+          {/* 手机上没有控制台，「为什么没全屏」只能靠这一句。成功一次就自己消失 */}
+          {kbdErr && <span className="mt-0.5 block text-xs text-bad">上次没成功：{kbdErr}</span>}
         </span>
       </label>
 
