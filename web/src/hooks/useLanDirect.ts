@@ -32,6 +32,24 @@ const LAST = 'lanDirectAt' // 上次真的走通过的 origin，用来认「地�
  *  再放大只会让「在外面」那种情况白等 —— 而那是最常见的一种。 */
 const TIMEOUT_MS = 900
 
+/* 下面这三个给设置面板用（components/SettingsPanel.tsx 的「局域网直连」那一节）。
+   导出而不是让那边自己写一遍 localStorage 的键：两处各写一份字符串，改一处忘一处的
+   表现是「面板上的开关关了，但下次打开还是自动切」—— 而那种不一致查起来很费劲。 */
+
+/** 「探到就自动切」开着没有。没记过 = 开着（第一次会先问一句，见 LanPrompt）。 */
+export function lanAuto(): boolean {
+  return localStorage.getItem(KEY) !== 'off'
+}
+
+export function setLanAuto(on: boolean) {
+  localStorage.setItem(KEY, on ? 'on' : 'off')
+}
+
+/** 这个页面此刻是不是已经走在直连上了。 */
+export function onLanNow(origins: string[]): boolean {
+  return origins.includes(location.origin)
+}
+
 export type LanDirect =
   | { kind: 'idle' }
   /** 通了，但还没问过人要不要走 */
@@ -84,9 +102,12 @@ export function useLanDirect(lan: State['lan'], enabled: boolean) {
     if (!enabled || !origins.length) return
 
     // 已经在直连这条路上了：把「走通过」记下来（IP 变了要靠它认），然后什么都不做。
-    if (origins.includes(location.origin)) {
-      localStorage.setItem(KEY, 'on')
+    if (onLanNow(origins)) {
       localStorage.setItem(LAST, location.origin)
+      // 只在**还没记过**的时候写 on（人是手打地址进来的，那就别以后再问一遍）。
+      // 不能无条件写：设置面板里那个开关关掉之后，人如果此刻正站在直连这个 origin 上，
+      // 无条件写会把他刚关掉的开关又打开 —— 表现是「关了，刷新一下又是开的」。
+      if (localStorage.getItem(KEY) === null) localStorage.setItem(KEY, 'on')
       return
     }
     if (localStorage.getItem(KEY) === 'off') return

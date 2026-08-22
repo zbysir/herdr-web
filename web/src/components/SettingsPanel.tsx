@@ -12,6 +12,7 @@ import { TopbarPanel } from './TopbarPanel'
 import { ProfilePicker } from './ProfilePicker'
 import type { TopbarId } from './topbarItems'
 import { DevicesPanel } from './DevicesPanel'
+import { lanAuto, onLanNow, setLanAuto } from '@/hooks/useLanDirect'
 import { cn } from '@/lib/utils'
 
 /**
@@ -366,6 +367,8 @@ function TermSection({
         </dl>
       )}
 
+      {state?.lan && state.lan.origins.length > 0 && <LanDirectRow origins={state.lan.origins} />}
+
       {/* 有新版本就显式提一句，并把命令给全。这里看到提示的人手边就有一个终端，
           能就地敲 —— 所以这条提示是可执行的，不是「回机器前再说」。
           升级要重启服务，而重启会掐掉这个页面自己的终端会话，这点必须写出来。
@@ -381,6 +384,73 @@ function TermSection({
           （<code>herdr-web service restart</code>），而重启会断开所有终端会话 —— 包括这个页面里的。
         </p>
       )}
+    </div>
+  )
+}
+
+/**
+ * 「局域网直连」那一小节（只在服务端开了 `HERDR_WEB_LAN_PORT` 时出现）。
+ *
+ * 为什么这一节非有不可：那个地址原来**只印在终端的启动横幅上**，而这条路要求每台设备
+ * 先手动开一次、点「继续访问」（自签证书）—— 平板上的人压根看不到横幅，等于这个地址
+ * 是不可知的，而不知道地址就永远迈不出第一步。地址还会变（DHCP），所以也不能靠人抄。
+ *
+ * 顺带补掉另一个死角：横幅上点过「不用」之后，以前只有清 localStorage 才能反悔。
+ *
+ * 链接开新标签页：证书警告是**整页**的，在当前页跳过去就把这个终端会话的页面顶掉了。
+ */
+function LanDirectRow({ origins }: { origins: string[] }) {
+  const here = onLanNow(origins)
+  const [auto, setAuto] = useState(lanAuto)
+  return (
+    <div className="mt-3 border-t border-line pt-3">
+      <div className="flex items-center gap-2">
+        <strong className="text-[13px] font-medium">局域网直连</strong>
+        <span
+          className={cn(
+            'rounded border px-1.5 py-px text-[11px]',
+            here ? 'border-brand/40 bg-brand/12 text-brand' : 'border-line text-muted',
+          )}
+        >
+          {here ? '正走直连' : '正走公网'}
+        </span>
+      </div>
+
+      <p className="mt-1 text-xs/relaxed text-muted">
+        {here
+          ? '这个页面已经是直连的 —— 按键不再绕公网。'
+          : '在这台设备上先开一次下面的地址、点「继续访问」（自签证书），之后从公网地址进来就会自动切过去。'}
+      </p>
+
+      <ul className="m-0 mt-1.5 list-none p-0">
+        {origins.map((o) => (
+          <li key={o} className="flex items-center gap-2 py-0.5">
+            <a
+              href={o + '/'}
+              target="_blank"
+              rel="noreferrer"
+              className="truncate font-mono text-xs text-brand underline decoration-brand/40 hover:decoration-brand"
+            >
+              {o}
+            </a>
+          </li>
+        ))}
+      </ul>
+
+      <label className="mt-1.5 flex cursor-pointer items-start gap-2.5 rounded-md py-1 transition-colors hover:text-fg">
+        <span className="pt-px">
+          <Checkbox
+            checked={auto}
+            onCheckedChange={(v) => { setLanAuto(!!v); setAuto(!!v) }}
+          />
+        </span>
+        <span className="text-[13px]/relaxed">
+          探到局域网就自动切过去
+          <span className="block text-xs text-faint">
+            关掉之后就一直走公网那条路，不再问也不再切。
+          </span>
+        </span>
+      </label>
     </div>
   )
 }
