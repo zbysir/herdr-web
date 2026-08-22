@@ -22,6 +22,14 @@ interface Hooks {
    */
   openLinkAt: (col: number, row: number) => void
   /**
+   * 这一格上有链接吗（文件路径 / URL）。
+   *
+   * 单独问一句，是为了**只在有链接的时候才等双击窗口**：等待是为了「双击的第一下不要顺手
+   * 把查看器打开」，而没有链接的格子上没什么可等的 —— 全都等的话点什么都慢 320ms
+   * （点 pane、点 herdr 顶栏那个 switch 都算，用户报过「点什么都延迟很大」）。
+   */
+  hasLink: (col: number, row: number) => boolean
+  /**
    * 这一下点击被网页自己接走了吗（true = 别再发给程序）。
    *
    * 目前只有一处：herdr 移动端顶栏右上角那个 `switch` 按钮 —— 设置里开着的时候点它开的是
@@ -55,13 +63,16 @@ const HOLD_MS = 380
 /**
  * 两下之间多久算双击（双击 = 显示 / 收起系统键盘）。
  *
- * **单击那一套动作要等过了这个窗口才做。** 双击是「呼出输入法」的正式入口，而它的第一下
- * 原来是当场就按单击处理的 —— 落在一条路径 / URL 上就把查看器打开了，落在 pane 里就把
- * 鼠标上报发给了 herdr（用户报的「双击变成单击点到 url，还漏到终端里」）。要区分「这是单击」
- * 和「这是双击的第一下」，只能等：等不到第二下才是单击。
+ * **只有「打开点到的那条链接」要等过这个窗口**，别的（接走 switch、上报给 herdr、普通
+ * shell 里聚焦）一律当场就做。
  *
- * 代价说清：单击（点 pane 切焦点、点路径开图）比原来晚 320ms 落地。这是双击存在的必然代价 ——
- * 想让单击立刻生效，就只能取消双击那个入口。
+ * 为什么要等：双击的第一下原来是当场按单击处理的，落在一条路径 / URL 上就把查看器打开了
+ * （用户报的「双击变成单击点到 url」）。要区分「这是单击」和「这是双击的第一下」只能等 ——
+ * 等不到第二下才是单击。
+ *
+ * 为什么**只**等这一件：一开始我把整套单击动作都推迟了，结果点什么都慢 1/3 秒（点 pane、
+ * 点 herdr 顶栏那个 switch 开面板全在内），用户当场就报「点什么都延迟很大」。开查看器晚
+ * 320ms 没人察觉，开面板晚 320ms 像卡住了。
  */
 const DOUBLE_MS = 320
 /**
@@ -292,28 +303,33 @@ export function attachTouch(host: HTMLElement, term: Terminal, hooks: Hooks): ()
     const box = cellBox()
     if (!box) return
     const { col, row } = cellAt(tc.x, tc.y, box)
-    const owned = tc.owned
 
-    // 单击那一套**攒到双击窗口过去之后再做**（见 DOUBLE_MS）：这会儿还分不清它是单击，
-    // 还是双击的第一下。
+    // 先问一句这一下是不是被网页接走了（herdr 顶栏那个 switch）。放在链接判断**之前**：
+    // 那个按钮上不会有链接，但既然接走了，就该彻底不往下走。**立刻做，不等双击窗口** ——
+    // 开个面板还要等 1/3 秒的话，整个界面都像卡住了（用户报过）。
+    if (hooks.claimTap(col, row)) return
+
+    // 这一格上有链接吗。**只有有链接的时候才需要等**：等的目的是「双击的第一下不要顺手把
+    // 查看器打开」，而双击正好落在路径上恰恰是最常见的那种。
+    const linked = hooks.hasLink(col, row)
+
+    // 上报 / 聚焦也立刻做：这是点 pane、点 tab 的手感所在。代价是双击的第一下照样会给
+    // herdr 一次点击 —— 和桌面上双击的第一下一样，那本来就是一次点击。
+    if (tc.owned) {
+      hooks.send(`\x1b[<0;${col};${row}M`)      // 单击照样发给程序，只是不抢焦点
+      hooks.send(`\x1b[<0;${col};${row}m`)
+    } else {
+      term.focus()                              // 普通 shell 里点一下就是想打字
+    }
+
+    // 开链接**攒到双击窗口过去之后**（见 DOUBLE_MS），来了第二下就整个撤掉。
+    // 桌面上点链接时 xterm 也照样把点击上报给程序（linkifier 和鼠标上报互不知情），
+    // 这儿保持一致 —— 触屏另立一套「点了链接就不算点击」的规矩只会变成第二种要记的行为。
+    if (!linked) return
     clearTimeout(pendingTap)
     pendingTap = setTimeout(() => {
       pendingTap = undefined
-      // 先问一句这一下是不是被网页接走了（herdr 顶栏那个 switch）。放在链接判断**之前**：
-      // 那个按钮上不会有链接，但既然接走了，就该彻底不往下走。
-      if (hooks.claimTap(col, row)) return
-
-      // 链接先判，但**不吞掉这一下点击**：桌面上点链接时 xterm 也照样把点击上报给程序
-      // （linkifier 和鼠标上报是两条各自独立的监听，互不知情），这儿保持一致 ——
-      // 触屏另立一套「点了链接就不算点击」的规矩，只会变成第二种要记的行为。
       hooks.openLinkAt(col, row)
-
-      if (owned) {
-        hooks.send(`\x1b[<0;${col};${row}M`)      // 单击照样发给程序，只是不抢焦点
-        hooks.send(`\x1b[<0;${col};${row}m`)
-      } else {
-        term.focus()                              // 普通 shell 里点一下就是想打字
-      }
     }, DOUBLE_MS)
   }
 
