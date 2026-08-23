@@ -318,6 +318,10 @@ type fake struct {
 	list string
 	seq  uint64 // agent.list 的 state_change_seq：herdr 每次**真的**状态变化才推高
 	mute bool   // true = 订上之后一条事件都不推（模拟「看不见的 pane」）
+
+	// polls 每答一次 agent.list 塞一个。订阅那条路靠它**等轮询跑完一拍**才开始推事件，
+	// 见 serve 里 events.subscribe 那段 —— 原来是干等 8 拍的 sleep，CI 上偶发失败。
+	polls chan struct{}
 }
 
 // setStatus 换状态并推高计数 —— 真 herdr 就是这样。
@@ -364,7 +368,10 @@ func newFake(t *testing.T, screen string, states ...string) *fake {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
-	f := &fake{sock: filepath.Join(dir, "h.sock"), screen: screen, states: states, list: "idle"}
+	f := &fake{
+		sock: filepath.Join(dir, "h.sock"), screen: screen, states: states, list: "idle",
+		polls: make(chan struct{}, 64),
+	}
 	ln, err := net.Listen("unix", f.sock)
 	if err != nil {
 		t.Fatal(err)
@@ -438,6 +445,10 @@ func (f *fake) serve(conn net.Conn) {
 				"agent_status": f.status(), "state_change_seq": f.stateSeq(),
 			}},
 		}})
+		select { // 告诉订阅那条路「轮询又跑了一拍」；满了就丢，别把 serve 卡住
+		case f.polls <- struct{}{}:
+		default:
+		}
 	case "pane.read":
 		text := f.screen
 		if f.status() == "working" && f.working != "" {
@@ -452,10 +463,23 @@ func (f *fake) serve(conn net.Conn) {
 			time.Sleep(10 * time.Second) // 一条都不推：模拟背景 pane
 			return
 		}
-		// 先让 watcher 轮一拍，把这个终端**当下**的状态计数记成「已处理」——真机上
-		// 它是进程起来时就记下的，测试里得给这一拍留出时间，否则第一次状态变化会被
-		// 当成「计数没动」（那条判据见 notice.go 的 emit）。
-		time.Sleep(8 * pollAgents)
+		// 先让 watcher 轮**两拍**再推事件。
+		//
+		// 为什么必须等：那一拍会把这个终端当下的状态计数记成「已处理」（真机上是进程起来
+		// 时记的），没记上的话第一次状态变化会被当成「计数没动」而整条丢掉（判据见
+		// notice.go 的 emit）—— 表现就是这个用例超时报「没攒出提示」。
+		//
+		// 为什么不是 sleep：原来写的是 `time.Sleep(8 * pollAgents)`（240ms）干等，在 CI
+		// 上偶发不够 —— 实测本地 20 次里也会挂 1 次。现在改成**等 agent.list 被问到**
+		// （轮询每拍都会问一次，见 poller），拿真事件同步，不猜时间。等两次是因为第一拍的
+		// 「记成已处理」是在响应之后写的：第二次请求进来时，第一拍必然已经收尾。
+		for i := 0; i < 2; i++ {
+			select {
+			case <-f.polls:
+			case <-time.After(5 * time.Second):
+				return // 轮询压根没来：让用例自己超时报错，比在这儿干等更说得清
+			}
+		}
 		for _, st := range f.states {
 			// 轮询那条路（pane.list）要跟着一起变 —— 真机上两条路看到的是同一个 herdr，
 			// 只让事件动的话，轮询会拿旧状态把刚判掉的抖动又「纠正」回来。
