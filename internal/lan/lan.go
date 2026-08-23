@@ -134,3 +134,36 @@ func Origins(port int) []string {
 	}
 	return out
 }
+
+/* ------------------------------------------------------- 对端在不在本地网络 */
+
+// PeerIsLocal 这个对端地址算不算「本地网络里的」。传 RemoteAddr（带端口也行）。
+//
+// 为什么需要它：局域网直连那个口绑的是通配地址，而「通配地址只有局域网碰得到」是一个
+// **网络拓扑上的假设，不是代码保证的性质**。它至少在三种情况下不成立：
+//
+//   - 路由器上给这个端口做了转发 / 开了 UPnP / 放进 DMZ；
+//   - `net.Listen("tcp", "0.0.0.0:port")` 在 Go 里会开一个**双栈**套接字（实测 lsof
+//     显示 IPv6 `*:port`），而家宽的 IPv6 通常没有 NAT —— 一台有全局 IPv6 的机器上，
+//     这个口很可能公网直接可达，只取决于路由器防火墙；
+//   - 隧道配错，把公网流量转到了这个口上。
+//
+// 交接令牌「只能在直连口上兑换」这条门槛压在这个口上，所以不能只靠假设。加上这道检查
+// 之后，「从直连口进来」就等于「对端在本地网络里」—— 变成一条**被强制的**性质。
+//
+// CGNAT（100.64/10，Tailscale 在用）**不算本地**：那个段也被一部分 ISP 用来分配真实
+// 客户地址，收进来等于放宽边界。走 VPN 的人本来就有更好的路（VPN 自己在同一局域网时
+// 就走直连），不需要这个口。
+func PeerIsLocal(remoteAddr string) bool {
+	host := remoteAddr
+	if h, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		host = h
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil {
+		return false // 解析不出来就当外面的 —— 这道门宁可误拒
+	}
+	// IsPrivate 覆盖 RFC1918 和 IPv6 的 fc00::/7；IPv4-mapped（::ffff:192.168.x.x，
+	// 双栈套接字上的 IPv4 客户端就是这个形状）也能命中，因为它 To4() 得出来。
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+}

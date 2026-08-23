@@ -283,8 +283,9 @@ func serve(webDir string) error {
 			if lanCert != cert {
 				conf = lanCert.TLSConfig()
 			}
-			// 这个口不在前置后面，转发头一定是客户端塞的 —— 见 server.StripForwarded
-			h := server.StripForwarded(srv.Handler())
+			// 摘转发头 + 盖「从直连口进来」的章（交接令牌只在这种请求上兑得动）——
+			// 见 server.LanListener
+			h := server.LanListener(srv.Handler())
 			go func() {
 				if err := http.Serve(tls.NewListener(lanLn, conf), h); err != nil {
 					log.Printf("局域网直连口挂了: %v", err)

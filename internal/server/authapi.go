@@ -21,12 +21,41 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 			s.enter(w, r, code, "")
 			return
 		}
+		// 局域网直连的交接令牌。**只在从直连那个监听进来的请求上认** —— 判据是请求落在
+		// 哪个监听上，不是 Host（Host 是客户端说的，公网那条路伪造一个内网 IP 就绕过去了）。
+		// 走别的路进来的话当它不存在，照常渲染页面：那多半是链接被复制到了别处。
+		if tok := q.Get("handoff"); tok != "" && FromLan(r) {
+			s.enterLan(w, r, tok)
+			return
+		}
 		if tok := q.Get("token"); tok != "" {
 			s.enter(w, r, "", tok)
 			return
 		}
 	}
 	s.handleStatic(w, r)
+}
+
+// enterLan 用交接令牌在**直连这一侧**换一份凭据（见 auth.MintHandoff）。
+//
+// 已经有凭据就什么都不做，只把 URL 洗干净 —— 令牌自己过期。所以「每切一次都带一枚」
+// 不会堆出一串设备。
+//
+// 不进 gateCheck：那一层管的是**猜得到的**凭据（配对码、旧 token）的限速，而交接令牌是
+// 256 位随机的。把它算进失败计数反而会给出一条新的骚扰路径（拿废令牌反复打，把真人的
+// 配对锁死）。
+func (s *Server) enterLan(w http.ResponseWriter, r *http.Request, tok string) {
+	if id := s.Auth.Authenticate(r); id != nil && id.Kind == "device" {
+		s.clean(w, r)
+		return
+	}
+	_, token, err := s.Auth.RedeemHandoff(tok, r.UserAgent(), s.Auth.ClientIP(r))
+	if err != nil {
+		s.clean(w, r, "e", "handoff")
+		return
+	}
+	s.Auth.IssueCookie(w, token)
+	s.clean(w, r)
 }
 
 func (s *Server) enter(w http.ResponseWriter, r *http.Request, code, legacy string) {
@@ -74,6 +103,7 @@ func (s *Server) clean(w http.ResponseWriter, r *http.Request, kv ...string) {
 	q := r.URL.Query()
 	q.Del("pair")
 	q.Del("token")
+	q.Del("handoff")
 	for i := 0; i+1 < len(kv); i += 2 {
 		q.Set(kv[i], kv[i+1])
 	}

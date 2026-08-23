@@ -85,10 +85,13 @@ async function probe(origins: string[]): Promise<string | null> {
 async function jump(origin: string) {
   let u = origin + (SESSION ? '/' + encodeURIComponent(SESSION) : '/')
   try {
-    const { code } = await api.post<{ code: string }>('/handoff')
-    u += '?pair=' + encodeURIComponent(code)
+    // 交接令牌，**不是配对码**：60 秒、一次性、只能在直连那个监听上兑换、兑出来的设备
+    // 随上级一起被撤销。为什么不能用配对码，见 internal/auth 的 MintHandoff 和
+    // SECURITY.md §11 —— 那是这块唯一不能走捷径的地方。
+    const { handoff } = await api.post<{ handoff: string }>('/handoff')
+    u += '?handoff=' + encodeURIComponent(handoff)
   } catch {
-    // 拿不到码也照样跳：那个 origin 上很可能已经有 cookie 了（第二次之后都是这样）。
+    // 拿不到令牌也照样跳：那个 origin 上很可能已经有 cookie 了（第二次之后都是这样）。
     // 真没有的话落地会是配对页，比卡在这儿不动强。
   }
   location.replace(u + '#install=' + encodeURIComponent(INSTALL))

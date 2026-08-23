@@ -68,72 +68,9 @@ func TestConnectSrcIncludesLan(t *testing.T) {
 	}
 }
 
-// handoff 出的是一次性配对码。三条：必须已认证、必须 POST、没开这条路时不给。
-func TestHandoff(t *testing.T) {
-	dir := t.TempDir()
-	store, err := auth.New(auth.Config{Dir: dir, TrustLoopback: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := &Server{Cfg: &config.Config{}, Auth: store, Gate: auth.NewGate(), LanPort: 7789}
-
-	// 没开这条路
-	off := &Server{Cfg: &config.Config{}, Auth: store, Gate: auth.NewGate()}
-	w := httptest.NewRecorder()
-	off.apiHandoff(w, httptest.NewRequest(http.MethodPost, "/api/handoff", nil))
-	if w.Code != 404 {
-		t.Errorf("没开局域网直连时应当 404，得到 %d", w.Code)
-	}
-
-	// GET 不收
-	w = httptest.NewRecorder()
-	s.apiHandoff(w, httptest.NewRequest(http.MethodGet, "/api/handoff", nil))
-	if w.Code != http.StatusMethodNotAllowed {
-		t.Errorf("GET 应当 405，得到 %d", w.Code)
-	}
-
-	// 正常出码，而且**能兑换成一台设备**（跳过去落地靠的就是这一步）
-	w = httptest.NewRecorder()
-	s.apiHandoff(w, httptest.NewRequest(http.MethodPost, "/api/handoff", nil))
-	if w.Code != 200 {
-		t.Fatalf("出码失败：%d %s", w.Code, w.Body)
-	}
-	var out struct{ Code string }
-	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || out.Code == "" {
-		t.Fatalf("响应里没有 code：%s (%v)", w.Body, err)
-	}
-	if _, _, err := store.Redeem(out.Code, "ua", "192.168.1.9"); err != nil {
-		t.Errorf("handoff 出的码应当能兑换：%v", err)
-	}
-	// 一次性：第二次必须失败
-	if _, _, err := store.Redeem(out.Code, "ua", "192.168.1.9"); err == nil {
-		t.Error("同一个码兑换了两次都成功，那就不是一次性的了")
-	}
-}
-
-// 横幅上那个码不能被 handoff 顶掉 —— 不然「网页切了一次局域网」就等于把终端里
-// 印出来的配对码作废，而人正拿着手机在扫它。
-func TestHandoffKeepsBannerCode(t *testing.T) {
-	dir := t.TempDir()
-	store, err := auth.New(auth.Config{Dir: dir})
-	if err != nil {
-		t.Fatal(err)
-	}
-	banner, _ := store.MintCode()
-	s := &Server{Cfg: &config.Config{}, Auth: store, Gate: auth.NewGate(), LanPort: 7789}
-	w := httptest.NewRecorder()
-	s.apiHandoff(w, httptest.NewRequest(http.MethodPost, "/api/handoff", nil))
-	if w.Code != 200 {
-		t.Fatalf("出码失败：%d", w.Code)
-	}
-	if _, _, err := store.Redeem(banner, "ua", "127.0.0.1"); err != nil {
-		t.Errorf("横幅上那个码被顶掉了：%v", err)
-	}
-}
-
 // 局域网口不在前置后面，转发头一定是客户端塞的。配了 TRUST_PROXY=1 的部署（前置只在
 // 公网那条路上）如果照信，同一个 Wi-Fi 上的人用一串假 XFF 就能把按 IP 的限速绕干净。
-func TestStripForwarded(t *testing.T) {
+func TestLanListenerStripsForwarded(t *testing.T) {
 	dir := t.TempDir()
 	store, err := auth.New(auth.Config{Dir: dir, TrustProxy: true})
 	if err != nil {
@@ -141,7 +78,7 @@ func TestStripForwarded(t *testing.T) {
 	}
 
 	var seen string
-	h := StripForwarded(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	h := LanListener(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		seen = store.ClientIP(r)
 	}))
 
@@ -209,5 +146,138 @@ func TestPasskeyGateRejectsIP(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "域名") {
 		t.Errorf("错误信息得说清为什么：%s", w.Body)
+	}
+}
+
+// 交接令牌的兑换门槛：**只有落在直连那个监听上的请求算**。
+//
+// 这是整块里最要命的一处判据。用 Host 判断的话，从公网那条路发一个
+// `Host: 192.168.1.5:7790` 就能把「看起来像内网」伪造出来 —— 而 hostOK 对 IP 字面量
+// 一律放行（那本身是对的）。所以这条钉死：伪造 Host 不管用，盖过章的才管用。
+func TestHandoffOnlyRedeemableFromLanListener(t *testing.T) {
+	var sawLan bool
+	inner := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { sawLan = FromLan(r) })
+
+	// 公网那条路 + 伪造的内网 Host
+	r := httptest.NewRequest(http.MethodGet, "/?handoff=x", nil)
+	r.Host = "192.168.1.5:7790"
+	inner.ServeHTTP(httptest.NewRecorder(), r)
+	if sawLan {
+		t.Error("伪造 Host 竟然被当成直连口进来的 —— 交接令牌那道门等于不存在")
+	}
+
+	// 真的从直连口进来（对端也得是本地地址 —— httptest 默认给的是 192.0.2.1，公网段）
+	r2 := httptest.NewRequest(http.MethodGet, "/?handoff=x", nil)
+	r2.Host = "192.168.1.5:7790"
+	r2.RemoteAddr = "192.168.1.9:5000"
+	LanListener(inner).ServeHTTP(httptest.NewRecorder(), r2)
+	if !sawLan {
+		t.Error("从直连监听进来的请求应当被认出来")
+	}
+}
+
+// 没有设备的会话（本机免配对 / 旧 token）不能交接：没有东西能级联撤销，
+// 而那两种会话本来就在机器上，压根不需要局域网直连。
+func TestHandoffNeedsDeviceParent(t *testing.T) {
+	dir := t.TempDir()
+	store, err := auth.New(auth.Config{Dir: dir, TrustLoopback: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Cfg: &config.Config{}, Auth: store, Gate: auth.NewGate(), LanPort: 7790}
+	r := httptest.NewRequest(http.MethodPost, "/api/handoff", nil)
+	r.RemoteAddr = "127.0.0.1:5000"
+	r.Host = "127.0.0.1:7788"
+	r.Header.Set(CSRFHeader, "1")
+	w := httptest.NewRecorder()
+	s.apiHandoff(w, r)
+	if w.Code != http.StatusConflict {
+		t.Errorf("本机免配对那种会话应当 409，得到 %d %s", w.Code, w.Body)
+	}
+}
+
+// handoff 出的是**交接令牌**，不是配对码。四条一起钉：
+//  1. 字段叫 handoff（前端按它取）、不再有 code；
+//  2. **压根不碰配对码那套** —— 横幅上那枚码不能被顶掉（换成交接令牌之后这是天然的，
+//     但这条网留着：哪天有人图省事改回 MintCode，这里会当场红）；
+//  3. 兑出来的设备记着 parent（撤销级联靠它，见 auth 那边的测试）；
+//  4. 一次性。
+func TestHandoffMintsTokenNotPairCode(t *testing.T) {
+	dir := t.TempDir()
+	store, err := auth.New(auth.Config{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _ := store.MintCode()
+	dev, token, err := store.Redeem(first, "ua", "1.2.3.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	banner, _ := store.MintCode() // 横幅上「当前那一枚」
+
+	s := &Server{Cfg: &config.Config{}, Auth: store, Gate: auth.NewGate(), LanPort: 7790}
+	r := httptest.NewRequest(http.MethodPost, "/api/handoff", nil)
+	r.Host = "herdr.example.com"
+	r.AddCookie(&http.Cookie{Name: auth.CookieName, Value: token})
+	r.Header.Set(CSRFHeader, "1")
+	w := httptest.NewRecorder()
+	s.apiHandoff(w, r)
+	if w.Code != 200 {
+		t.Fatalf("出令牌失败：%d %s", w.Code, w.Body)
+	}
+	var out struct{ Handoff, Code string }
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Handoff == "" {
+		t.Error("响应里应当有 handoff")
+	}
+	if out.Code != "" {
+		t.Error("不该再出 code —— 那正是 SECURITY.md §11 禁的那条路")
+	}
+	if _, _, err := store.Redeem(banner, "ua", "1.2.3.4"); err != nil {
+		t.Errorf("横幅上那枚配对码被顶掉了：%v", err)
+	}
+	child, _, err := store.RedeemHandoff(out.Handoff, "ua", "192.168.1.9")
+	if err != nil {
+		t.Fatalf("交接令牌应当兑得动：%v", err)
+	}
+	if child.Parent != dev.ID {
+		t.Errorf("parent = %q，想要 %q —— 没有它撤销就级联不了", child.Parent, dev.ID)
+	}
+	if _, _, err := store.RedeemHandoff(out.Handoff, "ua", "192.168.1.9"); err == nil {
+		t.Error("同一枚令牌兑了两次都成功，那就不是一次性的")
+	}
+}
+
+// 直连口对**非本地对端**要一个字节都不服务，而且不能盖上「从直连口进来」那个章
+// —— 否则端口一旦被暴露（端口转发 / 全局 IPv6），交接令牌那道门就等于不存在。
+func TestLanListenerRefusesNonLocalPeer(t *testing.T) {
+	var reached, sawLan bool
+	h := LanListener(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		reached, sawLan = true, FromLan(r)
+	}))
+
+	for _, peer := range []string{"[240e:39d:5a:6d20::9fd]:5000", "1.2.3.4:5000"} {
+		reached, sawLan = false, false
+		r := httptest.NewRequest(http.MethodGet, "/?handoff=x", nil)
+		r.RemoteAddr = peer
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if reached || sawLan {
+			t.Errorf("对端 %s 竟然进到了 handler（sawLan=%v）", peer, sawLan)
+		}
+		if w.Code != http.StatusForbidden {
+			t.Errorf("对端 %s：状态码 = %d，想要 403", peer, w.Code)
+		}
+	}
+
+	// 本地对端照常进
+	reached, sawLan = false, false
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.RemoteAddr = "192.168.31.78:5000"
+	h.ServeHTTP(httptest.NewRecorder(), r)
+	if !reached || !sawLan {
+		t.Errorf("本地对端应当照常进（reached=%v sawLan=%v）", reached, sawLan)
 	}
 }

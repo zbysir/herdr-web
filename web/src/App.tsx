@@ -79,6 +79,10 @@ function pairHint(): string | undefined {
       return '那个配对码不对，或者已经过期了（5 分钟）。在机器上重新 herdr-web pair 一个。'
     case 'token':
       return '链接里的旧 token 不对。旧 token 只能用来换一次凭据，换完就该删掉了。'
+    // 局域网直连的交接令牌只活 60 秒、只能用一次。走到这儿基本只有两种情况：
+    // 页面在后台压了一会儿才跳过来，或者这条链接被复制到了别处。刷新公网那个地址重来一次就好。
+    case 'handoff':
+      return '局域网直连的交接令牌过期了（只有 60 秒）。回到公网那个地址刷一下，它会重新交接一次。'
     default:
       return undefined
   }

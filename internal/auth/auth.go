@@ -55,6 +55,13 @@ type Device struct {
 	// 注册过 passkey 之后，服务端会要求这个时间足够新，否则要求重新验一次 ——
 	// 这是把「cookie 被偷」的可用窗口从整个 TTL 压到一天的那个机制。
 	VerifiedAt time.Time `json:"verifiedAt"`
+	// Parent 是「把我带出来的那份凭据」的设备 ID（局域网直连交接出来的那种，见
+	// MintHandoff）。空 = 自己配的对，没有上级。
+	//
+	// 这个字段的**唯一**用途是让撤销级联：SECURITY.md §11 不许网页上出配对码，理由是
+	// 「配对码创造的是一份不随创造者一起被撤销的凭据」—— 手机被拿走一次就能留下一台
+	// 踢不掉的设备。交接这条路要成立，就必须让它随上级一起死，否则那条理由原样成立。
+	Parent string `json:"parent,omitempty"`
 }
 
 func (d Device) Expired(now time.Time) bool {
@@ -85,18 +92,23 @@ type Config struct {
 type Store struct {
 	cfg Config
 
-	mu      sync.Mutex
-	devs    []*Device
-	codes   map[string]time.Time // 码 → 过期时刻
-	dirty   bool
-	flushed time.Time
-	guard   tamperGuard
+	mu    sync.Mutex
+	devs  []*Device
+	codes map[string]time.Time // 配对码 → 过期时刻
+	// handoffs 局域网直连的交接令牌 → 谁交接的 + 什么时候过期。和配对码分开是**故意**的：
+	// 配对码那条路「只有坐在机器前的人能出」是一条写在 SECURITY.md 里的性质，网页上
+	// 不能有任何出码的路径。交接令牌是另一种东西 —— 短命、只能在直连那个口上兑换、
+	// 兑出来的设备随上级一起被撤销，见 MintHandoff。
+	handoffs map[string]handoff
+	dirty    bool
+	flushed  time.Time
+	guard    tamperGuard
 
 	now func() time.Time // 测试用
 }
 
 func New(cfg Config) (*Store, error) {
-	s := &Store{cfg: cfg, codes: map[string]time.Time{}, now: time.Now}
+	s := &Store{cfg: cfg, codes: map[string]time.Time{}, handoffs: map[string]handoff{}, now: time.Now}
 	if err := s.load(); err != nil {
 		return nil, err
 	}
@@ -192,6 +204,91 @@ func (s *Store) MintCode() (string, time.Time) {
 	return code, exp
 }
 
+/* ------------------------------------------------- 局域网直连的交接令牌 */
+
+// HandoffTTL 交接令牌的寿命。只够「拿到它 → 立刻跳过去落地」这一下，所以给 60 秒
+// （配对码是 5 分钟，那是给人走回沙发上扫码用的；这条路上没有人参与）。
+const HandoffTTL = 60 * time.Second
+
+type handoff struct {
+	parent string // 谁交接的（设备 ID）——兑出来的新设备记着它，撤销时级联
+	exp    time.Time
+}
+
+var ErrBadHandoff = errors.New("交接令牌不对、过期了，或者已经用过")
+
+// MintHandoff 出一枚**局域网直连专用**的交接令牌。
+//
+// 为什么不能复用配对码（这是这块最容易改错的地方）：SECURITY.md §11 明确写了「网页上
+// 不出配对码」，理由是配对码创造的是一份**不随创造者一起被撤销**的独立凭据 —— 一份被偷
+// 的 cookie 就成了无限发凭据的机器，`revoke` 变成打地鼠。所以交接令牌在三处都比它窄：
+//
+//  1. **只能在直连那个监听上兑换**（不是「Host 看起来像内网 IP」—— Host 是客户端说的，
+//     公网那条路伪造一个就绕过去了；判据是请求落在哪个监听上，见 server.FromLan）；
+//  2. 60 秒、一次性；
+//  3. 兑出来的设备记着 parent，**撤销上级时一起被撤销**（见 Revoke）——§11 那条理由到这儿
+//     就不成立了。
+//
+// 令牌是 256 位随机，猜不出来，所以不进限速那一层（那一层只管短凭据的猜解）。
+func (s *Store) MintHandoff(parent string) (string, time.Time) {
+	tok := randToken()
+	exp := s.now().Add(HandoffTTL)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for t, h := range s.handoffs {
+		if s.now().After(h.exp) {
+			delete(s.handoffs, t)
+		}
+	}
+	s.handoffs[tok] = handoff{parent: parent, exp: exp}
+	return tok, exp
+}
+
+// RedeemHandoff 用交接令牌换直连那一侧的设备凭据。
+//
+// **调用方必须先确认请求真的落在直连那个监听上** —— 这个函数不管那件事（它拿不到
+// 监听信息），门卫在 server 那一侧，见 handleRoot 里 `?handoff=` 那一段。
+func (s *Store) RedeemHandoff(tok, ua, ip string) (*Device, string, error) {
+	if tok == "" {
+		return nil, "", ErrBadHandoff
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var hit string
+	var got handoff
+	now := s.now()
+	for t, h := range s.handoffs {
+		if subtle.ConstantTimeCompare([]byte(t), []byte(tok)) == 1 && now.Before(h.exp) {
+			hit, got = t, h
+		}
+	}
+	if hit == "" {
+		return nil, "", ErrBadHandoff
+	}
+	delete(s.handoffs, hit) // 一次性
+
+	token := randToken()
+	d := &Device{
+		ID:       randID(),
+		Label:    LabelFromUA(ua) + "（局域网）",
+		Hash:     hashToken(token),
+		Created:  now,
+		LastSeen: now,
+		LastIP:   ip,
+		// 上级刚过了 requireAuth（注册过 passkey 的话连重验也过了），所以这一份的
+		// 「在场证明」是从它那儿继承来的，不是凭空给的。
+		VerifiedAt: now,
+		Parent:     got.parent,
+	}
+	if s.cfg.TTL > 0 {
+		d.Expires = now.Add(s.cfg.TTL)
+	}
+	s.devs = append(s.devs, d)
+	s.flushLocked()
+	return d, token, nil
+}
+
 var ErrBadCode = errors.New("配对码不对或者已经过期了")
 
 // Redeem 用配对码换一台设备的长期凭据。返回的令牌明文只在这一次出现，之后只有哈希。
@@ -267,13 +364,27 @@ func (s *Store) Devices() []Device {
 }
 
 // Revoke 支持 ID 前缀，命令行上不用抄全。
+// Revoke 撤销一台设备，**连它交接出去的那些一起**。
+//
+// 级联不是顺手做的方便：局域网直连交接出来的设备（Parent 指着这一台）如果能留下来，
+// 那 SECURITY.md §11 反对「网页上出码」的理由就原样成立了 —— 手机被拿走一次，就留下
+// 一台你踢不掉的设备。所以「踢掉手机」必须意味着「它带出来的那些也一起没」。
 func (s *Store) Revoke(id string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, d := range s.devs {
 		if d.ID == id || (len(id) >= 4 && strings.HasPrefix(d.ID, id)) {
-			label := d.Label
+			label, gone := d.Label, d.ID
 			s.devs = append(s.devs[:i], s.devs[i+1:]...)
+			// 再扫一遍把它的孩子摘掉。一层就够：交接出来的那份自己不能再交接
+			// （它没有 passkey，也进不了 /api/handoff 那道门 —— 见 apiHandoff）。
+			kept := s.devs[:0]
+			for _, x := range s.devs {
+				if x.Parent != gone {
+					kept = append(kept, x)
+				}
+			}
+			s.devs = kept
 			s.flushLocked()
 			return label, true
 		}

@@ -1,7 +1,10 @@
 package server
 
 import (
+	"context"
+	"log"
 	"net/http"
+	"sync"
 
 	"github.com/zbysir/herdr-web/internal/lan"
 )
@@ -34,15 +37,16 @@ func (s *Server) lanInfo() map[string]any {
 	return map[string]any{"port": s.LanPort, "origins": origins}
 }
 
-// apiHandoff 出一个一次性配对码，只给**已经认证的会话**，专门用来把凭据带到局域网那个
-// origin 上去。
+// apiHandoff 出一枚**局域网直连专用**的交接令牌，只给已认证的会话。
 //
-// 直接复用配对码而不是另发一种令牌：Redeem 那条路已经是「一次性 + 会过期 + 兑换出来的
-// 是一台正常的设备（能在设备面板里看到、能撤销）」，另造一种只会多一套要维护的过期和
-// 撤销语义。MintCode 不作废已有的码，所以这个调用不会把终端横幅上那个码顶掉。
+// 以前这里出的是一枚正常的配对码（`MintCode`），那是个洞：SECURITY.md §11 明确写了
+// 「网页上不出配对码」，理由是配对码创造的是一份**不随创造者一起被撤销**的独立凭据 ——
+// 于是一份被偷的 cookie 就成了无限发凭据的机器，`revoke <id>` 变成打地鼠。现在换成
+// auth.MintHandoff：60 秒、一次性、**只能在直连那个监听上兑换**、兑出来的设备随上级
+// 一起被撤销。三条里少任何一条，§11 那条理由就原样成立。
 //
-// 落地那边已经认证过的话这个码根本不会被兑换（handleRoot 的 enter 先看有没有凭据），
-// 于是它自己过期 —— 所以「每次切过去都要一个码」不会堆出一串设备。
+// 要求上级是一台**真设备**：本机免配对 / 旧 token 那两种会话没有设备 ID，也就没有东西
+// 能级联撤销 —— 而那两种都在机器上，压根不需要局域网直连。
 func (s *Server) apiHandoff(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		fail(w, http.StatusMethodNotAllowed, errf("只收 POST"))
@@ -52,24 +56,69 @@ func (s *Server) apiHandoff(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, errf("这个部署没开局域网直连"))
 		return
 	}
-	code, exp := s.Auth.MintCode()
-	writeJSON(w, 200, map[string]any{"code": code, "expires": exp})
+	id := s.requireAuth(w, r)
+	if id == nil {
+		return
+	}
+	if id.Device == nil {
+		fail(w, http.StatusConflict, errf("这种会话不能交接（没有可级联撤销的上级凭据）"))
+		return
+	}
+	tok, exp := s.Auth.MintHandoff(id.Device.ID)
+	writeJSON(w, 200, map[string]any{"handoff": tok, "expires": exp})
 }
 
-// StripForwarded 摘掉转发头，专门套在局域网直连那个监听上。
+type ctxKey int
+
+// lanKey 标记「这个请求是从局域网直连那个监听进来的」。
+const lanKey ctxKey = iota
+
+// FromLan 这个请求是不是落在局域网直连那个监听上。
 //
-// 那个口**不在任何前置后面**（前置只在公网那条路上），所以到它这儿的 `X-Forwarded-For`
-// 一定是客户端自己塞的。而配了 `HERDR_WEB_TRUST_PROXY=1` 的部署里 ClientIP 会照信 ——
-// 于是同一个 Wi-Fi 上的人用一串假 XFF 就能把按 IP 的限速绕干净，而配对码猜解那道门
-// 正好在它后面（全局熔断还在，但那是最后一道，不该让它变成唯一一道）。
+// **判据只能是「落在哪个监听上」，绝不能看 Host。** Host 是客户端说的，而 hostOK 对 IP
+// 字面量一律放行（那本身是对的，见 guard.go），所以从公网那条路发一个
+// `Host: 192.168.1.5:7790` 就能把「看起来像内网」伪造出来。交接令牌的兑换门槛压在这上面，
+// 看错一处等于那道门不存在。
+func FromLan(r *http.Request) bool {
+	v, _ := r.Context().Value(lanKey).(bool)
+	return v
+}
+
+// LanListener 套在局域网直连那个监听上的中间件，干两件事。
+//
+// 一、摘掉转发头。那个口**不在任何前置后面**（前置只在公网那条路上），所以到它这儿的
+// `X-Forwarded-For` 一定是客户端自己塞的。而配了 `HERDR_WEB_TRUST_PROXY=1` 的部署里
+// ClientIP 会照信 —— 于是同一个 Wi-Fi 上的人用一串假 XFF 就能把按 IP 的限速绕干净，
+// 而配对码猜解那道门正好在它后面（全局熔断还在，但那是最后一道，不该让它变成唯一一道）。
 //
 // 摘掉之后 ClientIP 只能拿到真的 RemoteAddr —— 直连口上那本来就是准的，这也是它比
 // 隧道那条路强的地方（frp 的 tcp 模式下所有人都是 127.0.0.1）。
-func StripForwarded(next http.Handler) http.Handler {
+//
+// 二、盖一个「从直连口进来的」的章，供 FromLan 读。交接令牌只在这种请求上才兑得动。
+func LanListener(next http.Handler) http.Handler {
+	var once sync.Once
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 三、**对端必须在本地网络里**，否则这个口一个字节都不服务。
+		//
+		// 「绑通配地址 = 只有局域网碰得到」是拓扑假设，不是代码保证：端口转发、
+		// UPnP、或者一台有全局 IPv6 的机器（Go 对 0.0.0.0 开的是双栈套接字，而家宽
+		// IPv6 通常没有 NAT）都能让公网直接连上来。见 lan.PeerIsLocal。
+		//
+		// 有了这道检查，「从直连口进来」才真的等于「对端在本地网络里」—— 交接令牌的
+		// 兑换门槛压在这上面，不能是假设。
+		if !lan.PeerIsLocal(r.RemoteAddr) {
+			once.Do(func() {
+				log.Printf("\n  ⚠️  局域网直连口收到了来自 %s 的连接 —— 那不是本地地址，已拒绝。\n"+
+					"     这个口大概是被暴露到公网了（端口转发 / UPnP / 全局 IPv6 没被防火墙挡）。\n",
+					r.RemoteAddr)
+			})
+			w.Header().Set("cache-control", "no-store")
+			http.Error(w, "这个口只服务本地网络。", http.StatusForbidden)
+			return
+		}
 		r.Header.Del("X-Forwarded-For")
 		r.Header.Del("X-Real-Ip")
 		r.Header.Del("Forwarded")
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), lanKey, true)))
 	})
 }
