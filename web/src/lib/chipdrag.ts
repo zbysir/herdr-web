@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 
 /**
@@ -50,6 +50,25 @@ export function useChipDrag<Z extends string | number>(opts: {
 }): ChipDrag<Z> {
   const [drag, setDrag] = useState<ChipDrag<Z>['drag']>(null)
   const [over, setOver] = useState<ChipAt<Z> | null>(null)
+
+  /**
+   * 长按方块时**别让浏览器弹它自己的菜单**。
+   *
+   * 真机上（平板的 Edge / Chrome）长按一个方块，弹出来的是浏览器的页面菜单（返回 / 重新加载 /
+   * 下载 / 共享…），而且它一弹，浏览器就把这次触摸 `pointercancel` 掉 —— 于是「按住 250ms
+   * 拿起来」永远走不到，表现就是「在平板上长按拖不动，只会呼出菜单」（用户报的）。
+   *
+   * 挂在 document 的捕获段，**只拦落在方块上的那一下**：面板里别处的文字还得能长按复制
+   * （设置页上那些路径、环境变量名就是拿来抄的）。判据用 `[data-chip]` —— 命中判定本来就
+   * 靠它，两个编辑器的方块都带。
+   */
+  useEffect(() => {
+    const onMenu = (e: MouseEvent) => {
+      if ((e.target as HTMLElement | null)?.closest?.('[data-chip]')) e.preventDefault()
+    }
+    document.addEventListener('contextmenu', onMenu, true)
+    return () => document.removeEventListener('contextmenu', onMenu, true)
+  }, [])
 
   /**
    * 指针落在哪个筐的第几个位置。
