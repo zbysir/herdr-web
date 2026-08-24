@@ -322,6 +322,9 @@ type fake struct {
 	// polls 每答一次 agent.list 塞一个。订阅那条路靠它**等轮询跑完一拍**才开始推事件，
 	// 见 serve 里 events.subscribe 那段 —— 原来是干等 8 拍的 sleep，CI 上偶发失败。
 	polls chan struct{}
+	// reads 每答一次 pane.read 塞一个。推 working 之后靠它**等垫底那次读屏真的发生**
+	// 再往下走，见下面 events.subscribe 里那段。
+	reads chan struct{}
 }
 
 // setStatus 换状态并推高计数 —— 真 herdr 就是这样。
@@ -370,7 +373,7 @@ func newFake(t *testing.T, screen string, states ...string) *fake {
 
 	f := &fake{
 		sock: filepath.Join(dir, "h.sock"), screen: screen, states: states, list: "idle",
-		polls: make(chan struct{}, 64),
+		polls: make(chan struct{}, 64), reads: make(chan struct{}, 64),
 	}
 	ln, err := net.Listen("unix", f.sock)
 	if err != nil {
@@ -457,6 +460,10 @@ func (f *fake) serve(conn net.Conn) {
 		send(map[string]any{"id": req.ID, "result": map[string]any{
 			"read": map[string]any{"text": text},
 		}})
+		select { // 告诉推状态那条路「屏幕被读过一次了」；满了就丢，别把 serve 卡住
+		case f.reads <- struct{}{}:
+		default:
+		}
 	case "events.subscribe":
 		send(map[string]any{"id": req.ID, "result": map[string]any{"type": "subscription_started"}})
 		if f.mute {
@@ -480,11 +487,36 @@ func (f *fake) serve(conn net.Conn) {
 				return // 轮询压根没来：让用例自己超时报错，比在这儿干等更说得清
 			}
 		}
+		seeded := false // 垫底那次读屏只会发生一次（seed 认 lastText 有没有底）
 		for _, st := range f.states {
 			// 轮询那条路（pane.list）要跟着一起变 —— 真机上两条路看到的是同一个 herdr，
 			// 只让事件动的话，轮询会拿旧状态把刚判掉的抖动又「纠正」回来。
 			f.setStatus(st)
 			send(map[string]any{"event": "pane_updated", "data": map[string]any{"pane": paneObj(st)}})
+
+			// **开工那一屏要等它真被读到再往下走。**
+			//
+			// `working` 一进来，watcher 会起一个 goroutine 读一屏垫底（notice.go 的 seed，
+			// 为的是「投了一句又按 Esc 取消」时有东西可比）。真机上「开工」和「干完」隔着
+			// 好几秒，那次读必然读到开工那一屏；这儿两个状态只隔 2ms，读慢一点就读到
+			// 「干完」那一屏了 —— 于是 lastText 被垫成和「跑完了」一模一样的话，真提示反被
+			// 那条去重吞掉。表现是用例超时说「没攒出提示」，本地 `-count=20` 必现、CI 上
+			// 单跑也挂过。
+			//
+			// 所以拿**真事件**同步（和上面等 agent.list 同一个道理），不 sleep 猜时间。
+			//
+			// 两个条件都要：① 只有摆了 working 那一屏的用例需要等（别的用例两屏一样，读到
+			// 哪个都无所谓）；② **只等第一次** —— seed 认「lastText 有没有底」，一个终端只
+			// 垫一次，第二个 working 压根不会再读屏，在那儿等就是干等到超时把订阅关掉
+			// （`working idle working idle` 那个用例这么挂过）。
+			if st == "working" && f.working != "" && !seeded {
+				seeded = true
+				select {
+				case <-f.reads:
+				case <-time.After(3 * time.Second):
+					return // 压根没来读：让用例自己超时报错，比在这儿干等更说得清
+				}
+			}
 			time.Sleep(2 * time.Millisecond) // 一串状态挤在防抖窗口里，这就是要验的
 		}
 		time.Sleep(10 * time.Second) // 订阅是长连，别主动关（关了 watcher 会去重连）
