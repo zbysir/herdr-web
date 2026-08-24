@@ -95,6 +95,11 @@ const THAW_CAP = 500 // 一直等不到重绘也得撤，别糊着一张旧图�
 const THAW_FADE = 200 // 淡出时长，跟内联的 transition 对齐
 const FREEZE_MAX = 700 // 连续重排最多接着用同一张（拖窗口时别把终端冻死）
 
+// 尺寸什么时候落地（毫秒），见 relayout()
+const SETTLE_MS = 90 // 布局停下来多久才动 xterm（面板开合这类一步到位的变化）
+const VV_HOLD = 260 // 视口自己在动（呼输入法、转屏、地址栏收放）：从最后一下起再等这么久
+const VV_CAP = 900 // 视口一直在动也得落一次（iOS 上地址栏能来回弹好几秒）
+
 // 自动重连（见下面的 retry / wake）。
 //
 // 手机和平板锁屏时系统会把页面挂起，WebSocket 跟着断 —— 这一侧拦不住，那是系统在
@@ -122,10 +127,13 @@ export class Session {
   private probeTimer: ReturnType<typeof setTimeout> | undefined
   private paintTimer: ReturnType<typeof setTimeout> | undefined
   private paintHeals = 0
-  private resizeTimer: ReturnType<typeof setTimeout> | undefined
+  private settleTimer: ReturnType<typeof setTimeout> | undefined
+  private settleFloor = 0 // 早于这个时刻不落地（视口还在动）
+  private settleCap = 0 // 晚于这个时刻必须落地（0 = 不设上限）
   private detachTouch: (() => void) | null = null
   private freezeEl: HTMLCanvasElement | null = null
   private freezeAt = 0
+  private freezeAwait = false // 冻着，等 herdr 的 SIGWINCH 重画（见 awaitRedraw）
   private thawTimer: ReturnType<typeof setTimeout> | undefined
   private thawWatch: IDisposable | null = null
   private fadingEl: HTMLCanvasElement | null = null
@@ -568,6 +576,11 @@ export class Session {
       if (typeof ev.data !== 'string') {
         this.term.write(new Uint8Array(ev.data as ArrayBuffer))
         this.armRepaint()
+        // 等的就是这个：resize 之后 herdr 重画来了，现在才轮到撤冻帧（见 awaitRedraw）
+        if (this.freezeAwait) {
+          this.freezeAwait = false
+          this.watchThaw()
+        }
         return
       }
       const m = JSON.parse(ev.data) as { t: string; label?: string; msg?: string; code?: number }
@@ -713,19 +726,67 @@ export class Session {
 
   /* ------------------------------------------------------------- 尺寸 / 主题 */
 
-  relayout() {
-    clearTimeout(this.resizeTimer)
-    this.resizeTimer = setTimeout(() => this.applySize(), 80)
+  /**
+   * 布局变了，**等它停下来**再动 xterm。
+   *
+   * 一次 resize 的代价不是一帧：清画布（见 freeze()）+ SIGWINCH + herdr 自己清屏重画，
+   * 加起来几十到上百毫秒，屏幕上是实实在在闪一下。所以这里要的是**一次布局变化只
+   * resize 一次**。
+   *
+   * 原来是「防抖 80ms」，而手机上呼一次输入法压根不是「一下」：视口是一格一格变过来的
+   * （iOS 每帧一个 resize；安卓分几段，中间还夹着「顶栏收掉」和进全屏那两下）。事件之间
+   * 一超过 80ms 就漏成两次、三次 —— 用户看到的就是「呼一次键盘重绘很多次」。而单纯把
+   * 防抖调长又不行：面板开合那种一步到位的变化会跟着白等。
+   *
+   * 所以分档：`viewport = true` 的那几下（**视口自己在动**：呼输入法、转屏、进出全屏、
+   * 地址栏收放）额外压一个 VV_HOLD 的地板 —— 那是一段动画，最后一下之后还得再等等；
+   * 别的（面板开合、拖发件箱、改字号）照旧只等 SETTLE_MS。
+   *
+   * 代价是键盘升起的那 ~300–500ms 里终端还是老行数（底下几行被键盘盖着），换来的是只闪一次。
+   * VV_CAP 是兜底：视口有可能一直在动（iOS 上地址栏能来回弹好几秒），不能因此永远不重排。
+   */
+  relayout(viewport = false) {
+    const now = performance.now()
+    if (this.settleTimer === undefined) {
+      // 一串变化的头一下
+      this.settleFloor = 0
+      this.settleCap = 0
+    }
+    if (viewport) {
+      this.settleFloor = Math.max(this.settleFloor, now + VV_HOLD)
+      if (!this.settleCap) this.settleCap = now + VV_CAP
+    }
+    this.armSettle(now)
   }
 
-  private applySize() {
+  /**
+   * 排下一次落地。每次布局变化都重新排，所以计时器真响的时候一定「已经静了
+   * SETTLE_MS」—— 这就是防抖那一半。
+   */
+  private armSettle(now: number) {
+    let due = Math.max(now + SETTLE_MS, this.settleFloor)
+    if (this.settleCap) due = Math.min(due, this.settleCap)
+    clearTimeout(this.settleTimer)
+    this.settleTimer = setTimeout(() => this.settle(), Math.max(0, due - now))
+  }
+
+  private settle() {
+    this.settleTimer = undefined
     const d = this.fit.proposeDimensions()
     // 容器还没测量出来（字号刚改完那一帧、面板动画中）就等下一次
     if (!d || !Number.isFinite(d.cols) || !Number.isFinite(d.rows)) return
     // 行列没变就别碰 xterm：resize 一次要黑一下（见 freeze()），白闪不值
     if (d.cols === this.term.cols && d.rows === this.term.rows) return
+    this.applySize(d)
+  }
+
+  private applySize(d: { cols: number; rows: number }) {
     this.freeze()
-    this.fit.fit()
+    // 直接 term.resize，不走 fit.fit()：fit 会自己再量一次（刚量过），而且在 resize 之前
+    // 多调一次 renderService.clear() —— 那正是「改尺寸会黑一下」里的第 2 条。少一次清屏。
+    // xterm 那边 bufferService.onResize 自己会触发全屏重绘（读的 RenderService 源码）。
+    this.term.resize(d.cols, d.rows)
+    this.awaitRedraw()
     this.armRepaint() // resize 后那次全屏重绘可能被 2026 吞掉，让看门狗兜着
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ t: 'r', cols: this.term.cols, rows: this.term.rows }))
@@ -736,7 +797,8 @@ export class Session {
   // 改尺寸的那一刻屏幕是**真的黑掉**，不是错觉：
   //   1. xterm 的 WebGL 渲染器一改 `canvas.width` 绘制缓冲就清空了（实测清空后整块画布
   //      读出来是全透明的），终端内容整片消失，只剩底下那层背景 —— 就是那一下「黑」；
-  //   2. FitAddon.fit() 在 resize 之前还主动调了一次 renderService.clear()；
+  //   2. （原来还多一次：`FitAddon.fit()` 在 resize 之前主动 `renderService.clear()`——
+  //      所以现在不走 fit，自己量完直接 `term.resize`，见 applySize）；
   //   3. 重画最快也要等下一个 rAF，2026 同步输出正开着的话得等 ESU（上面的看门狗兜，但那是 180ms）；
   //   4. herdr 收到 SIGWINCH 之后自己也要清屏重画一遍，又是几十毫秒。
   // 这几段延迟一个都去不掉（xterm 没有同步重绘的口子），所以改尺寸之前把当前画面拍成
@@ -792,6 +854,25 @@ export class Session {
     return out
   }
 
+  /**
+   * 改完尺寸之后**别按 onRender 撤帧** —— 等 herdr 那边重画到了再说。
+   *
+   * xterm 自己因为 resize 画的那一帧是「旧内容按新宽度重排」，而 herdr 的 pane 是绝对
+   * 定位重画的、压根不按行流重排，所以那一帧看着是花的。跟着它撤帧的话，屏幕上是
+   * 「花一下 → herdr 的 SIGWINCH 重画又正一下」**两次**变化 —— 一次呼键盘就闪两回。
+   *
+   * 判据是「resize 之后收到过字节」：herdr 收到 SIGWINCH 一定会重画（几十到几百毫秒），
+   * 那一帧才是该露出来的画面。**兜底照旧是 THAW_CAP**：对面也可能一个字节都不回
+   * （比如底下就是一个闲着的 shell 提示符），不能糊着一张旧图不放。
+   */
+  private awaitRedraw() {
+    if (!this.freezeEl) return
+    this.thawWatch?.dispose()
+    this.thawWatch = null
+    this.freezeAwait = true
+    this.armThaw(THAW_CAP)
+  }
+
   /** 撤帧的时钟：等到新画面画上再多留 THAW_GRACE，等不到就 THAW_CAP 后硬撤 */
   private watchThaw() {
     this.thawWatch?.dispose()
@@ -811,6 +892,7 @@ export class Session {
 
   private thaw(now = false) {
     clearTimeout(this.thawTimer)
+    this.freezeAwait = false
     this.thawWatch?.dispose()
     this.thawWatch = null
     const el = this.freezeEl
@@ -876,7 +958,7 @@ export class Session {
     removeEventListener('online', this.wake)
     removeEventListener('pageshow', this.wake)
     clearTimeout(this.paintTimer)
-    clearTimeout(this.resizeTimer)
+    clearTimeout(this.settleTimer)
     this.thaw(true)
     this.dropFading()
     this.teardown()

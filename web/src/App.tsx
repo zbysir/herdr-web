@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Maximize, Minimize } from './icons'
 import { api, deviceKind, filesApi, libMap, resolveRows, SESSION, topbarKeyRef, UNAUTHED, type ClipResult, type FileStat, type Notice, type ProfilesResponse, type RowSegments, type SoftKey, type SoftkeysConfig, type SoftkeysResponse, type State, type TopbarResponse, type UnauthedDetail, type WhoAmI } from '@/lib/api'
 import { applyPrefs, keyStyle, pushPref, type KeyStyle } from '@/lib/prefs'
+import { cacheLayout, readLayoutCache } from '@/lib/layoutcache'
 import { readClipboard, writeClipboard } from '@/lib/clipboard'
 import { Session } from '@/term/session'
 import { initialScheme, type Scheme } from '@/term/themes'
@@ -90,6 +91,12 @@ function pairHint(): string | undefined {
       return undefined
   }
 }
+
+/**
+ * 上一次这台设备拿到的排布（见 lib/layoutcache.ts）。**在模块作用域读一次**，下面几个
+ * useState 拿它当初值 —— 第一帧就画对，服务端那份回来再整份盖上去（一样的话 DOM 不动）。
+ */
+const CACHED = readLayoutCache()
 
 export default function App() {
   const host = useRef<HTMLDivElement>(null)
@@ -203,7 +210,9 @@ export default function App() {
   // 编辑器存完把整份配置回传过来
   // 软键条每行的三段：钉左 / 跟着滑 / 钉右（见 lib/api.ts 的 resolveRows）。
   // 钉住那两段不跟着横滑 —— 「呼键盘」「Esc」这种滑走了就等于没有
-  const [bar, setBar] = useState<RowSegments[]>([])
+  const [bar, setBar] = useState<RowSegments[]>(
+    () => (CACHED?.softkeys ? resolveRows(CACHED.softkeys.lib, CACHED.softkeys.bar, CACHED.softkeys.pin) : []),
+  )
   /**
    * 「我的按键」按 ID 索引。软键条的 `bar` 已经解析成定义了，这一份是给**顶栏**用的 ——
    * 顶栏上放的是 `key:<定义ID>`（见 internal/topbar），渲染时才落到定义上。
@@ -211,7 +220,9 @@ export default function App() {
    * 为什么不在服务端就解析好：定义是全局的、顶栏配置是分套的，服务端那边一解析就等于把
    * 两个口的数据焊在一起，而「读盘不核引用」那条规矩正是靠它们分开才成立的。
    */
-  const [keyLib, setKeyLib] = useState<Map<string, SoftKey>>(new Map())
+  const [keyLib, setKeyLib] = useState<Map<string, SoftKey>>(
+    () => (CACHED?.softkeys ? libMap(CACHED.softkeys.lib) : new Map()),
+  )
   /**
    * 顶栏上那排按钮：**放哪几个、什么顺序**也是服务端存的配置（`topbar.json`，见
    * internal/topbar），在设置 →「顶栏」页里拖。这里存的就是那一串 id。
@@ -219,17 +230,21 @@ export default function App() {
    * 一项可能是内置按钮的 id（`CAP_BY_ID` 里那些），也可能是 `key:<定义ID>` ——
    * 「我的按键」里的一个键放到了顶栏上。所以这儿是 `string[]` 不是 `CapId[]`。
    *
-   * 初值用前端那份出厂顺序，别先渲染一条空栏 —— 请求回来之前那一两拍顶栏是空的话，
-   * 看着就像坏了（而且「设置」那个入口也不在，连改都没法改）。
+   * 初值优先用上一次的镜像（见 lib/layoutcache.ts）—— 这栏要等三个请求排完才回来，中间
+   * 画出厂那份、回来再跳一下，就是用户报的「刷新页面顶部始终闪动」。没有镜像才退回出厂
+   * 顺序：别先渲染一条空栏，请求回来之前那一两拍顶栏是空的话，看着就像坏了（而且「设置」
+   * 那个入口也不在，连改都没法改）。
    */
-  const [topbar, setTopbar] = useState<string[]>(TOPBAR_DEFAULT)
+  const [topbar, setTopbar] = useState<string[]>(() => CACHED?.topbar ?? TOPBAR_DEFAULT)
   /**
    * 这台设备用哪一套排布（profile，见 internal/profiles）。
    *
-   * 初值就是「默认」那一套，不等服务端：软键条 / 顶栏的 GET 服务端自己会按绑定算，这里这份
-   * 只用来显示名字和往 prefs 上写 —— 名字先写「默认」，报到回来再纠正，比先画一片空白好。
+   * 初值优先用上一次报到记下的那一套（镜像，见 lib/layoutcache.ts），没有才写「默认」——
+   * 不等服务端：软键条 / 顶栏的 GET 服务端自己会按绑定算，这里这份只用来显示名字和往
+   * prefs 上写。镜像有可能过期（那一套在别的设备上被删了），代价是报到回来之前改开关会
+   * 收到一条「没同步到「排布」里」，而那几百毫秒里没人来得及点。
    */
-  const [profile, setProfile] = useState({ id: 'default', name: '默认' })
+  const [profile, setProfile] = useState(() => CACHED?.profile ?? { id: 'default', name: '默认' })
   const [cfg, setCfg] = useState({ poll: urlNum('poll') ?? 500, push: urlNum('push') ?? 700 })
   const [state, setState] = useState<State | null>(null)
 
@@ -420,7 +435,8 @@ export default function App() {
     }
     const ro = new ResizeObserver(() => s.relayout())
     ro.observe(host.current.parentElement!)
-    const onOrient = () => s.relayout()
+    // 转屏是视口自己在动（而且是一段动画），跟呼输入法同一档：等它停下来再重排
+    const onOrient = () => s.relayout(true)
     addEventListener('orientationchange', onOrient)
     return () => {
       ro.disconnect()
@@ -437,7 +453,10 @@ export default function App() {
   }, [gate])
 
   const relayout = useCallback(() => sess.current?.relayout(), [])
-  useViewportHeight(relayout)
+  // visualViewport 变化（呼输入法、转屏、地址栏收放）是**一段动画**，中间会连着来好几下 ——
+  // 标成 viewport，让 Session 等它整段停下来再 resize 一次（见 session.ts 的 relayout）
+  const relayoutVV = useCallback(() => sess.current?.relayout(true), [])
+  useViewportHeight(relayoutVV)
 
   useEffect(() => { sess.current?.setScheme(scheme) }, [scheme])
   useEffect(() => {
@@ -577,6 +596,13 @@ export default function App() {
   const applySoftkeys = useCallback((c: SoftkeysConfig) => {
     setBar(resolveRows(c.lib, c.bar, c.pin))
     setKeyLib(libMap(c.lib))
+    cacheLayout({ softkeys: { lib: c.lib, bar: c.bar, pin: c.pin ?? null } })
+  }, [])
+
+  /** 顶栏那串 id 同理：读回来和编辑器存完都走这一条，顺手更新第一帧用的镜像 */
+  const applyTopbar = useCallback((items: string[]) => {
+    setTopbar(items)
+    cacheLayout({ topbar: items })
   }, [])
 
   const loadLayout = useCallback(async () => {
@@ -588,7 +614,7 @@ export default function App() {
       // 认不出的直接跳过（服务端不该给，防一手 —— 新版本存的配置在旧前端上读到过）。
       // `key:` 引用只查形状：那个定义在不在，渲染时拿 keyLib 查（服务端读盘也不核，
       // 见 internal/topbar 的包注释）
-      setTopbar(tb.items.filter((id) => CAP_BY_ID.has(id as CapId) || !!topbarKeyRef(id)))
+      applyTopbar(tb.items.filter((id) => CAP_BY_ID.has(id as CapId) || !!topbarKeyRef(id)))
     } catch { /* 拿不到就用出厂顺序，顶栏不能空 */ }
   }, [])
 
@@ -601,7 +627,9 @@ export default function App() {
    */
   const applyProfiles = (r: ProfilesResponse) => {
     const p = r.profiles?.find((x) => x.id === r.current)
-    setProfile({ id: r.current, name: p?.name ?? r.current })
+    const cur = { id: r.current, name: p?.name ?? r.current }
+    setProfile(cur)
+    cacheLayout({ profile: cur })
     applyPrefs(r.prefs)
     setOpts({
       kitty: lsBool('kitty', true), meta: lsBool('meta', true), copyOnSelect: lsBool('copyOnSelect', false),
@@ -737,7 +765,7 @@ export default function App() {
     const d = document as FsDoc
     const sync = () => {
       setFull(!!(d.fullscreenElement ?? d.webkitFullscreenElement))
-      relayout()   // 视口尺寸变了，xterm 要重排
+      relayoutVV() // 视口尺寸变了，xterm 要重排（进出全屏也是一段动画，跟呼键盘同一档）
     }
     document.addEventListener('fullscreenchange', sync)
     document.addEventListener('webkitfullscreenchange', sync)
@@ -745,7 +773,7 @@ export default function App() {
       document.removeEventListener('fullscreenchange', sync)
       document.removeEventListener('webkitfullscreenchange', sync)
     }
-  }, [relayout])
+  }, [relayoutVV])
 
   /**
    * 进全屏。已经在全屏里就什么都不做。
@@ -1391,7 +1419,7 @@ export default function App() {
             heals={heals}
             // 存完把整份配置回传过来：软键条那一条和顶栏上放的「我的按键」是同一份定义
             onSaved={applySoftkeys}
-            onTopbar={setTopbar}
+            onTopbar={applyTopbar}
             toast={toast}
             state={state}
             fontSize={fontSize}

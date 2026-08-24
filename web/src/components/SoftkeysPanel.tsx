@@ -791,11 +791,14 @@ export function SoftkeysPanel({
             </div>
 
             {/* 挑了图标才有意义：图标是**替掉**名字，还是当前缀 / 后缀接着名字。
-                `^B 前缀` 这种键名字里那个 B 是有意义的，只能二选一的话就只能忍 `^` 的字形 */}
+
+                **整行 flex-wrap、每块 shrink-0**：窄屏上（393px）不换行的话，三个按钮会被
+                压到把「字+图标」截成「字+图」，末尾那个预览再挤进来 —— 真机上看着就是糊成
+                一坨（用户报的）。宁可折行也别压缩按钮。 */}
             {sel.icon && (
-              <div className="flex w-full items-center gap-1.5">
+              <div className="flex w-full flex-wrap items-center gap-1.5">
                 <span className="shrink-0 text-xs text-faint">摆哪儿</span>
-                <div className="flex overflow-hidden rounded-md border border-line">
+                <div className="flex shrink-0 overflow-hidden rounded-md border border-line">
                   {([
                     ['only', '只图标', '只画图标，不画名字'],
                     ['pre', '图标+字', '图标在前，名字在后 —— 比如 ⌃ B'],
@@ -806,17 +809,18 @@ export function SoftkeysPanel({
                       size="tiny"
                       on={(sel.iconAt ?? 'only') === v}
                       title={tip}
-                      className={cn('rounded-none border-0 px-2', n < 2 && 'border-r border-line')}
+                      className={cn('shrink-0 rounded-none border-0 px-2', n < 2 && 'border-r border-line')}
                       onClick={() => patchSel((x) => ({ ...x, iconAt: v }))}
                     >
                       {txt}
                     </Button>
                   ))}
                 </div>
-                <span className="min-w-0 truncate text-xs text-faint">
-                  条上长这样：
-                </span>
-                <span className="shrink-0 rounded-md border border-line bg-ctl px-2 py-1 font-mono text-xs">
+                {/* 预览：条上长这样。不加说明文字 —— 一个键的样子自己就说清了 */}
+                <span
+                  title="条上长这样"
+                  className="shrink-0 rounded-md border border-line bg-ctl px-2 py-1 font-mono text-xs"
+                >
                   {keyFace(sel, kindOf(sel))}
                 </span>
               </div>
