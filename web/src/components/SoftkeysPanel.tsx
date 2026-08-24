@@ -6,6 +6,7 @@ import { MAX_GROUP_COLS } from '@/lib/keys'
 import { KEY_ICONS, keyFace } from '@/keyicons'
 import type { KeyAct } from '@/capabilities'
 import { Button } from './ui/button'
+import { SaveButton } from './ui/savebutton'
 import { Input } from './ui/input'
 import { Checkbox } from './ui/checkbox'
 import { Panel } from './ui/panel'
@@ -404,6 +405,8 @@ export function SoftkeysPanel({
 
   /* ---------------------------------------------------------------- 存 / 复位 */
 
+  // 成没成要回给按钮（它自己举 ✔ / ✕，见 ui/savebutton）。**成了不再吐 toast** ——
+  // 那条提示在整屏正下方，而按钮在这块面板顶上，用户报的就是「点了跟没点一样」
   const save = async () => {
     setErr('')
     try {
@@ -413,9 +416,10 @@ export function SoftkeysPanel({
       take(r)
       onSaved(r)
       setSelId(null)
-      toast(`「${profile.name}」的软键条已保存`)
+      return true
     } catch (e) {
       setErr((e as Error).message)   // 服务端会指出是第几个按键、哪里不认
+      return false
     }
   }
 
@@ -665,7 +669,7 @@ export function SoftkeysPanel({
         >
           恢复默认
         </Button>
-        <Button size="tiny" variant="primary" onClick={save}>保存</Button>
+        <SaveButton size="tiny" onSave={save}>保存</SaveButton>
       </div>
 
       <div className="flex flex-col gap-2">

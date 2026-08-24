@@ -4,6 +4,7 @@ import { api, libMap, TOPBAR_KEY, topbarKeyRef, type SoftKey, type SoftkeysRespo
 import { useChipDrag, type ChipAt } from '@/lib/chipdrag'
 import { CAP_BY_ID, TOPBAR_ITEMS, type CapId } from '@/capabilities'
 import { Button } from './ui/button'
+import { SaveButton } from './ui/savebutton'
 import { cn } from '@/lib/utils'
 
 /**
@@ -197,15 +198,18 @@ export function TopbarPanel({
 
   /* ------------------------------------------------------------ 存 */
 
+  // 成没成要回给按钮（它自己举 ✔ / ✕，见 ui/savebutton）。**成了不再吐 toast** ——
+  // 那条提示在整屏正下方，而按钮在面板顶上，用户报的就是「点了跟没点一样」
   const save = async () => {
     setErr('')
     try {
       const r = await api.put<TopbarResponse>(`/topbar?profile=${encodeURIComponent(profile.id)}`, { items })
       take(r)
       onSaved(r.items)
-      toast(`「${profile.name}」的顶栏已保存`)
+      return true
     } catch (e) {
       setErr((e as Error).message)
+      return false
     }
   }
 
@@ -295,9 +299,9 @@ export function TopbarPanel({
         <span className="rounded border border-line bg-ctl px-1.5 py-0.5 text-xs text-muted">{profile.name}</span>
         <span className="text-xs text-faint">{items.length} / {max}</span>
         <div className="ml-auto flex items-center gap-2">
-          <Button size="tiny" variant="primary" onClick={() => void save()} disabled={!dirty}>
+          <SaveButton size="tiny" onSave={save} disabled={!dirty}>
             {dirty ? '保存' : '已保存'}
-          </Button>
+          </SaveButton>
           <Button size="tiny" onClick={() => void reset()}>恢复默认</Button>
         </div>
       </div>
