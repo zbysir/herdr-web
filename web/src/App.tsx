@@ -14,6 +14,7 @@ import { usePhone } from '@/hooks/usePhone'
 import { useKeyboardUp } from '@/hooks/useKeyboardUp'
 import { useArm } from '@/hooks/useArm'
 import { spanStyle } from '@/lib/keys'
+import { keyFace } from '@/keyicons'
 import { Button } from '@/components/ui/button'
 import { Toast } from '@/components/ui/toast'
 import { Dock } from '@/components/Dock'
@@ -1149,7 +1150,7 @@ export default function App() {
           else if (k.send) { sess.current?.sendKey(k.send); if (kbdUp) sess.current?.focus() }
         }}
       >
-        {k.label}
+        {keyFace(k.icon, k.label)}
         {badgeEl(ta?.badge)}
       </Button>
     )

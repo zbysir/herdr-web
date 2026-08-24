@@ -6,6 +6,7 @@ import type { KeyAct } from '@/capabilities'
 import { usePhone } from '@/hooks/usePhone'
 import { useArm } from '@/hooks/useArm'
 import { spanStyle } from '@/lib/keys'
+import { keyFace } from '@/keyicons'
 import { cn } from '@/lib/utils'
 
 /**
@@ -114,7 +115,8 @@ export function Softkeys({
         style={inPad ? undefined : spanStyle(k.span)}
         title={up ? '再点一次才真的发出去'
           : isGroup ? `${k.label}：点开一小片键（浮在上面，不占条上的地方）`
-            : (k.spec || k.sticky || k.act || '') + (k.confirm ? '（要点两下）' : '')}
+            // 挑了图标之后条上不画字了，名字得进 title —— 否则那个键是什么全靠猜
+            : `${k.icon ? `${k.label} —— ` : ''}${k.spec || k.sticky || k.act || ''}${k.confirm ? '（要点两下）' : ''}`}
         // 这一个不能顺手 focus 终端，否则没法收起键盘
         onMouseDown={(e) => e.preventDefault()}
         onClick={(e) => {
@@ -130,7 +132,7 @@ export function Softkeys({
           else if (k.send) onSend(k.send)
         }}
       >
-        {k.label}
+        {keyFace(k.icon, k.label)}
         {/* ring 用面板底色，让角标看着像贴在键上的徽标而不是浮在半空。
             顶栏那个 ▦ 上已经有一个了，这儿还要一个是因为**手机上键盘一弹起来顶栏整条就收掉**
             （见 App 里的 barHidden）——而那正是你在跟 agent 说话、最该知道「另一个在等你」的时候 */}

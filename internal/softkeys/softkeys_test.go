@@ -299,12 +299,13 @@ func TestStoreRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	s := &Store{Dir: dir}
 
-	// 没有文件时退回出厂配置：键全在库里，也全摆在第一行
-	if got, want := len(s.Load(profiles.Default).Lib), len(Defaults()); got != want {
+	// 没有文件时退回出厂配置。库里是出厂那些定义 **+ 一个「方向」弹出组**，
+	// 而条上只有 DefaultBar 那些（方向键不各占一格）
+	if got, want := len(s.Load(profiles.Default).Lib), len(Defaults())+1; got != want {
 		t.Errorf("空目录应当退回出厂 %d 条，得到 %d", want, got)
 	}
-	if c := s.Load(profiles.Default); c.Rows != 1 || len(c.Bar) != 1 || len(c.Bar[0]) != len(Defaults()) {
-		t.Errorf("出厂应当是一行、键全在条上: rows=%d bar=%v", c.Rows, c.Bar)
+	if c := s.Load(profiles.Default); c.Rows != 1 || len(c.Bar) != 1 || len(c.Bar[0]) != len(DefaultBar()) {
+		t.Errorf("出厂应当是一行、条上 %d 个: rows=%d bar=%v", len(DefaultBar()), c.Rows, c.Bar)
 	}
 
 	cfg, err := s.Save(profiles.Default, Config{Lib: []Key{
@@ -424,7 +425,7 @@ func TestStoreRoundTrip(t *testing.T) {
 
 	// 存坏了要退回出厂而不是崩
 	_ = os.WriteFile(s.path(), []byte("{ 这不是 json"), 0o600)
-	if got, want := len(s.Load(profiles.Default).Lib), len(Defaults()); got != want {
+	if got, want := len(s.Load(profiles.Default).Lib), len(Defaults())+1; got != want {
 		t.Errorf("坏文件应当退回出厂 %d 条，得到 %d", want, got)
 	}
 }
@@ -534,7 +535,7 @@ func TestResetCopyDrop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.Bar[0]) != len(Defaults()) {
+	if len(c.Bar[0]) != len(DefaultBar()) {
 		t.Errorf("恢复默认该把出厂那一排放上条: %+v", c.Bar)
 	}
 	found := false
@@ -933,5 +934,103 @@ func TestPadCanHoldGroup(t *testing.T) {
 	}
 	if out.Pad == nil || out.Pad.Cells[0] != "g1" {
 		t.Errorf("组键没进固定块：%+v", out.Pad)
+	}
+}
+
+// TestDefaultArrowsAreAGroup 出厂条上**方向键只占一格**：它们是「方向」那个弹出组的成员。
+//
+// 摊开是 3×2 六格，393px 的手机竖屏上那是半条屏幕 —— 这条退回去（四个键各占一格）的表现
+// 不是报错，是「新装一台机器，条上一半地方被方向键吃了」。
+func TestDefaultArrowsAreAGroup(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	c := s.Load(profiles.Default) // 空目录 → 出厂
+
+	byID := map[string]Key{}
+	for _, k := range c.Lib {
+		byID[k.ID] = k
+	}
+	// 条上不该有单独的方向键，而该有一个组
+	groups := 0
+	for _, id := range c.Bar[0] {
+		k := byID[id]
+		if isDefaultArrow(k) {
+			t.Errorf("条上还有单独的方向键：%q", k.Label)
+		}
+		if k.Group != nil {
+			groups++
+		}
+	}
+	if groups != 1 {
+		t.Fatalf("条上该正好有一个弹出组，数到 %d", groups)
+	}
+	// 那个组里就是那四个方向键，摆成十字
+	var g Key
+	for _, k := range c.Lib {
+		if k.Group != nil {
+			g = k
+		}
+	}
+	if g.Label != "方向" || g.Group.Cols != 3 {
+		t.Fatalf("组不对：%+v", g)
+	}
+	want := []string{"", "↑", "", "←", "↓", "→"}
+	for i, w := range want {
+		got := ""
+		if id := g.Group.Cells[i]; id != "" {
+			got = byID[id].Label
+		}
+		if got != w {
+			t.Errorf("第 %d 格该是 %q，是 %q", i+1, w, got)
+		}
+	}
+	// 四个方向键的**定义**照旧在库里（组里放的是引用）
+	for _, want := range []string{"↑", "↓", "←", "→"} {
+		found := false
+		for _, k := range c.Lib {
+			if k.Label == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("定义 %q 该还在库里", want)
+		}
+	}
+}
+
+// TestResetKeepsMyArrowGroup 用户把自己那个「方向」组改成 4 列之后，「恢复默认」不该
+// 又补一个同名的进去（sigOf 认组时**不带列数**，就是为了这个）。
+func TestResetKeepsMyArrowGroup(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	c := s.Load(profiles.Default)
+	lib := append([]Key{}, c.Lib...)
+	n := 0
+	for i := range lib {
+		if lib[i].Group != nil {
+			lib[i].Group = &Group{Cols: 4, Cells: make([]string, 4*MaxGroupRows)}
+			lib[i].Group.Cells[0] = lib[0].ID
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("出厂该只有一个组，数到 %d", n)
+	}
+	if _, err := s.Save(profiles.Default, Config{Rows: 1, Lib: lib, Bar: c.Bar}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.Reset(profiles.Default)
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups := 0
+	for _, k := range out.Lib {
+		if k.Group != nil {
+			groups++
+			if k.Group.Cols != 4 {
+				t.Errorf("我改过的列数该留着，拿到 %d 列", k.Group.Cols)
+			}
+		}
+	}
+	if groups != 1 {
+		t.Errorf("恢复默认不该再补一个同名的组，现在有 %d 个", groups)
 	}
 }

@@ -3,6 +3,7 @@ import { Download, Plus, Trash2, X } from 'lucide-react'
 import { api, type Pad, type PresetGroup, type SoftKey, type SoftkeysConfig, type SoftkeysResponse } from '@/lib/api'
 import { useChipDrag, type ChipAt } from '@/lib/chipdrag'
 import { MAX_GROUP_COLS, MAX_SPAN, spanStyle } from '@/lib/keys'
+import { KEY_ICONS, keyFace } from '@/keyicons'
 import type { KeyAct } from '@/capabilities'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
@@ -35,7 +36,7 @@ const kindOf = (k: SoftKey) =>
 
 /** 把「按键」栏的文本解回一条 SoftKey。id / 名字 / 宽 / 两下这些原样留着。 */
 function parseKind(spec: string, k: SoftKey): SoftKey {
-  const keep = { id: k.id, label: k.label, span: k.span, confirm: k.confirm }
+  const keep = { id: k.id, label: k.label, span: k.span, icon: k.icon, confirm: k.confirm }
   const m = spec.match(/^(sticky|act):(.+)$/)
   if (m) {
     return m[1] === 'sticky'
@@ -509,7 +510,7 @@ export function SoftkeysPanel({
                 onPointerDown={(e) => onChipDown(e, { zone, i })}
                 onKeyDown={(e) => onChipKey(e, { zone, i })}
               >
-                {k.label || kindOf(k) || '（空）'}
+                {keyFace(k.icon, k.label || kindOf(k) || '（空）')}
                 {zone !== 'lib' && (
                   <X
                     className="size-3 shrink-0 text-muted hover:text-bad"
@@ -588,7 +589,7 @@ export function SoftkeysPanel({
               onPointerDown={(e) => onChipDown(e, { zone, i })}
               onKeyDown={(e) => onChipKey(e, { zone, i })}
             >
-              {k.label || kindOf(k)}
+              {keyFace(k.icon, k.label || kindOf(k))}
               <X
                 className="size-3 shrink-0 text-muted hover:text-bad"
                 onPointerDown={(ev) => { ev.stopPropagation(); ev.preventDefault() }}
@@ -701,9 +702,9 @@ export function SoftkeysPanel({
           <span className="text-[13px] font-medium">
             我的按键 <span className="ml-0.5 text-xs font-normal text-faint tabular-nums">{lib.length}/{max}</span>
           </span>
-          <span className="min-w-0 flex-1 text-xs text-muted">
-            点一下改它，<strong className="font-medium text-fg">按住拖到上面</strong>就上条
-          </span>
+          {/* 原来这儿有一句「点一下改它，按住拖到上面就上条」。按钮多到四个之后它被挤成
+              三行，而底下「怎么用」第一条说的就是同一件事 —— 去掉重复那一份 */}
+          <span className="min-w-0 flex-1" />
           <Button
             size="tiny"
             className="shrink-0"
@@ -799,6 +800,36 @@ export function SoftkeysPanel({
             <Button size="tiny" variant="danger" className="shrink-0" title="彻底删掉这个键（条上的引用一起去掉）" onClick={() => del(sel)}>
               <Trash2 className="size-3" />删掉
             </Button>
+            {/* 图标：挑一个内置的,条上就画它不画字（`⌨` 那种字形在很多字体里缺 / 难看 /
+                基线对不齐）。**名字还留着** —— 编辑器里认它,title 里也显示它。
+                一行铺开自己横滑,比弹一个下拉少一次点击 */}
+            <div className="flex w-full items-center gap-1.5">
+              <span className="shrink-0 text-xs text-faint">图标</span>
+              <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                <Button
+                  size="tiny"
+                  on={!sel.icon}
+                  title="不用图标，条上画名字"
+                  className="shrink-0 px-1.5"
+                  onClick={() => patchSel((x) => ({ ...x, icon: undefined }))}
+                >
+                  文字
+                </Button>
+                {KEY_ICONS.map((ic) => (
+                  <Button
+                    key={ic.id}
+                    size="tiny"
+                    on={sel.icon === ic.id}
+                    title={ic.hint}
+                    className="shrink-0 px-1.5"
+                    onClick={() => patchSel((x) => ({ ...x, icon: ic.id }))}
+                  >
+                    {ic.icon}
+                  </Button>
+                ))}
+              </div>
+            </div>
+
             {/* 组里放什么：往空格（·）上拖就是放进那一格，格里两格互拖是对调。
                 和固定块共用同一个筐（gridBox） */}
             {sel.group && (
@@ -823,6 +854,9 @@ export function SoftkeysPanel({
         <ul className="mb-3 ml-3.5 list-disc space-y-0.5">
           <li>库里的键<strong>点一下改它</strong>，<strong>按住拖到上面</strong>就上条。
             条上的 ✕ 只是拿下来，定义还在库里 —— 同一个键两行各放一个也行。</li>
+          <li><strong>图标</strong>：挑一个内置的，条上就画它不画字（<code>⌨</code> 这种字形
+            在很多字体里缺、难看、基线还对不齐）。<strong>名字还留着</strong> —— 编辑器里认它，
+            指上去也显示它。选「文字」就是不用图标。</li>
           <li>改一处定义，条上（和顶栏上）所有引用一起变。</li>
           <li>两行<strong>各自横滑</strong>，放不下就滑，不换行。</li>
           <li><strong>宽</strong> = 占几格（1 / 2 / 3），一格就是一个键位那么宽。</li>
@@ -872,7 +906,7 @@ export function SoftkeysPanel({
           className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-1/2 rounded-md border border-brand-line bg-brand-bg px-2.5 py-1.5 font-mono text-xs text-brand-fg shadow-[0_10px_24px_-8px_rgba(0,0,0,.7)]"
           style={{ left: drag.x, top: drag.y }}
         >
-          {(() => { const k = at(drag.from.zone, drag.from.i); return k ? (k.label || kindOf(k)) : '' })()}
+          {(() => { const k = at(drag.from.zone, drag.from.i); return k ? keyFace(k.icon, k.label || kindOf(k)) : '' })()}
         </span>
       )}
     </>

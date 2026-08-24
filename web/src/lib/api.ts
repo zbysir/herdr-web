@@ -391,6 +391,11 @@ export interface SoftKey {
   span?: number
   /** @deprecated span 的降级镜像（服务端按 span 现算下发）。新代码只读 span */
   wide?: boolean
+  /**
+   * 条上画哪个**内置图标**（空 = 画 `label` 那段文字）。清单在 `@/keyicons`。
+   * `label` 照旧是**名字** —— 挑了图标它还在，只是条上不画字。
+   */
+  icon?: string
   confirm?: boolean   // 要点两下才发（防误触）
   send?: string    // 解析出来的字节（前端照发）
   spec?: string    // 用户写的按键谱（编辑器回显）

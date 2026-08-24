@@ -1,0 +1,51 @@
+package softkeys
+
+// 软键上能挑的**内置图标**：这份是白名单，前端那份画得出来的在
+// `web/src/keyicons.tsx`，两边**一字不差、顺序也一样**，有测试盯着（TestIconsMatchJS）。
+//
+// 为什么要有图标这一档：`Key.Label` 是自由文本，于是「键盘」这种键只能靠字形（`⌨`）——
+// 而那些符号字形在很多字体里压根缺（缺了就显示成一个方框），有的字体里画得很难看，而且
+// 大小 / 基线和旁边的字母都对不齐。图标是 SVG，三个问题一起没了。
+//
+// Label 仍然是**名字**（编辑器里认它、组键靠它、title 里显示它）；Icon 只决定**条上画什么**。
+// 两者不是二选一：挑了图标，名字还在，只是条上不画字。
+//
+// 加一个图标 = 这儿一行 + 那边一行。别在这儿放太多：编辑器里是一格一个的选择器，
+// 铺满三屏就没人找得到了 —— 常用的那三十几个就够，剩下的用文字标签。
+var KeyIcons = []string{
+	// 修饰键
+	"ctrl", "alt", "shift", "cmd",
+	// 编辑键
+	"esc", "enter", "tab", "space", "bs", "del",
+	// 方向 / 翻页
+	"up", "down", "left", "right", "dpad", "pgup", "pgdn",
+	// 常用动作
+	"keyboard", "terminal", "close", "stop", "check", "trash",
+	"copy", "paste", "search", "refresh", "undo", "redo",
+	"plus", "minus", "zoom-in", "zoom-out", "max", "min",
+	"split", "menu",
+}
+
+// IconOK 这个图标 id 认不认。空串 = 不挑图标（画文字标签），也算认。
+func IconOK(id string) bool {
+	if id == "" {
+		return true
+	}
+	for _, s := range KeyIcons {
+		if s == id {
+			return true
+		}
+	}
+	return false
+}
+
+// iconOf 读路径用：认不出的图标当没挑（画文字标签）。
+//
+// 和 spanOf 一个道理 —— 从新版本降级回来的文件里会有这个版本不认识的 id，
+// 整份退回出厂太贵，而 Label 一直在，退化成「画文字」是完全可用的。
+func iconOf(id string) string {
+	if IconOK(id) {
+		return id
+	}
+	return ""
+}

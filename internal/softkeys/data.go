@@ -6,10 +6,15 @@ package softkeys
 //
 // 快照只锁「迁移那一刻」那 6 组；后面新加的组直接往下写，不进快照。
 
-// Defaults 出厂配置：就是最早写死在 index.html 里的那一排。
+// Defaults 出厂那些**定义**（「我的按键」里有哪些）—— 最早写死在 index.html 里的那一排。
+//
+// **它不等于「条上放哪几个」**（那是 DefaultBar）：方向键那四个还是定义，但在条上只占
+// 一格 —— 它们是「方向」那个弹出组的成员。
 func Defaults() []Key {
 	return []Key{
-		{Label: "⌨", Act: "kbd"},
+		// 出厂就挑好图标的那几个：`⌨` / `↵` 这类字形在很多字体里缺（显示成方框）或者很难看。
+		// **Label 一个字都没动** —— sigOf 认它（「恢复默认」的去重）、快照测试也比它。
+		{Label: "⌨", Icon: "keyboard", Act: "kbd"},
 		{Label: "⌃B 前缀", Wide: true, Send: "ctrl+b"},
 		{Label: "Ctrl", Sticky: "ctrl"},
 		{Label: "Alt", Sticky: "alt"},
@@ -22,8 +27,65 @@ func Defaults() []Key {
 		{Label: "PgUp", Send: "pgup"},
 		{Label: "PgDn", Send: "pgdn"},
 		{Label: "⌃C", Send: "ctrl+c"},
-		{Label: "↵", Send: "enter"},
+		{Label: "↵", Icon: "enter", Send: "enter"},
 	}
+}
+
+// defaultArrows 出厂那个「方向」弹出组：条上只占一格，点开是
+//
+//	·  ↑  ·
+//	←  ↓  →
+//
+// 出厂就是弹出组而不是四个键摊在条上：摊开要 3×2 六格，393px 的手机竖屏上那是半条屏幕。
+//
+// Cells 里写的是**按键本身**（靠 sigOf 去 lib 里找对应那条），不是 ID —— ID 是建配置时才发的。
+// 空的 Key 就是空格子（方向键盘上方那两个空位靠它占出来）。
+var defaultArrows = struct {
+	Label string
+	Cols  int
+	Cells []Key
+}{
+	Label: "方向",
+	Cols:  3,
+	Cells: []Key{
+		{}, {Label: "↑", Send: "up"}, {},
+		{Label: "←", Send: "left"}, {Label: "↓", Send: "down"}, {Label: "→", Send: "right"},
+	},
+}
+
+// arrowGroupKey 「方向」那个组键本身（不带格子 —— 格子由 wireDefaults 填 ID）。
+// sigOf 认的是「名字 + 是个组」，所以拿它去 lib 里查「有没有」是够的。
+func arrowGroupKey() Key {
+	return Key{Label: defaultArrows.Label, Icon: "dpad", Group: &Group{Cols: defaultArrows.Cols}}
+}
+
+// isDefaultArrow 这个键是「方向」组的成员吗（出厂那四个方向键）。
+func isDefaultArrow(k Key) bool {
+	switch k.Send {
+	case "up", "down", "left", "right":
+		return k.Sticky == "" && k.Act == "" && k.Group == nil
+	}
+	return false
+}
+
+// DefaultBar 出厂**条上**放哪几个，顺序就是条上的顺序。
+//
+// 和 Defaults() 的差别只有一处：方向键那四个不各占一格，换成「方向」那一个组键，
+// 摆在它们原来的位置上。
+func DefaultBar() []Key {
+	out := make([]Key, 0, len(Defaults()))
+	put := false
+	for _, k := range Defaults() {
+		if isDefaultArrow(k) {
+			if !put {
+				out = append(out, arrowGroupKey())
+				put = true
+			}
+			continue
+		}
+		out = append(out, k)
+	}
+	return out
 }
 
 // Presets 编辑器「常用」下拉。按键谱抄的是 `herdr --default-config` 的 [keys]

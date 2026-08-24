@@ -162,7 +162,12 @@ type Key struct {
 	// Wide 是 Span 的**降级镜像**，只为老版本留着（span>=2 时写 true）。
 	// 老版本只认得它，不写的话降级看到的是「我调过的宽键全变窄了」。
 	// 读的时候反过来认（见 spanOf）：从新版本降级回去再升上来，宽度不该丢。
-	Wide    bool   `json:"wide,omitempty"`
+	Wide bool `json:"wide,omitempty"`
+	// Icon 条上画哪个**内置图标**（空 = 画 Label 那段文字）。白名单见 icons.go ——
+	// 字形（`⌨` 这种）在很多字体里压根缺（显示成方框）、有的字体里很难看、大小和基线还跟
+	// 旁边的字母对不齐；图标是 SVG，三个问题一起没了。
+	// **Label 照旧是名字**（编辑器认它、组键靠它、title 里显示它），Icon 只决定条上画什么。
+	Icon    string `json:"icon,omitempty"`
 	Confirm bool   `json:"confirm,omitempty"` // 要点两下才发（防误触）
 	Send    string `json:"send,omitempty"`    // 解析出来的字节（下发给前端）
 	Spec    string `json:"spec,omitempty"`    // 用户写的按键谱（回显到编辑器）
@@ -177,6 +182,7 @@ type stored struct {
 	Label   string `json:"label"`
 	Span    int    `json:"span,omitempty"`
 	Wide    bool   `json:"wide,omitempty"` // Span 的降级镜像，见 Key.Wide
+	Icon    string `json:"icon,omitempty"`
 	Confirm bool   `json:"confirm,omitempty"`
 	Send    string `json:"send,omitempty"`
 	Sticky  string `json:"sticky,omitempty"`
@@ -371,7 +377,12 @@ func normalize(k Key, i int) (Key, error) {
 	if span < 1 || span > MaxSpan {
 		return Key{}, fmt.Errorf("%s 的宽只能是 1 到 %d 格", at, MaxSpan)
 	}
-	out := Key{ID: k.ID, Label: label, Span: span, Wide: span >= 2, Confirm: k.Confirm}
+	// 图标：存盘这一侧**严格**。选择器只发白名单里的 id，超出去就是前端有 bug，
+	// 静默丢掉只会让 bug 留在那儿（读路径那侧是 keysOf 在丢，见 Load）
+	if !IconOK(k.Icon) {
+		return Key{}, fmt.Errorf("%s 的图标不认识：%q", at, k.Icon)
+	}
+	out := Key{ID: k.ID, Label: label, Span: span, Wide: span >= 2, Icon: k.Icon, Confirm: k.Confirm}
 	switch {
 	case k.Group != nil:
 		// 只查形状。格子里那些引用要等整份 Lib 的 ID 都定下来才查得了（和 Bar / Pad 一样
@@ -451,13 +462,8 @@ func (s *Store) path() string { return filepath.Join(s.Dir, "softkeys.json") }
 
 // DefaultConfig 出厂配置：一行，键就是 Defaults()，全都摆在条上。
 func DefaultConfig() Config {
-	lib := Defaults()
-	ids := make([]string, len(lib))
-	for i := range lib {
-		lib[i].ID = fmt.Sprintf("k%d", i+1)
-		ids[i] = lib[i].ID
-	}
-	return Config{Rows: 1, Lib: lib, Bar: [][]string{ids}}
+	lib, bar := wireDefaults(nil, newIDs(nil))
+	return Config{Rows: 1, Lib: lib, Bar: [][]string{bar}}
 }
 
 // Load 读某一套排布（「我的按键」是全局的，每套都拿到同一份）。
@@ -540,6 +546,8 @@ func keysOf(f file) []Key {
 	for i, k := range f.Keys {
 		lib[i] = Key{
 			ID: k.ID, Label: k.Label, Span: spanOf(k.Span, k.Wide), Confirm: k.Confirm,
+			// 认不出的图标就当没挑（画文字标签）—— 整份退回出厂太贵，而 Label 一直在
+			Icon: iconOf(k.Icon),
 			Send: k.Send, Sticky: k.Sticky, Act: k.Act, Group: k.Group,
 		}
 	}
@@ -617,28 +625,55 @@ func normLane(ln lane) lane {
 // 那时候退回出厂等于把用户那 120 个定义连着别的 profile 的条一起抹了 —— 一个「恢复默认」
 // 按钮不该有这种权力。读文件那条路自己兜底（见 load），写盘那条路把错报出去（见 Reset）。
 func factory(lib []Key) (Config, error) {
-	have := map[string]string{} // 签名 → ID
+	lib, row := wireDefaults(lib, newIDs(lib))
+	if len(lib) > MaxKeys {
+		return Config{}, fmt.Errorf("要往「我的按键」里补几个出厂键，但已经到上限 %d 了 —— 先删几个再来", MaxKeys)
+	}
+	return resolveConfig(Config{Rows: 1, Lib: lib, Bar: [][]string{row}}, true)
+}
+
+// wireDefaults 把出厂那份接起来：缺的定义发个 ID 补进 lib、「方向」那个弹出组的格子从
+// 「哪个键」换成 ID、再按 DefaultBar 排出条。
+//
+// 两个入口共用（DefaultConfig 从零、factory 在现有 lib 上补）—— 各写一遍的话「出厂长什么
+// 样」就有两个版本，而「文件坏了」和「恢复默认」走的偏偏是不同那一个。
+func wireDefaults(lib []Key, mint func() string) ([]Key, []string) {
+	have := make(map[string]string, len(lib)+len(Defaults()))
 	for _, k := range lib {
 		if k.ID != "" {
 			have[sigOf(k)] = k.ID
 		}
 	}
-	ids := newIDs(lib)
-	row := make([]string, 0, len(Defaults()))
+	// 先补成员定义（组的格子要引用它们），再补组本身
 	for _, d := range Defaults() {
-		id, ok := have[sigOf(d)]
-		if !ok {
-			d.ID = ids()
-			id = d.ID
-			lib = append(lib, d)
-			have[sigOf(d)] = id
+		if _, ok := have[sigOf(d)]; ok {
+			continue
 		}
-		row = append(row, id)
+		d.ID = mint()
+		lib = append(lib, d)
+		have[sigOf(d)] = d.ID
 	}
-	if len(lib) > MaxKeys {
-		return Config{}, fmt.Errorf("要往「我的按键」里补几个出厂键，但已经到上限 %d 了 —— 先删几个再来", MaxKeys)
+	gk := arrowGroupKey()
+	if _, ok := have[sigOf(gk)]; !ok {
+		cells := make([]string, defaultArrows.Cols*MaxGroupRows)
+		for i, c := range defaultArrows.Cells {
+			if i >= len(cells) || (c.Label == "" && c.Send == "") {
+				continue // 空格子
+			}
+			cells[i] = have[sigOf(c)] // 找不到就留空，别硬塞一个引用
+		}
+		gk.ID = mint()
+		gk.Group = &Group{Cols: defaultArrows.Cols, Cells: cells}
+		lib = append(lib, gk)
+		have[sigOf(gk)] = gk.ID
 	}
-	return resolveConfig(Config{Rows: 1, Lib: lib, Bar: [][]string{row}}, true)
+	bar := make([]string, 0, len(DefaultBar()))
+	for _, d := range DefaultBar() {
+		if id, ok := have[sigOf(d)]; ok {
+			bar = append(bar, id)
+		}
+	}
+	return lib, bar
 }
 
 // sigOf 「同一个键」的判定：名字 + 干什么。和前端 SoftkeysPanel 里的 sig 是同一套。
@@ -648,6 +683,10 @@ func sigOf(k Key) string {
 		kind = "sticky:" + k.Sticky
 	} else if k.Act != "" {
 		kind = "act:" + k.Act
+	} else if k.Group != nil {
+		// **不带列数**：用户把自己那个「方向」组改成 4 列之后，「恢复默认」不该因为
+		// 认不出来又补一个同名的进去
+		kind = "group"
 	}
 	return k.Label + "\x00" + kind
 }
@@ -705,7 +744,7 @@ func (s *Store) write(profile string, c Config) (Config, error) {
 	for i, k := range out.Lib {
 		// Wide 是给老版本看的镜像（见 Key.Wide），所以按 Span 现算，不抄 k.Wide
 		raw[i] = stored{ID: k.ID, Label: k.Label, Span: k.Span, Wide: k.Span >= 2,
-			Confirm: k.Confirm, Sticky: k.Sticky, Act: k.Act, Group: k.Group}
+			Icon: k.Icon, Confirm: k.Confirm, Sticky: k.Sticky, Act: k.Act, Group: k.Group}
 		if k.Sticky == "" && k.Act == "" {
 			raw[i].Send = strings.TrimSpace(firstNonEmpty(k.Spec, k.Send))
 		}
