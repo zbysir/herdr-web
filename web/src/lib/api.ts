@@ -426,37 +426,29 @@ export interface SoftKey {
 export interface PresetGroup { group: string; items: SoftKey[] }
 
 /**
- * 固定块：钉在条一端的一小片**对齐网格**（方向键那种），**不跟着横滑**。
+ * 一行两端**钉住**几个键（不跟着横滑）。
  *
- * 为什么要它而不是「把 ← ↓ → 放到 ↑ 底下」：两行各自横滑和跨行对齐是互斥的 —— 滑一下
- * 其中一行，对齐当场就没了。所以对齐只能存在于「作为一个整体参与滑动的原子」里。
- *
- * `cells` **按行读**，长度是 `cols * 2`（两行），空串 = 空格子 —— 方向键盘上方那两个空位
- * 就是靠它占出来的。它是**排布**不是定义，所以按套存（见 internal/softkeys 的包注释）。
+ * 存的是**个数**不是另一份列表：`bar` 那一行照旧是**完整顺序**，头 `left` 个钉左、
+ * 尾 `right` 个钉右、中间那段跟着滑。降级到只认 bar 的老版本读出来是同样那些键
+ * （只是全都跟着滑），不会「钉住的那几个不见了」。
  */
-export interface Pad { cols: number; cells: string[]; side?: 'left' | 'right' }
+export interface Pin { left?: number; right?: number }
 
-/** 解析好的固定块：格子里换成真的定义，`null` = 空格子 */
-export interface ResolvedPad { cols: number; side: 'left' | 'right'; cells: (SoftKey | null)[] }
-/**
- * 软键条配置分两半（见服务端 internal/softkeys 的包注释）：
- * `lib` 是「我的按键」的定义，`bar` 每行是一串指向 lib 的 **id**。
- * 存 id 才能做到「同一个键两行各放一个」「改一处定义条上全变」。
- */
+/** 一行解析好的三段 */
+export interface RowSegments { left: SoftKey[]; scroll: SoftKey[]; right: SoftKey[] }
+
 export interface SoftkeysConfig {
   rows: 1 | 2
   lib: SoftKey[]
   bar: string[][]
-  /** 固定块（没有就是 null / 缺失）。见 Pad */
-  pad?: Pad | null
+  /** 每行两端钉住几个（缺 = 都不钉）。见 Pin */
+  pin?: Pin[] | null
   /** 这一份是**哪一套**排布的（服务端算出来的，不是请求里那个）—— 编辑器照它写标题 */
   profile?: string
 }
 export interface SoftkeysResponse extends SoftkeysConfig {
   max: number
   maxBar: number
-  /** 固定块最多几列（服务端的 softkeys.MaxPadCols） */
-  maxPadCols: number
   presets: PresetGroup[]
 }
 
@@ -524,22 +516,24 @@ export function libMap(lib: SoftKey[]): Map<string, SoftKey> {
 }
 
 /**
- * 把固定块格子里的 id 换成真的定义。认不出的当空格子（服务端读盘也是丢掉不报错）。
+ * 把 bar 的每一行切成**钉左 / 跟着滑 / 钉右**三段（id 换成真的定义）。
  *
- * `rows` 是这一套的行数：**只有一行时把第二行的格子接到第一行后面**（和 bar 那条规则一个
- * 道理，服务端在 Config 里留着全部格子不截 —— 切一行再切回两行不该把键吃掉）。那时候谈不上
- * 对齐，但「不跟着滑」还在。
+ * 认不出的 id 直接跳过 —— 那会让行变短，所以个数在这儿也要夹一下（服务端读的时候也夹，
+ * 见 resolvePin；这儿再夹是因为前端丢弃的那几个服务端未必丢）。
  */
-export function resolvePad(lib: SoftKey[], pad: Pad | null | undefined, rows: number): ResolvedPad | null {
-  if (!pad || pad.cols < 1) return null
+export function resolveRows(lib: SoftKey[], bar: string[][], pin?: Pin[] | null): RowSegments[] {
   const by = libMap(lib)
-  const side = pad.side === 'left' ? 'left' : 'right'
-  const cells = pad.cells.map((id) => by.get(id) ?? null)
-  if (rows === 1) {
-    const flat = cells.filter((k): k is SoftKey => !!k)
-    return flat.length ? { cols: flat.length, side, cells: flat } : null
-  }
-  return cells.some(Boolean) ? { cols: pad.cols, side, cells } : null
+  return bar.map((row, i) => {
+    const keys = row.map((id) => by.get(id)).filter((k): k is SoftKey => !!k)
+    let l = Math.max(0, pin?.[i]?.left ?? 0)
+    let r = Math.max(0, pin?.[i]?.right ?? 0)
+    if (l + r > keys.length) {
+      // 左边优先：钉住的第一个多半是「呼键盘」那种最要紧的
+      l = Math.min(l, keys.length)
+      r = keys.length - l
+    }
+    return { left: keys.slice(0, l), scroll: keys.slice(l, keys.length - r), right: keys.slice(keys.length - r) }
+  })
 }
 
 /** 把 bar 里的 id 换成真的按键定义。认不出的 id 直接跳过（服务端不该给出这种，防一手） */

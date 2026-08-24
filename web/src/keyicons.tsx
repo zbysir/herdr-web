@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import {
   ArrowBigUp, ArrowDown, ArrowLeft, ArrowRight, ArrowRightToLine, ArrowUp,
   Check, ChevronsDown, ChevronsUp, ChevronUp, CircleStop, ClipboardPaste,
-  Command, Copy, CornerDownLeft, Delete, Eraser, Keyboard, LogOut, Maximize2,
+  Command, Copy, CornerDownLeft, Delete, Eraser, LogOut, Maximize2,
   Menu, Minimize2, Minus, Move, Option, Plus, RefreshCw, Redo2, Search, Space,
   Split, Terminal, Trash2, Undo2, X, ZoomIn, ZoomOut,
 } from 'lucide-react'
@@ -30,46 +30,71 @@ export interface KeyIcon {
   icon: ReactNode
 }
 
-const C = 'size-[15px]' // 比顶栏那些（size-4）小半格：软键上字号本来就小一档
+/**
+ * 软键上图标的尺寸和描边。
+ *
+ * 18px + 1.75 描边，不是 15px + lucide 默认的 2 —— **小尺寸上细节会糊**。真机上
+ * （截图为证）15px 的 lucide `Keyboard` 内部那八九个小点全糊成一团，看着就是一块脏东西。
+ * 尺寸抬一档、线细一档，同一批图标立刻读得出来。
+ */
+const C = 'size-[18px]'
+const SW = 1.75
+
+/**
+ * 键盘：**自己画的**，不用 lucide 那个。
+ *
+ * lucide 的 `Keyboard` 是「外框 + 内部八九个小键」，那个细节量在 18px 上照样糊
+ * （用户连着说了两次「太丑」）。这儿只留两个特征：一个圆角外框 + 一条空格键 ——
+ * 少即是清楚，小尺寸上一眼认得出是键盘。
+ *
+ * 别往里加小键点：24 的画布上每个点不到 1px，缩到 18px 就是噪点。
+ */
+const KeyboardGlyph = ({ className }: { className?: string }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={SW}
+       strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
+    <rect x="2.25" y="6.25" width="19.5" height="11.5" rx="2.5" />
+    <path d="M8.5 14.25h7" />
+  </svg>
+)
 
 export const KEY_ICONS = [
-  { id: 'ctrl', hint: 'Ctrl（^）', icon: <ChevronUp className={C} /> },
-  { id: 'alt', hint: 'Alt / Option（⌥）', icon: <Option className={C} /> },
-  { id: 'shift', hint: 'Shift（⇧）', icon: <ArrowBigUp className={C} /> },
-  { id: 'cmd', hint: 'Cmd（⌘）', icon: <Command className={C} /> },
-  { id: 'esc', hint: 'Esc / 退出', icon: <LogOut className={C} /> },
-  { id: 'enter', hint: '回车', icon: <CornerDownLeft className={C} /> },
-  { id: 'tab', hint: 'Tab（⇥）', icon: <ArrowRightToLine className={C} /> },
-  { id: 'space', hint: '空格', icon: <Space className={C} /> },
-  { id: 'bs', hint: '退格', icon: <Delete className={C} /> },
-  { id: 'del', hint: '删除', icon: <Eraser className={C} /> },
-  { id: 'up', hint: '上', icon: <ArrowUp className={C} /> },
-  { id: 'down', hint: '下', icon: <ArrowDown className={C} /> },
-  { id: 'left', hint: '左', icon: <ArrowLeft className={C} /> },
-  { id: 'right', hint: '右', icon: <ArrowRight className={C} /> },
-  { id: 'dpad', hint: '方向（四个方向那一组）', icon: <Move className={C} /> },
-  { id: 'pgup', hint: '上一页', icon: <ChevronsUp className={C} /> },
-  { id: 'pgdn', hint: '下一页', icon: <ChevronsDown className={C} /> },
-  { id: 'keyboard', hint: '键盘', icon: <Keyboard className={C} /> },
-  { id: 'terminal', hint: '终端', icon: <Terminal className={C} /> },
-  { id: 'close', hint: '关闭', icon: <X className={C} /> },
-  { id: 'stop', hint: '中断（^C）', icon: <CircleStop className={C} /> },
-  { id: 'check', hint: '确认', icon: <Check className={C} /> },
-  { id: 'trash', hint: '删掉', icon: <Trash2 className={C} /> },
-  { id: 'copy', hint: '复制', icon: <Copy className={C} /> },
-  { id: 'paste', hint: '粘贴', icon: <ClipboardPaste className={C} /> },
-  { id: 'search', hint: '搜索', icon: <Search className={C} /> },
-  { id: 'refresh', hint: '刷新', icon: <RefreshCw className={C} /> },
-  { id: 'undo', hint: '撤销', icon: <Undo2 className={C} /> },
-  { id: 'redo', hint: '重做', icon: <Redo2 className={C} /> },
-  { id: 'plus', hint: '加', icon: <Plus className={C} /> },
-  { id: 'minus', hint: '减', icon: <Minus className={C} /> },
-  { id: 'zoom-in', hint: '放大', icon: <ZoomIn className={C} /> },
-  { id: 'zoom-out', hint: '缩小', icon: <ZoomOut className={C} /> },
-  { id: 'max', hint: '全屏 / 放大 pane', icon: <Maximize2 className={C} /> },
-  { id: 'min', hint: '还原', icon: <Minimize2 className={C} /> },
-  { id: 'split', hint: '分屏', icon: <Split className={C} /> },
-  { id: 'menu', hint: '菜单', icon: <Menu className={C} /> },
+  { id: 'ctrl', hint: 'Ctrl（^）', icon: <ChevronUp className={C} strokeWidth={SW} /> },
+  { id: 'alt', hint: 'Alt / Option（⌥）', icon: <Option className={C} strokeWidth={SW} /> },
+  { id: 'shift', hint: 'Shift（⇧）', icon: <ArrowBigUp className={C} strokeWidth={SW} /> },
+  { id: 'cmd', hint: 'Cmd（⌘）', icon: <Command className={C} strokeWidth={SW} /> },
+  { id: 'esc', hint: 'Esc / 退出', icon: <LogOut className={C} strokeWidth={SW} /> },
+  { id: 'enter', hint: '回车', icon: <CornerDownLeft className={C} strokeWidth={SW} /> },
+  { id: 'tab', hint: 'Tab（⇥）', icon: <ArrowRightToLine className={C} strokeWidth={SW} /> },
+  { id: 'space', hint: '空格', icon: <Space className={C} strokeWidth={SW} /> },
+  { id: 'bs', hint: '退格', icon: <Delete className={C} strokeWidth={SW} /> },
+  { id: 'del', hint: '删除', icon: <Eraser className={C} strokeWidth={SW} /> },
+  { id: 'up', hint: '上', icon: <ArrowUp className={C} strokeWidth={SW} /> },
+  { id: 'down', hint: '下', icon: <ArrowDown className={C} strokeWidth={SW} /> },
+  { id: 'left', hint: '左', icon: <ArrowLeft className={C} strokeWidth={SW} /> },
+  { id: 'right', hint: '右', icon: <ArrowRight className={C} strokeWidth={SW} /> },
+  { id: 'dpad', hint: '方向（四个方向那一组）', icon: <Move className={C} strokeWidth={SW} /> },
+  { id: 'pgup', hint: '上一页', icon: <ChevronsUp className={C} strokeWidth={SW} /> },
+  { id: 'pgdn', hint: '下一页', icon: <ChevronsDown className={C} strokeWidth={SW} /> },
+  { id: 'keyboard', hint: '键盘', icon: <KeyboardGlyph className={C} /> },
+  { id: 'terminal', hint: '终端', icon: <Terminal className={C} strokeWidth={SW} /> },
+  { id: 'close', hint: '关闭', icon: <X className={C} strokeWidth={SW} /> },
+  { id: 'stop', hint: '中断（^C）', icon: <CircleStop className={C} strokeWidth={SW} /> },
+  { id: 'check', hint: '确认', icon: <Check className={C} strokeWidth={SW} /> },
+  { id: 'trash', hint: '删掉', icon: <Trash2 className={C} strokeWidth={SW} /> },
+  { id: 'copy', hint: '复制', icon: <Copy className={C} strokeWidth={SW} /> },
+  { id: 'paste', hint: '粘贴', icon: <ClipboardPaste className={C} strokeWidth={SW} /> },
+  { id: 'search', hint: '搜索', icon: <Search className={C} strokeWidth={SW} /> },
+  { id: 'refresh', hint: '刷新', icon: <RefreshCw className={C} strokeWidth={SW} /> },
+  { id: 'undo', hint: '撤销', icon: <Undo2 className={C} strokeWidth={SW} /> },
+  { id: 'redo', hint: '重做', icon: <Redo2 className={C} strokeWidth={SW} /> },
+  { id: 'plus', hint: '加', icon: <Plus className={C} strokeWidth={SW} /> },
+  { id: 'minus', hint: '减', icon: <Minus className={C} strokeWidth={SW} /> },
+  { id: 'zoom-in', hint: '放大', icon: <ZoomIn className={C} strokeWidth={SW} /> },
+  { id: 'zoom-out', hint: '缩小', icon: <ZoomOut className={C} strokeWidth={SW} /> },
+  { id: 'max', hint: '全屏 / 放大 pane', icon: <Maximize2 className={C} strokeWidth={SW} /> },
+  { id: 'min', hint: '还原', icon: <Minimize2 className={C} strokeWidth={SW} /> },
+  { id: 'split', hint: '分屏', icon: <Split className={C} strokeWidth={SW} /> },
+  { id: 'menu', hint: '菜单', icon: <Menu className={C} strokeWidth={SW} /> },
 ] as const satisfies readonly KeyIcon[]
 
 export type KeyIconId = (typeof KEY_ICONS)[number]['id']

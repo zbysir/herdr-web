@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Maximize, Minimize } from './icons'
-import { api, deviceKind, filesApi, libMap, resolveBar, resolvePad, SESSION, topbarKeyRef, UNAUTHED, type ClipResult, type FileStat, type Notice, type ProfilesResponse, type ResolvedPad, type SoftKey, type SoftkeysConfig, type SoftkeysResponse, type State, type TopbarResponse, type UnauthedDetail, type WhoAmI } from '@/lib/api'
+import { api, deviceKind, filesApi, libMap, resolveRows, SESSION, topbarKeyRef, UNAUTHED, type ClipResult, type FileStat, type Notice, type ProfilesResponse, type RowSegments, type SoftKey, type SoftkeysConfig, type SoftkeysResponse, type State, type TopbarResponse, type UnauthedDetail, type WhoAmI } from '@/lib/api'
 import { applyPrefs, pushPref } from '@/lib/prefs'
 import { readClipboard, writeClipboard } from '@/lib/clipboard'
 import { Session } from '@/term/session'
@@ -199,7 +199,9 @@ export default function App() {
   )
   // 软键条每行的按键（已按 id 解析好）。几行、哪个键在哪一行都是服务端存的配置，
   // 编辑器存完把整份配置回传过来
-  const [bar, setBar] = useState<SoftKey[][]>([])
+  // 软键条每行的三段：钉左 / 跟着滑 / 钉右（见 lib/api.ts 的 resolveRows）。
+  // 钉住那两段不跟着横滑 —— 「呼键盘」「Esc」这种滑走了就等于没有
+  const [bar, setBar] = useState<RowSegments[]>([])
   /**
    * 「我的按键」按 ID 索引。软键条的 `bar` 已经解析成定义了，这一份是给**顶栏**用的 ——
    * 顶栏上放的是 `key:<定义ID>`（见 internal/topbar），渲染时才落到定义上。
@@ -208,11 +210,6 @@ export default function App() {
    * 两个口的数据焊在一起，而「读盘不核引用」那条规矩正是靠它们分开才成立的。
    */
   const [keyLib, setKeyLib] = useState<Map<string, SoftKey>>(new Map())
-  /**
-   * 固定块：钉在软键条一端、**不跟着横滑**的一小片对齐网格（方向键那种，见 lib/api.ts
-   * 的 `Pad`）。null = 这一套没配。
-   */
-  const [pad, setPad] = useState<ResolvedPad | null>(null)
   /**
    * 顶栏上那排按钮：**放哪几个、什么顺序**也是服务端存的配置（`topbar.json`，见
    * internal/topbar），在设置 →「顶栏」页里拖。这里存的就是那一串 id。
@@ -576,9 +573,8 @@ export default function App() {
    * 加一个字段（rows / pad 都是这么来的）就会漏掉一处，表现是「存完没变，刷新才出来」。
    */
   const applySoftkeys = useCallback((c: SoftkeysConfig) => {
-    setBar(resolveBar(c.lib, c.bar))
+    setBar(resolveRows(c.lib, c.bar, c.pin))
     setKeyLib(libMap(c.lib))
-    setPad(resolvePad(c.lib, c.pad, c.rows))
   }, [])
 
   const loadLayout = useCallback(async () => {
@@ -1443,8 +1439,7 @@ export default function App() {
           onLayout={relayout}
           keys={showKeys ? (
             <Softkeys
-              bar={bar}
-              pad={pad}
+              rows={bar}
               sticky={sticky}
               onSend={(b) => { sess.current?.sendKey(b); if (kbdUp) sess.current?.focus() }}
               onSticky={(w) => sess.current?.toggleSticky(w)}

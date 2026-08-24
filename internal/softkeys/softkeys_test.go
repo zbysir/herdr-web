@@ -680,152 +680,6 @@ func TestSpanMirrorsWideBothWays(t *testing.T) {
 
 /* ------------------------------------------------------------ 固定块（Pad） */
 
-// TestPadRoundTripAndValidation 固定块存得进、读得回，列数和引用都校验。
-func TestPadRoundTripAndValidation(t *testing.T) {
-	dir := t.TempDir()
-	s := &Store{Dir: dir}
-	lib := []Key{
-		{ID: "k1", Label: "↑", Send: "up"}, {ID: "k2", Label: "↓", Send: "down"},
-		{ID: "k3", Label: "←", Send: "left"}, {ID: "k4", Label: "→", Send: "right"},
-	}
-	// 经典方向键盘：上面一行中间一个 ↑，下面一行 ← ↓ →
-	arrows := &Pad{Cols: 3, Cells: []string{"", "k1", "", "k3", "k2", "k4"}}
-
-	out, err := s.Save(profiles.Default, Config{Rows: 2, Lib: lib, Bar: [][]string{{"k1"}, {}}, Pad: arrows})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.Pad == nil || out.Pad.Cols != 3 || out.Pad.Side != "right" {
-		t.Fatalf("存回来的固定块不对（side 该默认靠右）：%+v", out.Pad)
-	}
-	if got := strings.Join(out.Pad.Cells, ","); got != ",k1,,k3,k2,k4" {
-		t.Fatalf("格子顺序该原样保住（按行读）：%q", got)
-	}
-	if got := s.Load(profiles.Default).Pad; got == nil || strings.Join(got.Cells, ",") != ",k1,,k3,k2,k4" {
-		t.Fatalf("读回来的固定块不对：%+v", got)
-	}
-
-	// 列数越界
-	if _, err := s.Save(profiles.Default, Config{Rows: 2, Lib: lib, Bar: [][]string{{"k1"}},
-		Pad: &Pad{Cols: MaxPadCols + 1, Cells: []string{"k1"}}}); err == nil {
-		t.Error("列数超上限该报错")
-	}
-	// 引用不存在的定义：存盘报错
-	if _, err := s.Save(profiles.Default, Config{Rows: 2, Lib: lib, Bar: [][]string{{"k1"}},
-		Pad: &Pad{Cols: 2, Cells: []string{"k9"}}}); err == nil {
-		t.Error("固定块引用不存在的定义该报错")
-	}
-	// 一个键都没有 = 没有固定块（别在条上留一块看不见的空地）
-	got, err := s.Save(profiles.Default, Config{Rows: 2, Lib: lib, Bar: [][]string{{"k1"}},
-		Pad: &Pad{Cols: 2, Cells: []string{"", "", "", ""}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Pad != nil {
-		t.Errorf("空的固定块该当成没有：%+v", got.Pad)
-	}
-}
-
-// TestPadCellsKeepFullHeight 格子数**按 Cols*MaxRows 补齐**，不按当前 rows 截。
-//
-// 按 rows 截的话「切一行、再切回两行」会把第二行的键悄悄吃掉 —— 用户只是切了两下显示，
-// 配置却少了东西。
-func TestPadCellsKeepFullHeight(t *testing.T) {
-	s := &Store{Dir: t.TempDir()}
-	lib := []Key{{ID: "k1", Label: "↑", Send: "up"}, {ID: "k2", Label: "↓", Send: "down"}}
-
-	out, err := s.Save(profiles.Default, Config{Rows: 1, Lib: lib, Bar: [][]string{{"k1"}},
-		Pad: &Pad{Cols: 2, Cells: []string{"k1", "", "k2", ""}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n := len(out.Pad.Cells); n != 2*MaxRows {
-		t.Fatalf("格子数该补齐到 %d，拿到 %d", 2*MaxRows, n)
-	}
-	// 一行的时候第二行那个 k2 也还在配置里（显示上接到第一行后面，见 Pad 的注释）
-	if strings.Join(out.Pad.Cells, ",") != "k1,,k2," {
-		t.Fatalf("一行时第二行的格子不该被吃掉：%q", strings.Join(out.Pad.Cells, ","))
-	}
-}
-
-// TestPruneClearsPadCells 删掉一个定义，固定块格子里那个引用也要清掉。
-//
-// 漏了这一处的表现最难查：那块网格上留一个空洞，而且**下次存盘会因为「引用了不存在的
-// 按键」直接失败** —— 而用户什么都没改。
-func TestPruneClearsPadCells(t *testing.T) {
-	s := &Store{Dir: t.TempDir()}
-	lib := []Key{{ID: "k1", Label: "↑", Send: "up"}, {ID: "k2", Label: "↓", Send: "down"}}
-	if _, err := s.Save(profiles.Default, Config{Rows: 2, Lib: lib, Bar: [][]string{{"k1"}, {}},
-		Pad: &Pad{Cols: 2, Cells: []string{"k1", "k2", "", ""}}}); err != nil {
-		t.Fatal(err)
-	}
-	// 在另一套上把 k2 删掉（定义是全局的，这一下会打到默认那一套的固定块上）
-	if _, err := s.Save("p2", Config{Rows: 1, Lib: lib[:1], Bar: [][]string{{"k1"}}}); err != nil {
-		t.Fatal(err)
-	}
-	pad := s.Load(profiles.Default).Pad
-	if pad == nil {
-		t.Fatal("固定块整块不该消失（k1 还在）")
-	}
-	if strings.Join(pad.Cells, ",") != "k1,,," {
-		t.Fatalf("k2 那一格该清空、k1 该留着：%q", strings.Join(pad.Cells, ","))
-	}
-	// 存盘不该因为幽灵引用失败
-	if _, err := s.Save(profiles.Default, s.Load(profiles.Default)); err != nil {
-		t.Errorf("清干净之后该能原样存回去：%v", err)
-	}
-}
-
-// TestPadIsPerProfile 固定块是**排布**，所以每套一份 —— 改一套不该动另一套。
-func TestPadIsPerProfile(t *testing.T) {
-	s := &Store{Dir: t.TempDir()}
-	lib := []Key{{ID: "k1", Label: "↑", Send: "up"}}
-	if _, err := s.Save(profiles.Default, Config{Rows: 2, Lib: lib, Bar: [][]string{{"k1"}, {}},
-		Pad: &Pad{Cols: 1, Cells: []string{"k1", ""}, Side: "left"}}); err != nil {
-		t.Fatal(err)
-	}
-	// p2 上不要固定块
-	if _, err := s.Save("p2", Config{Rows: 1, Lib: lib, Bar: [][]string{{"k1"}}}); err != nil {
-		t.Fatal(err)
-	}
-	if got := s.Load("p2").Pad; got != nil {
-		t.Errorf("p2 上不该有固定块：%+v", got)
-	}
-	d := s.Load(profiles.Default).Pad
-	if d == nil || d.Side != "left" {
-		t.Errorf("默认那一套的固定块该原样在（side=left）：%+v", d)
-	}
-}
-
-// TestCopyCarriesPad 新建一套是「复制一套」（见 Store.Copy），固定块得跟着走。
-//
-// 漏了的表现是「新建的那一套莫名少了方向键盘」—— 而它是**排布**的一部分，就该跟着复制。
-func TestCopyCarriesPad(t *testing.T) {
-	s := &Store{Dir: t.TempDir()}
-	lib := []Key{{ID: "k1", Label: "↑", Send: "up"}, {ID: "k2", Label: "↓", Send: "down"}}
-	if _, err := s.Save(profiles.Default, Config{Rows: 2, Lib: lib, Bar: [][]string{{"k1"}, {}},
-		Pad: &Pad{Cols: 2, Cells: []string{"k1", "", "k2", ""}, Side: "left"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Copy(profiles.Default, "p2"); err != nil {
-		t.Fatal(err)
-	}
-	got := s.Load("p2").Pad
-	if got == nil {
-		t.Fatal("复制过来的那一套没有固定块")
-	}
-	if got.Cols != 2 || got.Side != "left" || strings.Join(got.Cells, ",") != "k1,,k2," {
-		t.Errorf("复制过来的固定块不对：%+v", got)
-	}
-	// 复制完两套各自一份，改一套不该动另一套
-	if _, err := s.Save("p2", Config{Rows: 1, Lib: lib, Bar: [][]string{{"k1"}}}); err != nil {
-		t.Fatal(err)
-	}
-	if d := s.Load(profiles.Default).Pad; d == nil || d.Side != "left" {
-		t.Errorf("改 p2 不该动默认那一套的固定块：%+v", d)
-	}
-}
-
 /* ------------------------------------------------------------ 弹出组（Group） */
 
 // TestGroupRoundTrip 弹出组：占一格、点开是一片网格。存得进、读得回。
@@ -916,24 +770,6 @@ func TestGroupCannotNest(t *testing.T) {
 		if cell == "g1" {
 			t.Error("嵌套那一格该被丢掉")
 		}
-	}
-}
-
-// TestPadCanHoldGroup 固定块里**可以**放组键 —— 那正好是最省地方的用法：
-// 一个永远不滑走的格子，点开是方向键盘。
-func TestPadCanHoldGroup(t *testing.T) {
-	s := &Store{Dir: t.TempDir()}
-	lib := []Key{
-		{ID: "k1", Label: "↑", Send: "up"},
-		{ID: "g1", Label: "方向", Group: &Group{Cols: 1, Cells: []string{"k1"}}},
-	}
-	out, err := s.Save(profiles.Default, Config{Rows: 1, Lib: lib, Bar: [][]string{{"k1"}},
-		Pad: &Pad{Cols: 1, Cells: []string{"g1", ""}}})
-	if err != nil {
-		t.Fatalf("固定块里放组键该允许：%v", err)
-	}
-	if out.Pad == nil || out.Pad.Cells[0] != "g1" {
-		t.Errorf("组键没进固定块：%+v", out.Pad)
 	}
 }
 
@@ -1032,5 +868,129 @@ func TestResetKeepsMyArrowGroup(t *testing.T) {
 	}
 	if groups != 1 {
 		t.Errorf("恢复默认不该再补一个同名的组，现在有 %d 个", groups)
+	}
+}
+
+/* ------------------------------------------------------------ 钉住（Pin） */
+
+// TestPinRoundTrip 钉住存得进、读得回，而且 **Bar 里是那一行的完整顺序**。
+//
+// 最后那条是这个设计的全部好处：只认 Bar 的老版本读出来是同样那些键（只是全都跟着滑），
+// 不会「钉住的那几个不见了」。
+func TestPinRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	s := &Store{Dir: dir}
+	lib := []Key{
+		{ID: "k1", Label: "⌨", Act: "kbd"}, {ID: "k2", Label: "Esc", Send: "esc"},
+		{ID: "k3", Label: "Tab", Send: "tab"}, {ID: "k4", Label: "↵", Send: "enter"},
+	}
+	// 一行四个：头一个钉左、末一个钉右，中间两个跟着滑
+	out, err := s.Save(profiles.Default, Config{Rows: 1, Lib: lib,
+		Bar: [][]string{{"k1", "k2", "k3", "k4"}}, Pin: []Pin{{Left: 1, Right: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Pin) != 1 || out.Pin[0].Left != 1 || out.Pin[0].Right != 1 {
+		t.Fatalf("钉住没存住：%+v", out.Pin)
+	}
+	// Bar 是完整顺序（降级的老版本读到的就是这个）
+	if strings.Join(out.Bar[0], ",") != "k1,k2,k3,k4" {
+		t.Errorf("Bar 该是那一行的完整顺序：%v", out.Bar[0])
+	}
+	got := s.Load(profiles.Default)
+	if len(got.Pin) != 1 || got.Pin[0].Left != 1 || got.Pin[0].Right != 1 {
+		t.Errorf("读回来的钉住不对：%+v", got.Pin)
+	}
+	// 落盘那份里 bar 也是完整的
+	b, _ := os.ReadFile(filepath.Join(dir, "softkeys.json"))
+	if !strings.Contains(string(b), `"k1"`) || !strings.Contains(string(b), `"k4"`) {
+		t.Errorf("落盘的 bar 该是完整那一行：%s", b)
+	}
+}
+
+// TestPinClamped 个数**一律夹住不报错**：Left+Right 不能超过那一行的长度。
+//
+// 为什么不报错：prune 会让行变短（别的设备删了个定义），那时候存进来的个数就越界了 ——
+// 而那不是谁的 bug，报错只会让人存不下去。
+func TestPinClamped(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	lib := []Key{{ID: "k1", Label: "A", Send: "a"}, {ID: "k2", Label: "B", Send: "b"}}
+
+	out, err := s.Save(profiles.Default, Config{Rows: 1, Lib: lib,
+		Bar: [][]string{{"k1", "k2"}}, Pin: []Pin{{Left: 5, Right: 5}}})
+	if err != nil {
+		t.Fatalf("越界该夹住而不是报错：%v", err)
+	}
+	// 左边优先（钉住的第一个多半是「呼键盘」那种最要紧的），两个位置全给左边
+	if out.Pin[0].Left != 2 || out.Pin[0].Right != 0 {
+		t.Errorf("该夹成 left=2 right=0，拿到 %+v", out.Pin[0])
+	}
+	// 负数当 0
+	out, err = s.Save(profiles.Default, Config{Rows: 1, Lib: lib,
+		Bar: [][]string{{"k1", "k2"}}, Pin: []Pin{{Left: -3, Right: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Pin[0].Left != 0 || out.Pin[0].Right != 1 {
+		t.Errorf("负数该当 0，拿到 %+v", out.Pin[0])
+	}
+	// 一个都没钉就不落这个字段
+	out, err = s.Save(profiles.Default, Config{Rows: 1, Lib: lib,
+		Bar: [][]string{{"k1", "k2"}}, Pin: []Pin{{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Pin != nil {
+		t.Errorf("一个都没钉不该落这个字段：%+v", out.Pin)
+	}
+}
+
+// TestPinIsPerProfile 钉住是**排布**，所以每套一份。
+func TestPinIsPerProfile(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	lib := []Key{{ID: "k1", Label: "A", Send: "a"}, {ID: "k2", Label: "B", Send: "b"}}
+	if _, err := s.Save(profiles.Default, Config{Rows: 1, Lib: lib,
+		Bar: [][]string{{"k1", "k2"}}, Pin: []Pin{{Left: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Save("p2", Config{Rows: 1, Lib: lib, Bar: [][]string{{"k1", "k2"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Load("p2").Pin; got != nil {
+		t.Errorf("p2 上不该有钉住：%+v", got)
+	}
+	if got := s.Load(profiles.Default).Pin; got == nil || got[0].Left != 1 {
+		t.Errorf("默认那一套的钉住该原样在：%+v", got)
+	}
+}
+
+// TestPruneShrinksRowThenPinClamps 别的设备删掉一个定义 → 这一行变短 → 钉住的个数跟着夹。
+//
+// 这条是「存个数」这个选择的代价，也是它必须在**读**的时候夹住的理由：不夹的话下次
+// 存盘就越界，而用户什么都没改。
+func TestPruneShrinksRowThenPinClamps(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	lib := []Key{
+		{ID: "k1", Label: "A", Send: "a"}, {ID: "k2", Label: "B", Send: "b"},
+		{ID: "k3", Label: "C", Send: "c"},
+	}
+	if _, err := s.Save(profiles.Default, Config{Rows: 1, Lib: lib,
+		Bar: [][]string{{"k1", "k2", "k3"}}, Pin: []Pin{{Left: 2, Right: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+	// 在另一套上把两个定义删掉（定义全局 → 默认那一套的条跟着变短）
+	if _, err := s.Save("p2", Config{Rows: 1, Lib: lib[:1], Bar: [][]string{{"k1"}}}); err != nil {
+		t.Fatal(err)
+	}
+	c := s.Load(profiles.Default)
+	if len(c.Bar[0]) != 1 {
+		t.Fatalf("那一行该只剩一个：%v", c.Bar[0])
+	}
+	if l, r := c.Pin[0].Left, c.Pin[0].Right; l+r > 1 {
+		t.Errorf("钉住的个数该夹到行长以内，拿到 left=%d right=%d", l, r)
+	}
+	// 夹干净之后该能原样存回去
+	if _, err := s.Save(profiles.Default, c); err != nil {
+		t.Errorf("夹干净之后该存得回去：%v", err)
 	}
 }

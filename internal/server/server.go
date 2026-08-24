@@ -363,8 +363,7 @@ func (s *Server) apiSoftkeys(w http.ResponseWriter, r *http.Request) {
 	prof := s.profileOf(r)
 	out := func(c softkeys.Config) {
 		writeJSON(w, 200, map[string]any{"lib": c.Lib, "bar": c.Bar, "rows": c.Rows,
-			"pad": c.Pad, "max": softkeys.MaxKeys, "maxBar": softkeys.MaxBar,
-			"maxPadCols": softkeys.MaxPadCols, "profile": prof})
+			"pin": c.Pin, "max": softkeys.MaxKeys, "maxBar": softkeys.MaxBar, "profile": prof})
 	}
 	// 删掉一个定义之后，顶栏上指向它的 `key:` 引用也得清掉 —— 顶栏和软键条现在共用同一份
 	// 「我的按键」（见 internal/topbar 的包注释）。软键条自己那一侧（条上的引用）在
@@ -387,9 +386,8 @@ func (s *Server) apiSoftkeys(w http.ResponseWriter, r *http.Request) {
 		// 的那一套并在响应里说清是哪一套（前端照着改标题）。写才严格，见下面。
 		c := s.Softkeys.Load(prof)
 		writeJSON(w, 200, map[string]any{
-			"lib": c.Lib, "bar": c.Bar, "rows": c.Rows, "pad": c.Pad, "profile": prof,
-			"max": softkeys.MaxKeys, "maxBar": softkeys.MaxBar,
-			"maxPadCols": softkeys.MaxPadCols, "presets": softkeys.Presets(),
+			"lib": c.Lib, "bar": c.Bar, "rows": c.Rows, "pin": c.Pin, "profile": prof,
+			"max": softkeys.MaxKeys, "maxBar": softkeys.MaxBar, "presets": softkeys.Presets(),
 		})
 	case http.MethodPut:
 		if err := s.mustProfile(prof); err != nil {

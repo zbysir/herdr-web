@@ -42,7 +42,7 @@
 // 占一格、能塞进固定块、**也能上顶栏**（`key:<定义ID>`）。和固定块正好组合：1 格的固定块里
 // 放一个组键 = 一个永远不滑走的格子，点开是方向键盘。
 //
-// 组里放的还是**引用**（和 Bar / Pad 一样），所以「改一处定义处处变」照旧。
+// 组里放的还是**引用**（和 Bar 一样），所以「改一处定义处处变」照旧。
 // **组里不能再放组**（一层就够，嵌套只会让「点开还要再点开」）—— 在 resolveConfig 里挡。
 //
 // 软键条**几行是个设置**（Config.Rows，1 或 2），不靠「第二行空不空」猜 —— 空的第二行
@@ -50,19 +50,19 @@
 // 占一行终端便宜，但「最常用的几个」和「次常用的几个」分两行、各滑各的，比十几个键排成
 // 一条长龙好找。
 //
-// # 固定块（Pad）
+// # 钉住（Pin）
 //
-// 条的一端可以钉一小片**对齐的网格**（方向键那种），它**不跟着横滑**。
+// **一行的两端可以钉住几个键：它们不跟着横滑。** 手机上条是横滑的，而「呼键盘」「Esc」
+// 这种每隔十秒就要按一次的键，滑走了就等于没有。
 //
-// 为什么要单独一种东西，而不是「把 ← ↓ → 放到 ↑ 底下」：那样也摆得出来，但**两行各自
-// 横滑**（上面那条）和**跨行对齐**是互斥的 —— 滑一下其中一行，对齐当场就没了。所以对齐
-// 只能存在于「作为一个整体参与滑动的原子」里面，而最有用的那种原子就是「压根不滑」。
-// 顺带解决手机上真正的痛点：方向键永远在拇指底下，不会被滑走。
+// 存的是**个数**不是另一份列表：Bar 照旧是那一行的**完整顺序**，Pin{Left, Right} 说
+// 「头上几个、尾上几个钉住」。这么切有两个好处：
 //
-// 它是**排布**不是定义，所以**每套一份**（长在 lane 上，和 Rows/Bar 一起）—— 平板上
-// 摆一个 4 列的、手机竖屏摆 3 列的，是两回事。格子里放的还是全局定义的 ID。
+//   - **降级不丢东西**：老版本只认 Bar，读出来是同样那些键，只是全都跟着滑 —— 而不是
+//     「钉住的那几个不见了」；
+//   - 编辑器里一行还是一串有序的方块，拖动语义一个字都不用改，钉住只是挪一下那条界线。
 //
-// 宽度对得齐靠的是 Key.Span 那个「格」（见 MaxSpan）：一格 = 前端的 --sk-w。
+// 不变量：Left+Right <= 这一行的长度（读的时候夹住 —— prune 会让行变短）。
 //
 // 「按键谱」是空格分隔的记号，服务端解析成字节后下发给前端，前端只管照发。
 // 支持多个 token 连发，所以一个按键可以是一串操作 —— `ctrl+b c` 就是 herdr 的
@@ -113,10 +113,6 @@ func spanOf(span int, wide bool) int {
 	return span
 }
 
-// MaxPadCols 固定块最多几列。4 列 ≈ 194px，在 393px 的手机竖屏上已经占掉半条，
-// 剩下的给横滑那部分就不够了。
-const MaxPadCols = 4
-
 // MaxGroupCols 弹出组最多几列。浮窗要能落在屏幕里，5 列 ≈ 244px 已经接近手机竖屏的宽度。
 const MaxGroupCols = 5
 
@@ -126,24 +122,19 @@ const MaxGroupRows = 3
 // Group 是弹出组里那片网格（见包注释）。
 //
 // Cells 按行读，长度固定 Cols*MaxGroupRows，空串 = 空格子 —— 方向键盘上方那两个空位就是
-// 靠它占出来的。和 Pad 一样存引用，不存定义。
+// 靠它占出来的。和 Bar 一样存引用，不存定义。
 type Group struct {
 	Cols  int      `json:"cols"`
 	Cells []string `json:"cells"`
 }
 
-// Pad 是钉在条一端的对齐网格（见包注释）。
+// Pin 一行两端**钉住**几个键（不跟着横滑）。见包注释。
 //
-// Cells **按行读**，长度固定 Cols*MaxRows —— 和画面上看到的顺序一样，这份 JSON 是人会
-// 去看的（`["", "k7", "", "k9", "k8", "k10"]` 一眼就是那个方向键盘）。空字符串 = 空格子，
-// 空格子是有意义的：方向键盘上方那两个空位就是靠它占出来的。
-//
-// 条只有一行时（Rows==1），**第二行的格子接到第一行后面** —— 和 Bar 那条规则一个道理
-// （所见即所得，不留「存着、不显示」的状态）。那时候谈不上对齐，但「不跟着滑」还在。
-type Pad struct {
-	Cols  int      `json:"cols"`
-	Cells []string `json:"cells"`
-	Side  string   `json:"side,omitempty"` // left | right（空 = right）
+// 存个数而不是另一份列表：Bar 照旧是那一行的完整顺序，降级到只认 Bar 的老版本读出来是
+// 同样那些键（只是全都跟着滑），不会「钉住的那几个不见了」。
+type Pin struct {
+	Left  int `json:"left,omitempty"`
+	Right int `json:"right,omitempty"`
 }
 
 // MaxBar 一行最多引用多少个键。允许重复之后这个数得有个头，不然一次误操作就能塞进
@@ -203,7 +194,7 @@ type file struct {
 	Rows int        `json:"rows,omitempty"`
 	Keys []stored   `json:"keys"`
 	Bar  [][]string `json:"bar,omitempty"`
-	Pad  *Pad       `json:"pad,omitempty"`
+	Pin  []Pin      `json:"pin,omitempty"`
 	// Profiles 每套排布一段（键是 profiles.json 里那个 ID）。
 	// nil = 老文件，整份就是默认那一套（见 sections）。
 	Profiles map[string]lane `json:"profiles,omitempty"`
@@ -217,15 +208,15 @@ type file struct {
 type lane struct {
 	Rows int        `json:"rows"`
 	Bar  [][]string `json:"bar"`
-	Pad  *Pad       `json:"pad,omitempty"` // 固定块，见 Pad
+	Pin  []Pin      `json:"pin,omitempty"` // 每行两端钉住几个，见 Pin
 }
 
 // Config 是一整份软键条配置。
 type Config struct {
 	Rows int        `json:"rows"`
-	Lib  []Key      `json:"lib"` // 我的按键：所有定义
-	Bar  [][]string `json:"bar"` // 每行一串 Lib 里的 ID（允许重复）
-	Pad  *Pad       `json:"pad,omitempty"`
+	Lib  []Key      `json:"lib"`           // 我的按键：所有定义
+	Bar  [][]string `json:"bar"`           // 每行一串 Lib 里的 ID（允许重复）
+	Pin  []Pin      `json:"pin,omitempty"` // 每行两端钉住几个，见 Pin
 }
 
 // PresetGroup 是编辑器「常用」下拉里的一组。
@@ -385,7 +376,7 @@ func normalize(k Key, i int) (Key, error) {
 	out := Key{ID: k.ID, Label: label, Span: span, Wide: span >= 2, Icon: k.Icon, Confirm: k.Confirm}
 	switch {
 	case k.Group != nil:
-		// 只查形状。格子里那些引用要等整份 Lib 的 ID 都定下来才查得了（和 Bar / Pad 一样
+		// 只查形状。格子里那些引用要等整份 Lib 的 ID 都定下来才查得了（和 Bar 一样
 		// 在 resolveConfig 里），所以这儿先原样带过去。
 		if k.Group.Cols < 1 || k.Group.Cols > MaxGroupCols {
 			return Key{}, fmt.Errorf("%s 的弹出组只能是 1 到 %d 列", at, MaxGroupCols)
@@ -520,7 +511,7 @@ func (s *Store) load(profile string) Config {
 	if bar == nil {
 		bar = migrate(f.Keys, &lib)
 	}
-	out, err := resolveConfig(Config{Rows: ln.Rows, Lib: lib, Bar: bar, Pad: ln.Pad}, true)
+	out, err := resolveConfig(Config{Rows: ln.Rows, Lib: lib, Bar: bar, Pin: ln.Pin}, true)
 	if err != nil {
 		return fallback()
 	}
@@ -568,7 +559,7 @@ func pick(f file, profile string) (lane, bool) {
 	}
 	// f.Profiles == nil 是老文件：顶层就是默认那一套（Bar 为 nil 时更老，交给 migrate）
 	if f.Profiles == nil || f.Bar != nil {
-		return lane{Rows: f.Rows, Bar: f.Bar, Pad: f.Pad}, true
+		return lane{Rows: f.Rows, Bar: f.Bar, Pin: f.Pin}, true
 	}
 	return lane{}, false
 }
@@ -589,7 +580,7 @@ func sections(f file) map[string]lane {
 			lib := keysOf(f)
 			bar = migrate(f.Keys, &lib)
 		}
-		out[profiles.Default] = normLane(lane{Rows: f.Rows, Bar: bar, Pad: f.Pad})
+		out[profiles.Default] = normLane(lane{Rows: f.Rows, Bar: bar, Pin: f.Pin})
 	}
 	return out
 }
@@ -733,7 +724,7 @@ func (s *Store) write(profile string, c Config) (Config, error) {
 	}
 	f, _ := s.read() // 读不出来就当从零开始（别的 profile 本来也没有）
 	secs := sections(f)
-	secs[profile] = lane{Rows: out.Rows, Bar: out.Bar, Pad: out.Pad}
+	secs[profile] = lane{Rows: out.Rows, Bar: out.Bar, Pin: out.Pin}
 	live := map[string]bool{}
 	for _, k := range out.Lib {
 		live[k.ID] = true
@@ -752,7 +743,7 @@ func (s *Store) write(profile string, c Config) (Config, error) {
 	nf := file{Keys: raw, Profiles: secs}
 	// 默认那一套镜像到顶层老字段（降级用，见 file 的注释）
 	if d, ok := secs[profiles.Default]; ok {
-		nf.Rows, nf.Bar, nf.Pad = d.Rows, d.Bar, d.Pad
+		nf.Rows, nf.Bar, nf.Pin = d.Rows, d.Bar, d.Pin
 	}
 	b, err := json.MarshalIndent(nf, "", "  ")
 	if err != nil {
@@ -769,8 +760,8 @@ func (s *Store) write(profile string, c Config) (Config, error) {
 
 // prune 把引用了已经不存在的定义的地方清干净（所有 profile 一起）。
 //
-// **两处**：条上（Bar）和固定块的格子（Pad.Cells）。漏掉固定块那一处的表现是那块网格上
-// 留一个空洞，而且下次存盘会因为「引用了不存在的按键」直接失败 —— 而用户什么都没改。
+// 钉住（Pin）不用清：它存的是**个数**不是引用，行变短之后读的时候夹一下就对了
+// （见 resolvePin）。弹出组的格子在 Lib 里，由客户端整份送上来，不走这儿。
 func prune(secs map[string]lane, live map[string]bool) {
 	for id, ln := range secs {
 		bar := make([][]string, 0, len(ln.Bar))
@@ -783,24 +774,7 @@ func prune(secs map[string]lane, live map[string]bool) {
 			}
 			bar = append(bar, keep)
 		}
-		pad := ln.Pad
-		if pad != nil {
-			cells := make([]string, len(pad.Cells))
-			any := false
-			for i, k := range pad.Cells {
-				if live[k] {
-					cells[i] = k
-					any = true
-				}
-			}
-			// 清空了就把整块去掉（和 resolvePad 一个判据：空块 = 没有块）
-			if any {
-				pad = &Pad{Cols: pad.Cols, Cells: cells, Side: pad.Side}
-			} else {
-				pad = nil
-			}
-		}
-		secs[id] = lane{Rows: ln.Rows, Bar: bar, Pad: pad}
+		secs[id] = lane{Rows: ln.Rows, Bar: bar, Pin: ln.Pin}
 	}
 }
 
@@ -844,7 +818,7 @@ func (s *Store) Drop(profile string) error {
 	delete(secs, profile)
 	f.Profiles = secs
 	if d, ok := secs[profiles.Default]; ok {
-		f.Rows, f.Bar, f.Pad = d.Rows, d.Bar, d.Pad
+		f.Rows, f.Bar, f.Pin = d.Rows, d.Bar, d.Pin
 	}
 	b, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
@@ -937,7 +911,7 @@ func resolveConfig(c Config, dropUnknown bool) (Config, error) {
 		bar[1] = []string{}
 	}
 
-	// 弹出组里那些引用：和 Bar / Pad 同一套规矩（读盘丢掉认不出的，存盘报错）。
+	// 弹出组里那些引用：和 Bar 同一套规矩（读盘丢掉认不出的，存盘报错）。
 	// **组里不能再放组** —— 一层就够，嵌套只会变成「点开还要再点开」。
 	isGroup := make(map[string]bool, len(lib))
 	for _, k := range lib {
@@ -958,14 +932,44 @@ func resolveConfig(c Config, dropUnknown bool) (Config, error) {
 		lib[i].Group = &Group{Cols: g.Cols, Cells: cells}
 	}
 
-	pad, err := resolvePad(c.Pad, seen, dropUnknown)
-	if err != nil {
-		return Config{}, err
-	}
-	return Config{Rows: rows, Lib: lib, Bar: bar[:rows], Pad: pad}, nil
+	return Config{Rows: rows, Lib: lib, Bar: bar[:rows], Pin: resolvePin(c.Pin, bar[:rows])}, nil
 }
 
-// resolveCells 收拾一片网格里的引用（固定块和弹出组共用）。
+// resolvePin 把每行钉住的个数夹进合法范围：非负，而且 Left+Right 不超过那一行的长度。
+//
+// **不报错，一律夹住**：prune 会让行变短（别的设备删了个定义），那时候存进来的个数就
+// 越界了 —— 而那不是谁的 bug，报错只会让人存不下去。多出来的那几行（切成一行之后）
+// 直接扔掉。
+func resolvePin(in []Pin, bar [][]string) []Pin {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]Pin, len(bar))
+	any := false
+	for i := range bar {
+		if i >= len(in) {
+			break
+		}
+		l, r := max(0, in[i].Left), max(0, in[i].Right)
+		if n := len(bar[i]); l+r > n {
+			// 左边优先：钉住的第一个多半是「呼键盘」那种最要紧的
+			if l > n {
+				l = n
+			}
+			r = n - l
+		}
+		out[i] = Pin{Left: l, Right: r}
+		if l > 0 || r > 0 {
+			any = true
+		}
+	}
+	if !any {
+		return nil // 一个都没钉 = 不落这个字段
+	}
+	return out
+}
+
+// resolveCells 收拾一片网格里的引用（弹出组用）。
 //
 // 长度**一律补到 n**（不够补空、多了截掉）：格子是按位置排的，少一个就整段错位。
 // noGroup 里那些是「组键」—— 传进来时表示这片网格里不许放它们（组里不能再放组）。
@@ -994,42 +998,4 @@ func resolveCells(in []string, n int, known, noGroup map[string]bool, dropUnknow
 		cells[i] = id
 	}
 	return cells, nil
-}
-
-// resolvePad 收拾固定块：列数、格子长度、格子里的引用。
-//
-// 长度**一律补到 Cols*MaxRows**（不够补空、多了截掉），而不是按当前 rows 算 —— 定义里
-// 留着两行的格子，切回一行只是显示上把第二行接到后面（见 Pad 的注释），切回两行原样还在。
-// 按 rows 截的话「切一行再切回两行」会把第二行的键悄悄吃掉。
-//
-// 引用和 Bar 同一套规矩：读盘丢掉认不出的（定义是全局的，别的设备删过），存盘报错
-// （编辑器该自己清干净，静默丢就变成「保存完少了个键」）。
-func resolvePad(p *Pad, known map[string]bool, dropUnknown bool) (*Pad, error) {
-	if p == nil {
-		return nil, nil
-	}
-	if p.Cols < 1 || p.Cols > MaxPadCols {
-		return nil, fmt.Errorf("固定块只能是 1 到 %d 列", MaxPadCols)
-	}
-	side := p.Side
-	if side != "left" {
-		side = "right" // 空 / 认不出的一律靠右（拇指那一侧最常用）
-	}
-	// 固定块里**可以**放组键（那正好是「一格换一片浮窗」最省地方的用法），所以 noGroup 传 nil
-	cells, err := resolveCells(p.Cells, p.Cols*MaxRows, known, nil, dropUnknown, "固定块")
-	if err != nil {
-		return nil, err
-	}
-	// 一个键都没有的固定块等于没有：别在条上留一块看不见的空地
-	empty := true
-	for _, c := range cells {
-		if c != "" {
-			empty = false
-			break
-		}
-	}
-	if empty {
-		return nil, nil
-	}
-	return &Pad{Cols: p.Cols, Cells: cells, Side: side}, nil
 }

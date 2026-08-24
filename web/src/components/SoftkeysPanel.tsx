@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Download, Plus, Trash2, X } from 'lucide-react'
-import { api, type Pad, type PresetGroup, type SoftKey, type SoftkeysConfig, type SoftkeysResponse } from '@/lib/api'
+import { api, type Pin, type PresetGroup, type SoftKey, type SoftkeysConfig, type SoftkeysResponse } from '@/lib/api'
 import { useChipDrag, type ChipAt } from '@/lib/chipdrag'
 import { MAX_GROUP_COLS, MAX_SPAN, spanStyle } from '@/lib/keys'
 import { KEY_ICONS, keyFace } from '@/keyicons'
@@ -12,20 +12,20 @@ import { Panel } from './ui/panel'
 import { cn } from '@/lib/utils'
 
 /**
- * 拖放的筐：软键条第一行 / 第二行 / **固定块** / 「我的按键」。
+ * 拖放的筐：软键条第一行 / 第二行 / 「我的按键」/ 选中那个**弹出组**的格子。
  * 手势本身在 lib/chipdrag（和顶栏编辑器共用）。
  *
  * `'pad'` 和别的筐**语义不一样**：它是定长网格，落哪一格就**替换**那一格（别的筐是
  * 插进序列里）。命中判定也另一套，见 chipdrag 的 `slots`。
  */
-type Zone = 1 | 2 | 'lib' | 'pad' | 'group'
+type Zone = 1 | 2 | 'lib' | 'group'
 type At = ChipAt<Zone>
 
-/** 是条上的一行吗（1 / 2）。剩下两个筐（库 / 固定块）都不是「行」 */
+/** 是条上的一行吗（1 / 2）。剩下两个筐（库 / 弹出组的格子）都不是「行」 */
 const isRow = (z: Zone): z is 1 | 2 => z === 1 || z === 2
 
-/** 定位格的筐（网格，落哪一格就是哪一格）：固定块和选中那个弹出组 */
-const isSlots = (z: Zone) => z === 'pad' || z === 'group'
+/** 定位格的筐（网格，落哪一格就是哪一格）：目前只有「选中那个弹出组」 */
+const isSlots = (z: Zone) => z === 'group'
 
 /** 「按键」栏怎么显示：sticky/act 用 `sticky:ctrl` 这种写法，其余就是按键谱。 */
 const kindOf = (k: SoftKey) =>
@@ -105,11 +105,10 @@ export function SoftkeysPanel({
   const [max, setMax] = useState(120)
   const [maxBar, setMaxBar] = useState(40)
   /**
-   * 固定块（null = 这一套没有）。存的是**原始形状**（格子里是 ID），和服务端一份形状 ——
-   * 编辑器要能往空格里放东西，所以不能像条那样解析成定义数组。
+   * 每行两端**钉住**几个（不跟着横滑）。存的是**个数**，`bar` 那一行照旧是完整顺序 ——
+   * 见服务端 internal/softkeys 的 Pin。
    */
-  const [pad, setPad] = useState<Pad | null>(null)
-  const [maxPadCols, setMaxPadCols] = useState(4)
+  const [pin, setPin] = useState<Pin[]>([])
   const [err, setErr] = useState('')
   /** 选中的那个定义（id），下面那条编辑它 */
   const [selId, setSelId] = useState<string | null>(null)
@@ -121,7 +120,7 @@ export function SoftkeysPanel({
     setRows(c.rows)
     // 行数是设置，栏的数量跟着它 —— 少的那行补个空数组，省得处处判 undefined
     setBar(Array.from({ length: c.rows }, (_, i) => c.bar[i] ?? []))
-    setPad(c.pad ?? null)
+    setPin(c.pin ?? [])
   }
 
   useEffect(() => {
@@ -132,7 +131,6 @@ export function SoftkeysPanel({
         setPresets(r.presets)
         setMax(r.max || 120)
         setMaxBar(r.maxBar || 40)
-        setMaxPadCols(r.maxPadCols || 4)
       } catch (e) {
         setErr((e as Error).message)
       }
@@ -147,9 +145,8 @@ export function SoftkeysPanel({
 
   const at = (zone: Zone, i: number): SoftKey | undefined =>
     zone === 'lib' ? lib[i]
-      : zone === 'pad' ? byId.get(pad?.cells[i] ?? '')
-        : zone === 'group' ? byId.get(sel?.group?.cells[i] ?? '')
-          : byId.get(bar[zone - 1]?.[i] ?? '')
+      : zone === 'group' ? byId.get(sel?.group?.cells[i] ?? '')
+        : byId.get(bar[zone - 1]?.[i] ?? '')
 
   /** 改选中那个组的格子。组是**定义**，所以改的是 lib 里那一条 */
   const setGroupCells = (f: (cells: string[]) => string[]) =>
@@ -162,21 +159,14 @@ export function SoftkeysPanel({
   const zoneEl = useRef<Partial<Record<Zone, HTMLDivElement | null>>>({})
   const zones = (): Zone[] => [
     ...(rows === 2 ? [1, 2] as Zone[] : [1] as Zone[]),
-    ...(pad ? ['pad'] as Zone[] : []),
     'lib',
     // 选中的那个组排在库**后面**：屏幕上它就在库下面（键盘换筐按这个顺序）
     ...(sel?.group ? ['group'] as Zone[] : []),
   ]
 
-  /** 改固定块的格子 */
-  const setPadCells = (f: (cells: string[]) => string[]) =>
-    setPad((p) => (p && { ...p, cells: f(p.cells) }))
-
-  /** 把某个定位格清空（固定块 / 弹出组通用） */
-  const clearSlot = (a: At) => {
-    const put = a.zone === 'pad' ? setPadCells : setGroupCells
-    put((cells) => cells.map((c, j) => (j === a.i ? '' : c)))
-  }
+  /** 把某个定位格清空 */
+  const clearSlot = (a: At) =>
+    setGroupCells((cells) => cells.map((c, j) => (j === a.i ? '' : c)))
 
   /** 把条上某一格的引用去掉（定义不动） */
   const dropFromRow = (a: At) => {
@@ -213,11 +203,11 @@ export function SoftkeysPanel({
       return
     }
 
-    // 落进定位格（固定块 / 弹出组）：**替换**那一格（格子按位置排，「插到第 3 格前面」
+    // 落进定位格（弹出组的格子）：**替换**那一格（格子按位置排，「插到第 3 格前面」
     // 没有意义）。同一个筐内互拖 = 两格**对调** —— 顶掉原来那个不对：网格上人想的是
     // 「换个位置」，而被顶掉的那个键会静悄悄消失
     if (isSlots(to.zone)) {
-      const put = to.zone === 'pad' ? setPadCells : setGroupCells
+      const put = setGroupCells
       // 组里不能再放组（服务端也挡着）—— 嵌套只会变成「点开还要再点开」
       if (to.zone === 'group' && key.group) { toast('弹出组里不能再放一个弹出组'); return }
       if (from.zone === to.zone) {
@@ -267,7 +257,7 @@ export function SoftkeysPanel({
   const { drag, over, onChipDown } = useChipDrag<Zone>({
     zones,
     elOf: (z) => zoneEl.current[z],
-    slots: isSlots, // 固定块 / 弹出组是定长网格，落哪一格就是哪一格
+    slots: isSlots, // 弹出组的格子是定长网格，落哪一格就是哪一格
     onDrop: drop,
     onTap: (a) => setSelId(at(a.zone, a.i)?.id ?? null), // 没拿起来就松手 = 选中它，下面那条改它
   })
@@ -282,9 +272,9 @@ export function SoftkeysPanel({
     } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
       e.preventDefault()
       const z = order[Math.min(Math.max(n + (e.key === 'ArrowUp' ? -1 : 1), 0), order.length - 1)]
-      // 落到哪一格：库 / 条都是「接到末尾」，定位格（固定块 / 弹出组）是「第一个空格」
+      // 落到哪一格：库 / 条都是「接到末尾」，定位格是「第一个空格」
       // —— 定长网格没有「末尾」这回事
-      const cellsOf = z === 'pad' ? pad?.cells : z === 'group' ? sel?.group?.cells : undefined
+      const cellsOf = z === 'group' ? sel?.group?.cells : undefined
       const i = z === 'lib' ? lib.length
         : cellsOf ? Math.max(0, cellsOf.findIndex((c) => !c))
           : isRow(z) ? (bar[z - 1]?.length ?? 0) : 0
@@ -292,7 +282,7 @@ export function SoftkeysPanel({
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault()
       if (from.zone === 'lib') del(at('lib', from.i))
-      else drop(from, { zone: 'lib', i: lib.length }) // 条上 / 固定块上：只拿下来
+      else drop(from, { zone: 'lib', i: lib.length }) // 条上 / 格子里：只拿下来
     }
   }
 
@@ -304,9 +294,8 @@ export function SoftkeysPanel({
   /** 彻底删掉一个定义：条上的引用一起清掉，不然保存时就是「引用了不存在的按键」 */
   const del = (k?: SoftKey) => {
     if (!k?.id) return
-    const inPad = pad?.cells.filter((id) => id === k.id).length ?? 0
     const inGroups = lib.reduce((n, x) => n + (x.group?.cells.filter((id) => id === k.id).length ?? 0), 0)
-    const used = bar.reduce((n, r) => n + r.filter((id) => id === k.id).length, 0) + inPad + inGroups
+    const used = bar.reduce((n, r) => n + r.filter((id) => id === k.id).length, 0) + inGroups
     // 删掉定义本身，**并且把所有弹出组里指向它的格子清空** —— 漏了的话保存直接被服务端拒
     // （「引用了不存在的按键」），而用户只是删了一个键
     setLib((prev) => prev
@@ -315,9 +304,6 @@ export function SoftkeysPanel({
         ? { ...x, group: { ...x.group, cells: x.group.cells.map((id) => (id === k.id ? '' : id)) } }
         : x)))
     setBar((prev) => prev.map((r) => r.filter((id) => id !== k.id)))
-    // 固定块那些格子也要清 —— 漏了的话保存直接失败（「引用了不存在的按键」），
-    // 而用户只是删了一个键
-    setPad((p) => (p && { ...p, cells: p.cells.map((id) => (id === k.id ? '' : id)) }))
     setSelId(null)
     if (used) toast(`「${k.label}」删了，条上那 ${used} 处也一起去掉了`)
   }
@@ -342,7 +328,7 @@ export function SoftkeysPanel({
       : `加了 ${fresh.length} 个，按住拖到上面就上条`)
   }
 
-  /* ------------------------------------------------------------ 弹出组 / 固定块 */
+  /* ---------------------------------------------------------------- 弹出组 */
 
   /**
    * 加一个**方向键的弹出组**：条上只占一格，点开才是那片网格
@@ -408,22 +394,6 @@ export function SoftkeysPanel({
     return { ...k, group: { cols, cells } }
   }))
 
-  /**
-   * 改列数（也用来「加一个」：pad 为 null 时建一个空的）。
-   *
-   * 格子**按行重映射**，不是线性截断：cells 是按行读的定长数组，从 4 列改 3 列直接切尾巴
-   * 会把第二行整段错位 —— 画面上就是「改一下列数，键全乱了」。
-   */
-  const setPadCols = (cols: number) => setPad((p) => {
-    const oc = p?.cols ?? cols
-    const old = p?.cells ?? []
-    const cells: string[] = []
-    for (let r = 0; r < 2; r++) {
-      for (let c = 0; c < cols; c++) cells.push(c < oc ? (old[r * oc + c] ?? '') : '')
-    }
-    return { cols, side: p?.side ?? 'right', cells }
-  })
-
   /** 切一行 / 两行。切回一行时第二行的引用接到第一行末尾（服务端也是这么算的） */
   const setLaneCount = (n: 1 | 2) => {
     setRows(n)
@@ -438,7 +408,7 @@ export function SoftkeysPanel({
     setErr('')
     try {
       const r = await api.put<SoftkeysConfig>(
-        `/softkeys?profile=${encodeURIComponent(profile.id)}`, { rows, lib, bar, pad },
+        `/softkeys?profile=${encodeURIComponent(profile.id)}`, { rows, lib, bar, pin },
       )
       take(r)
       onSaved(r)
@@ -493,8 +463,14 @@ export function SoftkeysPanel({
         {Array.from({ length: count }, (_, i) => {
           const k = at(zone, i)
           if (!k) return null
+          // 钉住那两段和滑动那段之间画一条竖线：一眼看出哪几个不跟着滑
+          const rowPin = isRow(zone) ? pinAt(zone - 1) : {}
+          const pinL = rowPin.left ?? 0
+          const pinR = rowPin.right ?? 0
+          const edge = (pinL > 0 && i === pinL) || (pinR > 0 && i === count - pinR)
           return (
             <div key={`${zone}-${i}`} className="flex items-center">
+              {edge && <span title="这条线外面那几个不跟着横滑" className="mr-1.5 h-6 w-px shrink-0 bg-line-hi" />}
               {over?.zone === zone && over.i === i && <span className="mr-1 h-6 w-0.5 shrink-0 rounded-full bg-brand" />}
               <span
                 data-chip
@@ -532,20 +508,79 @@ export function SoftkeysPanel({
   )
 
   /**
-   * 固定块那个筐。**定长网格**：空格子也画出来（而且也带 `data-chip`）—— 「往空格里放
+   * 弹出组那个筐。**定长网格**：空格子也画出来（而且也带 `data-chip`）—— 「往空格里放
    * 一个」是这种筐最主要的用法，不画的话它压根不是落点（见 chipdrag 的 `slots`）。
    *
    * 列宽用 `minmax(var(--sk-w), auto)`：这一格至少是条上一个键位那么宽，但方块上还有名字
    * 和 ✕，撑得开就让它撑 —— 编辑器给的是**排布**（哪一格放什么），真正的宽度在条上。
    */
+  /* ---------------------------------------------------------------- 钉住 */
+
+  const pinAt = (ri: number): Pin => pin[ri] ?? {}
+
+  /** 改一行的钉住个数。夹在 [0, 这一行剩下多少] 里 —— 和服务端 resolvePin 一个判据 */
+  const setPinAt = (ri: number, side: 'left' | 'right', n: number) => setPin((prev) => {
+    const out = Array.from({ length: Math.max(prev.length, rows) }, (_, i) => ({ ...(prev[i] ?? {}) }))
+    const len = bar[ri]?.length ?? 0
+    const other = (side === 'left' ? out[ri].right : out[ri].left) ?? 0
+    out[ri][side] = Math.max(0, Math.min(n, len - other))
+    return out
+  })
+
   /**
-   * 一片定位格（固定块 / 弹出组共用）。**空格子也画出来、也带 `data-chip`** ——
+   * 一行下面那条「钉住 左 − n + 右 − n +」。
+   *
+   * 为什么是**个数**而不是「选中这几个键→钉住」：条上那一行是有序的，钉住只能是两端连续的
+   * 一段（中间那段才是滑的）。个数就是那条界线的位置，拖动排序的语义一个字都不用改。
+   */
+  const pinRow = (ri: number) => {
+    const len = bar[ri]?.length ?? 0
+    if (!len) return null
+    const p = pinAt(ri)
+    const step = (side: 'left' | 'right', label: string) => {
+      const v = (side === 'left' ? p.left : p.right) ?? 0
+      const other = (side === 'left' ? p.right : p.left) ?? 0
+      return (
+        <span className="flex items-center gap-1">
+          {label}
+          <span className="flex overflow-hidden rounded-md border border-line">
+            <Button
+              size="tiny" className="rounded-none border-0 border-r border-line px-1.5"
+              disabled={v <= 0} title={`少钉一个`} onClick={() => setPinAt(ri, side, v - 1)}
+            >
+              −
+            </Button>
+            <span className="grid w-6 place-items-center bg-ctl text-xs tabular-nums">{v}</span>
+            <Button
+              size="tiny" className="rounded-none border-0 border-l border-line px-1.5"
+              disabled={v + other >= len} title={`多钉一个`} onClick={() => setPinAt(ri, side, v + 1)}
+            >
+              +
+            </Button>
+          </span>
+        </span>
+      )
+    }
+    return (
+      <div key={ri} className="flex flex-wrap items-center gap-2 pl-[52px] text-xs text-faint">
+        <span>{rows === 2 ? `第${ri === 0 ? '一' : '二'}行钉住` : '钉住'}</span>
+        {step('left', '左')}
+        {step('right', '右')}
+        {(p.left || p.right)
+          ? <span className="text-muted">这几个不跟着横滑</span>
+          : <span>头几个 / 尾几个可以不跟着横滑</span>}
+      </div>
+    )
+  }
+
+  /**
+   * 弹出组那片定位格。**空格子也画出来、也带 `data-chip`** ——
    * 「往空格里放一个」是这种筐最主要的用法，不画的话它压根不是落点（见 chipdrag 的 `slots`）。
    *
    * 列宽用 `minmax(var(--sk-w), auto)`：至少一个键位宽，但方块上还有名字和 ✕，撑得开就让它撑
    * —— 编辑器给的是**排布**（哪一格放什么），真正的宽度在条上 / 浮窗里。
    */
-  const gridBox = (zone: 'pad' | 'group', label: string, cols: number, cells: string[]) => (
+  const gridBox = (zone: 'group', label: string, cols: number, cells: string[]) => (
     <div className="flex items-start gap-2">
       <span className="w-11 shrink-0 pt-2.5 text-xs text-faint">{label}</span>
       <div
@@ -642,58 +677,8 @@ export function SoftkeysPanel({
         {box(1, rows === 2 ? '第一行' : '按键', '从下面「我的按键」拖上来', bar[0]?.length ?? 0)}
         {rows === 2 && box(2, '第二行', '拖上来的键排在第二行', bar[1]?.length ?? 0)}
 
-        {/* 固定块：钉在条一端、不跟着横滑的一小片对齐网格。
-            没有的时候只出一个按钮 —— 多数人不需要它，别让一片空网格占着地方 */}
-        <div className="flex items-center gap-2">
-          <span className="w-11 shrink-0 text-xs text-faint">固定块</span>
-          {!pad ? (
-            <Button
-              size="tiny"
-              title="钉一小片网格在条的一端，它不跟着横滑。里面可以放弹出组 —— 一个永远不滑走的格子，点开是方向键"
-              onClick={() => setPadCols(1)}
-            >
-              <Plus className="size-3" />加一个
-            </Button>
-          ) : (
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="flex overflow-hidden rounded-md border border-line">
-                {Array.from({ length: maxPadCols }, (_, i) => i + 1).map((n) => (
-                  <Button
-                    key={n}
-                    size="tiny"
-                    on={pad.cols === n}
-                    title={`${n} 列`}
-                    className={cn('rounded-none border-0 px-2', n < maxPadCols && 'border-r border-line')}
-                    onClick={() => setPadCols(n)}
-                  >
-                    {n}
-                  </Button>
-                ))}
-              </div>
-              <span className="text-xs text-faint">列，钉在</span>
-              <div className="flex overflow-hidden rounded-md border border-line">
-                <Button
-                  size="tiny" on={pad.side !== 'left'} title="钉在右边"
-                  className="rounded-none border-0 border-r border-line"
-                  onClick={() => setPad((p) => p && { ...p, side: 'right' })}
-                >
-                  右
-                </Button>
-                <Button
-                  size="tiny" on={pad.side === 'left'} title="钉在左边"
-                  className="rounded-none border-0"
-                  onClick={() => setPad((p) => p && { ...p, side: 'left' })}
-                >
-                  左
-                </Button>
-              </div>
-              <Button size="tiny" variant="danger" title="去掉这一套的固定块（定义都还在库里）" onClick={() => setPad(null)}>
-                <Trash2 className="size-3" />去掉
-              </Button>
-            </div>
-          )}
-        </div>
-        {pad && gridBox('pad', '', pad.cols, pad.cells)}
+        {/* 钉住：每行两端不跟着横滑的那几个。控件放在行下面，因为它管的是**那一行** */}
+        {Array.from({ length: rows }, (_, ri) => pinRow(ri))}
       </div>
 
       {/* 我的按键：所有定义都在这儿，新增 / 改 / 删都在这儿 */}
@@ -830,8 +815,7 @@ export function SoftkeysPanel({
               </div>
             </div>
 
-            {/* 组里放什么：往空格（·）上拖就是放进那一格，格里两格互拖是对调。
-                和固定块共用同一个筐（gridBox） */}
+            {/* 组里放什么：往空格（·）上拖就是放进那一格，格里两格互拖是对调 */}
             {sel.group && (
               <div className="w-full">{gridBox('group', '组里', sel.group.cols, sel.group.cells)}</div>
             )}
@@ -865,9 +849,10 @@ export function SoftkeysPanel({
           <li><strong>弹出组</strong> = 条上<strong>只占一格</strong>，点开在它上面浮出一小片键
             （<strong>不占条上的地方，条也不重排</strong>）。点<strong>「方向键」</strong>一下就摆好；
             要别的组合点「弹出组」自己往格子里拖。</li>
-          <li><strong>固定块</strong> = 钉在条一端、<strong>不跟着横滑</strong>的小网格。
-            里面放一个弹出组最省地方：一个<strong>永远不滑走</strong>的格子，点开是方向键。</li>
-          <li>网格里（弹出组 / 固定块）往空格 <code>·</code> 上拖 = 放进那一格，两格互拖 = 对调。</li>
+          <li><strong>钉住</strong>：每行下面那条「钉住 左 n 右 n」说的是<strong>头几个 / 尾几个
+            不跟着横滑</strong>。「呼键盘」「Esc」这种每隔十秒要按一次的键，滑走了就等于没有 ——
+            钉住它，只有中间那段跟着滑。框里那条竖线就是界线。</li>
+          <li>弹出组的格子里往空格 <code>·</code> 上拖 = 放进那一格，两格互拖 = 对调。</li>
         </ul>
 
         <p className="mb-1 font-medium text-fg">按键谱（「按键」那一栏）</p>
@@ -894,9 +879,9 @@ export function SoftkeysPanel({
         </dl>
 
         <p>
-          <strong>几行 / 条上放哪些 / 固定块</strong>是「{profile.name}」这一套自己的，换一套整份换掉；
-          <strong>「我的按键」的定义所有套共用</strong> —— 在这儿删掉一个，别的套条上那些引用也一起消失。
-          切成一行时，第二行（和固定块的第二行）接到第一行后面。「恢复默认」只管这一套的条。
+          <strong>几行 / 条上放哪些 / 钉住几个</strong>是「{profile.name}」这一套自己的，换一套整份换掉；
+          <strong>「我的按键」的定义所有套共用</strong>（包括弹出组）—— 在这儿删掉一个，别的套条上
+          那些引用也一起消失。切成一行时第二行接到第一行后面。「恢复默认」只管这一套的条。
         </p>
       </div>
 
