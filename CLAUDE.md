@@ -343,9 +343,9 @@ Trusted Publisher 是**按包**配的，5 个包（根包 + 4 个平台子包）
 Environment name **留空**（我们的 workflow 没声明 environment，填了任何值 OIDC 都会对不上）。
 少配一个的表现是下次发版在「发 npm」那步中途失败。
 
-**tag 要推到装着 `release.yml` 的那个远端**，也就是 GitHub。这个仓库有两个远端（`origin`
-是自建 git，`github` 才是 GitHub），所以 `make release` **不写死 origin** —— 它按 push URL 里的
-`github.com` 认，认不出来就拒绝发版。推错远端是最难查的一种：tag 打上去了、命令也成功了，
+**tag 要推到装着 `release.yml` 的那个远端**，也就是 GitHub。这个仓库的远端**不叫 origin**
+（只有一个 `github`；早先还有一个指向自建 git 的 `origin`，已经删掉了），所以 `make release`
+**不写死 origin** —— 它按 push URL 里的 `github.com` 认，认不出来就拒绝发版。推错远端是最难查的一种：tag 打上去了、命令也成功了，
 Actions 那边一直没动静，而「没动静」和「还在排队」长得一模一样。要覆盖：
 `make release V=vX.Y.Z RELEASE_REMOTE=xxx`。
 

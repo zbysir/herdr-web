@@ -101,9 +101,10 @@ release-dry:
 ## release —— 打 tag 并推上去，剩下的 GitHub Actions 干（见 .github/workflows/release.yml）
 # tag 要推到**装着 release.yml 的那个远端**，也就是 GitHub。
 #
-# **不能写死 origin**：这个仓库的 origin 指向自建 git（git.huglight.cn），GitHub 是另一个
-# 叫 github 的远端。推错了的表现最难查 —— tag 打上去了、命令也成功了，Actions 那边一直
-# 没动静，而「没动静」和「还在排队」长得一模一样。所以这里按 push URL 里的 github.com 认，
+# **不能写死 origin**：这个仓库压根没有叫 origin 的远端 —— GitHub 那个叫 `github`
+# （早先还有一个指向自建 git 的 origin，已经删了）。推错了的表现最难查 —— tag 打上去了、
+# 命令也成功了，Actions 那边一直没动静，而「没动静」和「还在排队」长得一模一样。
+# 所以这里按 push URL 里的 github.com 认，
 # 认不出来就直接拒绝发版，不猜。要覆盖：make release V=... RELEASE_REMOTE=xxx
 RELEASE_REMOTE ?= $(shell git remote -v | awk '/github\.com.*\(push\)/{print $$1; exit}')
 
