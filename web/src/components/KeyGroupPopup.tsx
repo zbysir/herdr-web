@@ -94,7 +94,9 @@ export function KeyGroupPopup({
         pos ? 'visible' : 'invisible',
       )}
       style={{
-        gridTemplateColumns: `repeat(${cols}, var(--sk-w))`,
+        // `minmax(--sk-w, auto)`：至少一个可点宽，装不下就让那一列自己撑开 ——
+        // 写死 `var(--sk-w)` 的话 `/clear` 这种长键的字会漏到格子外面（键是 nowrap 的）
+        gridTemplateColumns: `repeat(${cols}, minmax(var(--sk-w), auto))`,
         left: pos?.left ?? 0,
         top: pos?.top ?? 0,
       }}

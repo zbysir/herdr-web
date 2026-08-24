@@ -110,7 +110,11 @@ export function Softkeys({
         // 举起来只换颜色，**不换文字**：改字会让按键变宽，手指底下的键
         // 当场挪位置，第二下就点到隔壁去了。
         className={cn(
-          'relative',
+          // **一律不许被压窄**：键上有个显式的 `min-w`（--sk-w，够手指点的下限），而显式
+          // min-width 会顶掉 flex 的自动最小尺寸（`min-width:auto` 才是「不小于内容」）——
+          // 于是这一段挤不下时每个键都被压到 36px，键上的字又是 nowrap 的，`/clear` 这种
+          // 长键的字就直接漏到边框外面去（用户报的）。条本来就是横滑的，压窄没有任何好处。
+          'relative shrink-0',
           up && 'border-bad bg-bad text-white hover:border-bad hover:bg-bad',
         )}
         title={up ? '再点一次才真的发出去'
