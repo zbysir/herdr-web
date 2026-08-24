@@ -193,7 +193,7 @@ export function PaneSwitcher({
     return () => clearInterval(t)
   }, [])
 
-  const sorted = useMemo(() => {
+  const rows = useMemo(() => {
     const kw = q.trim().toLowerCase()
     const hit = (p: Pane) =>
       (!onlyAgent || !!p.agent) &&
@@ -210,32 +210,17 @@ export function PaneSwitcher({
     )
   }, [panes, q, onlyAgent, sort])
 
-  /**
-   * **面板开着的时候顺序是冻住的。**
+  /*
+   * **顺序是实时的**：4 秒一拍重拉之后跟着重排，谁刚开工 / 刚等你就当场浮上来。
    *
-   * 列表每 4 秒重拉一次，而「优先级」排序是按状态分档的 —— 十几个 agent 的机器上，状态
-   * 隔几秒就有变化，于是你正看着第三行、手指落下去的时候那一行已经是别的 pane 了。用户报
-   * 「点了跳不到正确的面板」就是这么来的（外加行的回调也跟着换了，那一半在 tap 里另修）。
+   * 中间有一版是「面板开着就把顺序冻住」，为的是治「你看着第三行、手指落下去时那一行已经
+   * 是别人了」。需求方看到的结果是排序像坏的（在跑的 pane 明明 1 分钟前动过，却排在几个
+   * 闲了两小时的下面 —— 因为它是在面板打开之后才开工的），所以撤掉了：这个面板的价值就是
+   * 「谁在等我」，停住的排名比抽走一行更糟。
    *
-   * 冻的只有**顺序**：状态点、「等你」标签、时间列照常跟着刷。新出现的 pane 接在末尾，
-   * 关掉的自然消失。换排序 / 改筛选 / 下次再打开面板都会重排一次 —— 那几下都是「我想重新
-   * 看一遍」的意思，不是「我正瞄着某一行」。
+   * 「点错 pane」那条不靠冻结兜：行在 `pointerdown` 那一刻就把 pane id 记住了（见下面的
+   * tap），抬手用记下的那个 —— 列表怎么动，跳的都是手指真正落下去那一行。
    */
-  const [frozen, setFrozen] = useState<string[] | null>(null)
-  // 换了排序 / 筛选就该重排（那是用户主动要求换个看法）
-  useEffect(() => { setFrozen(null) }, [sort, onlyAgent, q])
-  useEffect(() => {
-    if (frozen === null) setFrozen(sorted.map((r) => r.p.id))
-  }, [frozen, sorted])
-
-  const rows = useMemo(() => {
-    if (!frozen) return sorted
-    const rank = new Map(frozen.map((id, i) => [id, i]))
-    // 冻结名单里没有的（这一拍新出现的 pane）排在最后，保持它们自己的相对顺序
-    return [...sorted].sort((a, b) =>
-      (rank.get(a.p.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.p.id) ?? Number.MAX_SAFE_INTEGER),
-    )
-  }, [sorted, frozen])
 
   // 「分组」按 workspace 分组（和 herdr 里看到的一样）；优先级是全局排序，
   // 分组会把它切碎，所以那边是一条平铺的列表，workspace 挪进每行的副行。
