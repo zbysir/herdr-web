@@ -21,7 +21,7 @@ import (
 
 // passkey：WebAuthn 凭据。
 //
-// 为什么是它而不是 TOTP（决定过程见 SECURITY.md 的 L2）：
+// 为什么是它而不是 TOTP（决定过程见 docs/dev/SECURITY.md 的 L2）：
 //
 //   - **服务端只存公钥。** TOTP 的共享密钥必须落盘，而这台机器上跑的 agent 天天读不可信
 //     内容，凭据文件被读走是日常风险 —— 读走 TOTP 密钥就等于第二因子没了，而且你不会知道。

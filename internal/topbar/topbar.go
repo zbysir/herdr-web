@@ -15,6 +15,22 @@
 // 服务端只负责「这个 id 认不认、顺序是什么、能不能删」。所以这里有一份白名单 ——
 // 前端拿到不认识的 id 只能画一个点了没反应的按钮，那种东西不该能存进来。
 // 白名单和前端那份目录必须对得上，有测试盯着（TestActionsMatchJS）。
+//
+// # 「我的按键」也能上顶栏
+//
+// items 里除了内置按钮的 id，还能放 `key:<定义ID>` —— 指向软键条那份「我的按键」
+// （internal/softkeys 的 Lib）。于是「顶栏上能不能加个 ctrl+b z」不再是每次都要动一遍
+// 白名单的事：**动作库只有一份，顶栏和软键条是它的两个界面**。
+//
+// 引用和内置 id 有两处不对称，都是有意的：
+//
+//   - **存盘严格、读盘不核**：Save 会拿 Keys 钩子核一遍「这个定义还在不在」，Load
+//     **故意不核** —— 核的话一次 softkeys.json 读失败就能把人家配好的键从顶栏上抹掉，
+//     而读失败是暂时的、配置不是。认不出的引用交给前端渲染时丢掉（和软键条那边
+//     resolveBar 一个做法）。
+//   - **删定义要顺带清引用**：那一步在软键条那个口存完之后调 PruneKeys（见
+//     internal/server 的 apiSoftkeys）。不清的表现是顶栏上留一个画不出来的幽灵项，
+//     占着 MaxItems 的名额却看不见，下次打开编辑器它又静悄悄消失。
 package topbar
 
 import (
@@ -22,9 +38,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
+	"github.com/zbysir/herdr-web/internal/capability"
 	"github.com/zbysir/herdr-web/internal/profiles"
 )
 
@@ -34,18 +52,13 @@ const MaxItems = 24
 
 // Actions 是全部可选按钮的 id + **编辑器里「库」的排列顺序**。
 //
-// 顺序不是随便排的：面板 / 文件 / 发件箱 / 软键条是四个常驻入口，接着是几个「点一下就发生
-// 一件事」的动作，最后是外观和设置。库里按这个顺序摆，找起来和顶栏上的习惯一致。
-var Actions = []string{
-	"panes", "files", "compose", "keys",
-	"kbd", "img", "clip", "paste",
-	"font-", "font+", "theme", "full",
-	"settings",
-}
+// 清单本身不在这儿：它和软键条的 act 白名单、前端那份按钮目录是同一件事的三个切面，
+// 合在 internal/capability 里（为什么合、散着会怎么静默出错，见那个包的注释）。
+var Actions = capability.TopbarIDs()
 
 // Pinned 不能删的：**设置是唯一一条改回这份配置的路**，删掉就把自己锁在外面了
 // （而且配置是跟着人走的，一台手机上删掉，电脑上也没了）。
-var Pinned = []string{"settings"}
+var Pinned = capability.TopbarPinned()
 
 // Defaults 出厂顺序 —— 和这个功能做出来之前顶栏上写死的那一排一样，升级不改样子。
 //
@@ -54,6 +67,28 @@ var Pinned = []string{"settings"}
 // 该由人定 —— 藏起来的按钮最难解释，用户只会觉得「我明明拖上去了」。
 func Defaults() []string {
 	return []string{"panes", "files", "compose", "keys", "font-", "font+", "theme", "full", "settings"}
+}
+
+// KeyPrefix 是「这一项是引用，不是内置按钮」的记号：`key:k3` 指向软键条那份「我的按键」
+// 里 ID 为 k3 的那个定义（见 internal/softkeys）。
+//
+// 用前缀而不是另开一个平行数组：items 是一串字符串，而**顺序在这儿就是全部意义** ——
+// 多一个数组就得处理「两边长度不一样」。冒号在内置 id 里不可能出现（那些是 [a-z+-]），
+// 所以两种形态一眼分得开，也撞不上。
+const KeyPrefix = "key:"
+
+// keyID 是引用里那个定义 ID 的合法形状。软键条自己发的是 k1 / k2……，但 ID 是从客户端
+// 原样收下来的（见 softkeys 里 newIDs 那段），所以这儿自己挡一道：长度有头、不带冒号和
+// 空白 —— 免得一个畸形 ID 变成一个畸形 item，再顺着 JSON 一路传到前端。
+var keyID = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
+
+// KeyRef 认「这一项是不是一个引用」，并给出被引用的定义 ID。
+func KeyRef(item string) (string, bool) {
+	id, ok := strings.CutPrefix(item, KeyPrefix)
+	if !ok || !keyID.MatchString(id) {
+		return "", false
+	}
+	return id, true
 }
 
 // Config 是**一套**顶栏配置。
@@ -76,6 +111,14 @@ type file struct {
 
 type Store struct {
 	Dir string
+
+	// Keys 报「『我的按键』现在有哪些定义 ID」—— 存盘时核 `key:` 引用用的。
+	//
+	// 是个钩子而不是直接 import softkeys：那两份配置是**两个文件两个口**（见包注释），
+	// 一边直接抓另一边的 Store 就等于把这条边界拆了。nil = 不核，引用只查形状 ——
+	// 单测和降级路径走这条。
+	Keys func() map[string]bool
+
 	// 写路径是「读整份 → 改一段 → 写回」，别的 profile 那几段要原样保住；两台设备各改
 	// 自己那一套是常事。见 internal/softkeys 里同一把锁的理由。
 	mu sync.Mutex
@@ -83,13 +126,22 @@ type Store struct {
 
 func (s *Store) path() string { return filepath.Join(s.Dir, "topbar.json") }
 
-func known(id string) bool {
-	for _, a := range Actions {
-		if a == id {
-			return true
-		}
+func known(id string) bool { return capability.OnTopbar(id) }
+
+// itemOK 「这一项能不能存进来」：内置 id 查白名单，`key:` 引用查形状 + 定义还在不在。
+// keys 为 nil 时只查形状（见 Store.Keys）。
+func itemOK(item string, keys map[string]bool) error {
+	if known(item) {
+		return nil
 	}
-	return false
+	id, ok := KeyRef(item)
+	if !ok {
+		return errf("不认识的按钮：%q", item)
+	}
+	if keys != nil && !keys[id] {
+		return errf("「我的按键」里已经没有 %q 了 —— 可能在别的设备上删掉了，重开一下设置", id)
+	}
+	return nil
 }
 
 func errf(f string, a ...any) error { return fmt.Errorf(f, a...) }
@@ -173,10 +225,14 @@ func (s *Store) write(profile string, c Config) (Config, error) {
 	if len(c.Items) > MaxItems {
 		return Config{}, errf("顶栏最多放 %d 个", MaxItems)
 	}
+	var keys map[string]bool
+	if s.Keys != nil {
+		keys = s.Keys()
+	}
 	seen := map[string]bool{}
 	for _, id := range c.Items {
-		if !known(id) {
-			return Config{}, errf("不认识的按钮：%q", id)
+		if err := itemOK(id, keys); err != nil {
+			return Config{}, err
 		}
 		if seen[id] {
 			return Config{}, errf("「%s」放了两次，顶栏上一个按钮只能有一个", id)
@@ -229,6 +285,41 @@ func (s *Store) Drop(profile string) error {
 	return s.flush(secs)
 }
 
+// PruneKeys 把**所有套**里指向「已经不在了的定义」的引用清掉。软键条那个口存完之后调
+// （见 internal/server 的 apiSoftkeys）—— 定义是全局的，一台设备上删一个键，别的套条上
+// 和顶栏上的引用都得跟着走，和 softkeys.Save 里 prune 条上引用是同一件事。
+//
+// keep 是**留下来的**定义 ID。没有一处要改就不写盘（这个口每存一次软键条都会被调一遍）。
+func (s *Store) PruneKeys(keep map[string]bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, ok := s.read()
+	if !ok {
+		return nil
+	}
+	secs := sections(f)
+	changed := false
+	for id, c := range secs {
+		out := make([]string, 0, len(c.Items))
+		hit := false
+		for _, it := range c.Items {
+			if kid, ref := KeyRef(it); ref && !keep[kid] {
+				hit = true
+				continue
+			}
+			out = append(out, it)
+		}
+		if hit {
+			secs[id] = Config{Items: withPinned(out)}
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return s.flush(secs)
+}
+
 // flush 落盘：每套一段 + 默认那一套镜像到顶层（降级用，见 file 的注释）。
 func (s *Store) flush(secs map[string]Config) error {
 	f := file{Profiles: secs}
@@ -248,12 +339,18 @@ func (s *Store) flush(secs map[string]Config) error {
 }
 
 // clean 去掉不认识的 id 和重复的，保留原顺序。
+//
+// 形状对的 `key:` 引用一律**留着**，哪怕那个定义此刻不在了 —— 这儿是读路径，不核存在性
+// （理由见包注释）。指到空处的引用由前端渲染时丢掉，被删掉的定义由 PruneKeys 清。
 func clean(items []string) []string {
 	seen := map[string]bool{}
 	out := make([]string, 0, len(items))
 	for _, it := range items {
 		id := strings.TrimSpace(it)
-		if !known(id) || seen[id] {
+		if seen[id] {
+			continue
+		}
+		if _, ref := KeyRef(id); !ref && !known(id) {
 			continue
 		}
 		seen[id] = true

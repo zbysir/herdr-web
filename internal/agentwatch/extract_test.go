@@ -210,7 +210,7 @@ func TestExtractToolOnlyFallsBackToLatest(t *testing.T) {
 	}
 }
 
-// blocked 但屏幕上没有对话框（`agent_status` 判断不了「正开着对话框」，见 HERDR-API.md）：
+// blocked 但屏幕上没有对话框（`agent_status` 判断不了「正开着对话框」，见 docs/dev/HERDR-API.md）：
 // 按「跑完了」那套抽最后一段话，而不是把屏幕最底下二十行原样端上来。
 func TestExtractBlockedWithoutDialog(t *testing.T) {
 	got := extract(screen(t, "idle-answer.txt"), "blocked", noticeLines, noticeChars)

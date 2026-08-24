@@ -45,6 +45,19 @@ export function useChipDrag<Z extends string | number>(opts: {
   elOf: (z: Z) => HTMLElement | null | undefined
   /** 落一次拖动。from / to 都是「筐 + 位置」，怎么改数据由调用方决定 */
   onDrop: (from: ChipAt<Z>, to: ChipAt<Z>) => void
+  /**
+   * 这个筐是**定位格**吗（网格，落哪一格就是哪一格），还是默认的**插入序列**
+   * （落在两个方块之间）。
+   *
+   * 软键条的固定块是定长网格：格子按位置排，「插到第 3 个前面」没有意义 —— 要的是
+   * 「就放进第 3 格」。命中判据也就不一样：序列比中点（在左半边 = 插它前面），
+   * 格子比**离哪个格子的中心最近**（比「指针在不在框里」宽容 —— 格与格之间那 6px 缝里
+   * 松手不该白拖一次）。
+   *
+   * 定位格的筐要给**每一格**都挂 `data-chip`，空格也挂：不然空格压根不是落点，
+   * 而「往空格里放一个」正是这种筐最主要的用法。
+   */
+  slots?: (z: Z) => boolean
   /** 没拿起来就松手 = 点一下（软键条那边是「选中这个定义」） */
   onTap?: (at: ChipAt<Z>) => void
 }): ChipDrag<Z> {
@@ -84,6 +97,18 @@ export function useChipDrag<Z extends string | number>(opts: {
       if (y < r.top - 8 || y > r.bottom + 8) continue
       const rects = ([...el.querySelectorAll('[data-chip]')] as HTMLElement[]).map((c) => c.getBoundingClientRect())
       if (!rects.length) return { zone, i: 0 }
+      // 定位格：离哪个格子中心最近就是哪一格（见 slots）
+      if (opts.slots?.(zone)) {
+        let best = 0
+        let bd = Infinity
+        rects.forEach((c, n) => {
+          const dx = x - (c.left + c.width / 2)
+          const dy = y - (c.top + c.height / 2)
+          const d = dx * dx + dy * dy
+          if (d < bd) { bd = d; best = n }
+        })
+        return { zone, i: best }
+      }
       const line = rects.filter((c) => y >= c.top - 2 && y <= c.bottom + 2)
       if (!line.length) return { zone, i: y < rects[0].top ? 0 : rects.length }
       for (let n = 0; n < rects.length; n++) {

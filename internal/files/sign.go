@@ -27,7 +27,7 @@ import (
 //   - TTL 很短，过期就废；
 //   - 签名密钥是**进程起来时随机生成、只在内存里**的 —— 重启即全废，也不存在
 //     「磁盘上多一个长期秘密」这件事（这个项目为了少一个明文秘密，连旧 token 都
-//     降级了，见 SECURITY.md）。
+//     降级了，见 docs/dev/SECURITY.md）。
 //
 // 代价说清楚：票在 URL 里，所以它会进浏览器历史、会出现在截图里。谁拿到那串东西，
 // 在 TTL 之内就能读那一个文件。referrer-policy 已经是 no-referrer（server/guard.go），

@@ -116,7 +116,7 @@ shell pane 抽不出可靠的输入框（提示符五花八门，`➜` 就不在
 超过 12 行 / 600 字就截断（留开头 —— 回答的第一句最有信息量），后面缀一个 `…`。
 **抽不到就只报状态，不硬凑一句话** —— 编内容比空着糟得多。
 
-抽法是照着[herdr-sight](../herdr-sight) 的 `extractResult` 改的（那边只有「跑完了」一种，
+抽法是照着[herdr-sight](../../../herdr-sight) 的 `extractResult` 改的（那边只有「跑完了」一种，
 因为它是「任务交活了收成果」；这里最该弹的恰恰是「等你回答」）。
 `internal/agentwatch/testdata/` 里是**真机抓屏**，改这块必须跑 `go test ./internal/agentwatch/` ——
 这些规则全是照着真屏幕形状挑的，凭想象改一条就会静默抽错（表现是卡片上只有一行 `❯` 或者

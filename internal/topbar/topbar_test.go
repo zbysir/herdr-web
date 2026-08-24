@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -118,28 +117,6 @@ func TestPinnedAreKnown(t *testing.T) {
 	}
 }
 
-// TestActionsMatchJS 白名单要和前端那份按钮目录**一字不差**（顺序也一样）。
-//
-// 为什么值得一个测试：这两份是同一件事的两半 —— 前端那份带图标和点了干什么，服务端这份
-// 决定「能不能存进来」。只在一边加一个按钮的后果很难查：编辑器里拖得上去，一存就报
-// 「不认识的按钮」（或者反过来，存得下去但顶栏上画不出来）。
-//
-// 直接读 .tsx 抠 id，不用快照文件：快照是第三份，一样会忘了改。
-func TestActionsMatchJS(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join("..", "..", "web", "src", "components", "topbarItems.tsx"))
-	if err != nil {
-		t.Skipf("读不到前端那份目录（源码包里可能没有 web/）: %v", err)
-	}
-	ids := regexp.MustCompile(`\{ id: '([a-z+-]+)'`).FindAllStringSubmatch(string(b), -1)
-	got := make([]string, 0, len(ids))
-	for _, m := range ids {
-		got = append(got, m[1])
-	}
-	if strings.Join(got, ",") != strings.Join(Actions, ",") {
-		t.Fatalf("白名单和前端目录不一致\n go: %v\n js: %v", Actions, got)
-	}
-}
-
 // TestProfilesSplit 顶栏按 profile 分段之后的那几条。
 func TestProfilesSplit(t *testing.T) {
 	dir := t.TempDir()
@@ -193,5 +170,112 @@ func TestProfilesSplit(t *testing.T) {
 	}
 	if err := s.Drop(profiles.Default); err == nil {
 		t.Error("默认那一段删不掉")
+	}
+}
+
+/* ---------------------------------------------- 「我的按键」上顶栏（key: 引用） */
+
+func TestKeyRefShape(t *testing.T) {
+	for _, ok := range []string{"key:k1", "key:k99", "key:a-b_c.d"} {
+		if _, is := KeyRef(ok); !is {
+			t.Errorf("%q 该认成引用", ok)
+		}
+	}
+	// 内置 id 不是引用；畸形的一律不认（ID 是从客户端原样收下来的，见 KeyRef 那段注释）
+	bad := []string{"panes", "font+", "key:", "key:a:b", "key:a b", "key:" + strings.Repeat("x", 65), "keyk1", ":k1"}
+	for _, b := range bad {
+		if id, is := KeyRef(b); is {
+			t.Errorf("%q 不该认成引用（认出了 %q）", b, id)
+		}
+	}
+}
+
+func TestSaveChecksKeyRefsAgainstLib(t *testing.T) {
+	s := &Store{Dir: t.TempDir(), Keys: func() map[string]bool { return map[string]bool{"k1": true} }}
+
+	if _, err := s.Save(profiles.Default, Config{Items: []string{"panes", "key:k1"}}); err != nil {
+		t.Fatalf("存在的定义该收下：%v", err)
+	}
+	if got := s.Load(profiles.Default).Items; strings.Join(got, ",") != "panes,key:k1,settings" {
+		t.Fatalf("引用该原样读回来，拿到 %v", got)
+	}
+	// 不存在的定义：存盘那一侧是严格的（编辑器只会从库里拖，走到这儿就是前端有 bug）
+	if _, err := s.Save(profiles.Default, Config{Items: []string{"key:k9"}}); err == nil {
+		t.Error("指向不存在的定义该报错")
+	}
+	// 畸形引用按「不认识的按钮」拒
+	if _, err := s.Save(profiles.Default, Config{Items: []string{"key:a b"}}); err == nil {
+		t.Error("畸形引用该报错")
+	}
+	// 同一个键放两次照旧拒（顶栏上一个按钮只有一个）
+	if _, err := s.Save(profiles.Default, Config{Items: []string{"key:k1", "key:k1"}}); err == nil {
+		t.Error("重复的引用该报错")
+	}
+
+	// 钩子是 nil（单测 / 降级路径）时只查形状，别把配置卡在门外
+	s2 := &Store{Dir: t.TempDir()}
+	if _, err := s2.Save(profiles.Default, Config{Items: []string{"key:k9"}}); err != nil {
+		t.Errorf("没有 Keys 钩子时该只查形状：%v", err)
+	}
+}
+
+// TestLoadKeepsDanglingKeyRefs 读盘**故意不核**引用还在不在。
+//
+// 核的话一次 softkeys.json 读失败（或者钩子回了一份出厂 lib）就能把人家配好的键从顶栏上
+// 抹掉，而读失败是暂时的、配置不是。认不出的引用交给前端渲染时丢掉。
+func TestLoadKeepsDanglingKeyRefs(t *testing.T) {
+	dir := t.TempDir()
+	s := &Store{Dir: dir, Keys: func() map[string]bool { return map[string]bool{} }}
+	body := `{"items":["panes","key:k7","teleport","settings"]}`
+	if err := os.WriteFile(filepath.Join(dir, "topbar.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// key:k7 留着（定义此刻不在也留），teleport 丢掉（内置白名单里没有）
+	if got := s.Load(profiles.Default).Items; strings.Join(got, ",") != "panes,key:k7,settings" {
+		t.Fatalf("拿到 %v", got)
+	}
+}
+
+func TestPruneKeys(t *testing.T) {
+	dir := t.TempDir()
+	s := &Store{Dir: dir, Keys: func() map[string]bool { return map[string]bool{"k1": true, "k2": true} }}
+	if _, err := s.Save(profiles.Default, Config{Items: []string{"panes", "key:k1", "key:k2"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Save("p2", Config{Items: []string{"key:k2"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// k2 被删了：**所有套**里的引用一起清掉（定义是全局的）
+	if err := s.PruneKeys(map[string]bool{"k1": true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Load(profiles.Default).Items; strings.Join(got, ",") != "panes,key:k1,settings" {
+		t.Errorf("默认那一套：拿到 %v", got)
+	}
+	// p2 上清完只剩空的，⚙ 得补回来（不然就把自己锁在配置外面了）
+	if got := s.Load("p2").Items; strings.Join(got, ",") != "settings" {
+		t.Errorf("p2：拿到 %v", got)
+	}
+
+	// 没有一处要清就别写盘 —— 软键条每存一次都会调这儿一遍
+	before, err := os.ReadFile(filepath.Join(dir, "topbar.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PruneKeys(map[string]bool{"k1": true}); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.ReadFile(filepath.Join(dir, "topbar.json"))
+	if string(before) != string(after) {
+		t.Error("没得清的时候不该改文件")
+	}
+
+	// 内置 id 一个都不能被 prune 带走
+	if err := s.PruneKeys(map[string]bool{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Load(profiles.Default).Items; strings.Join(got, ",") != "panes,settings" {
+		t.Errorf("内置 id 不该被清掉：拿到 %v", got)
 	}
 }

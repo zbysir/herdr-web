@@ -28,7 +28,7 @@ import (
 //
 // 两个理由都是实测的：claude / codex 干活时状态会短暂抖回 idle（立刻读会读到上一个任务的
 // 尾巴，还会为一次抖动弹一个假的「跑完了」）；而 `pane.read` 的快照本身就有一帧延迟
-// （HERDR-API.md）。2.5s 是 herdr-sight 那边试出来的值，这里沿用。
+// （docs/dev/HERDR-API.md）。2.5s 是 herdr-sight 那边试出来的值，这里沿用。
 //
 // 代价是提示比状态点晚 2.5 秒 —— 值得：弹错一次的成本比晚两秒高得多。
 //
@@ -247,7 +247,7 @@ func (w *Watcher) emit(p herdr.Pane, status string) {
 	 *
 	 * 这条是用出来的：一个 agent 停下来问你话，你切过去、正在想怎么答，它又弹了一遍
 	 * 「等你回答」—— 明明是同一个提问，你人就在那一页上。根子是 herdr 的状态识别本来
-	 * 就会抖（同一个对话框一会儿报 blocked 一会儿报 idle，HERDR-API.md 里记过），
+	 * 就会抖（同一个对话框一会儿报 blocked 一会儿报 idle，docs/dev/HERDR-API.md 里记过），
 	 * 而你**正在打字**，屏幕内容一直变，「内容一样就不弹」那条去重也就失效了。
 	 *
 	 * 「重新开过工」（worked）才是「这是下一件事」的标志：你答完 → 它开始跑 → 再问你，

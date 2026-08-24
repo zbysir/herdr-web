@@ -3,17 +3,23 @@
 浏览器里的 herdr 终端 + **语音投稿**（平板手写笔说话打字、框选重说改字，投进 herdr 的 agent pane）。
 
 一个 Go 二进制，前端（React + Vite + Tailwind）嵌在里面：`make build` → `./herdr-web`。
-怎么装、怎么用、环境变量清单：[README.zh-CN.md](README.zh-CN.md)。
-移动端那一整套（手势 / 键盘 / 面板 / 顶栏 / 提示）：[MOBILE.md](MOBILE.md)。
-代码结构、发版、配色、已经踩过的坑：本文档末尾。
+**文档分两层**：根目录是**使用说明**（怎么装 / 怎么用 / 怎么配 / 放哪儿跑），
+[`docs/dev/`](docs/dev/) 是**开发理由**（为什么这么设计、实测出来的语义、会静默出错的坑）。
+两种读者要的东西完全不一样，混在一份里两边都读不下去。
 
-动这三块之前先读对应的那份 —— 里面是实测出来的语义和一串**会静默出错**的坑：
+- 使用说明：[README.zh-CN.md](README.zh-CN.md) · [DEPLOY.md](DEPLOY.md) · [DNS.md](DNS.md)
+- 开发文档索引：[docs/dev/README.md](docs/dev/README.md)
+- 代码结构、发版、配色、已经踩过的坑：本文档末尾
+
+动这几块之前先读对应的那份 —— 里面是实测出来的语义和一串**会静默出错**的坑：
 
 | 要动 | 读 |
 |---|---|
-| herdr socket 调用（`internal/herdr`、`outbox`、`agentwatch`） | [HERDR-API.md](HERDR-API.md) |
-| 抽输入框（`internal/composer`） | [COMPOSER.md](COMPOSER.md) |
-| 发件箱（`internal/outbox`、`web/src/hooks/useCompose.ts`） | [OUTBOX.md](OUTBOX.md) |
+| herdr socket 调用（`internal/herdr`、`outbox`、`agentwatch`） | [HERDR-API.md](docs/dev/HERDR-API.md) |
+| 抽输入框（`internal/composer`） | [COMPOSER.md](docs/dev/COMPOSER.md) |
+| 发件箱（`internal/outbox`、`web/src/hooks/useCompose.ts`） | [OUTBOX.md](docs/dev/OUTBOX.md) |
+| 触屏 / 移动端的面板、顶栏、提示（`web/src/term/`、`components/`） | [MOBILE.md](docs/dev/MOBILE.md) |
+| 认证、配对、暴露形态、文件浏览那条路 | [SECURITY.md](docs/dev/SECURITY.md) |
 
 这几条最容易再踩一遍：
 
@@ -38,12 +44,57 @@
   `agent.list` 看那个全局计数动没动（`decided`）。以及**同一件事只说一次**：状态识别会抖、
   你打字时屏幕又一直变，所以「同一类提示（等你回答 / 跑完了）在它重新开过工之前不再弹」
   （`lastClass` + `worked`）。
+- 能做哪几件事，**只有一份清单**（`internal/capability` + `web/src/capabilities.tsx`）：以前是
+  三份平行的（`topbar.Actions`/`Pinned`、softkeys 的 `acts`、App 里那个 panel 枚举），而它们是
+  同一件事的三个切面。「能出现在哪些界面上」是那一行里的字段（`Topbar`/`Key`/`Panel`/`Pinned`），
+  加一件事 = Go 一行 + TS 一行。四条：① 两边**顺序和 `key` 标记必须一字不差**，
+  `capability.TestMatchJS` 盯着（它连 act 白名单一起盯 —— 那一处原来两边各写一份，对不上时
+  是**完全静默**的：键点下去什么都不发生）；② TS 那边 `KeyAct` / `PanelId` 是**从表里 `Extract`
+  推出来的**，别再手写第二份联合类型；③ **`act` 必须是能上顶栏的 id 的子集**（测试盯着），
+  因为前端拿 act 直接查顶栏那张动作表（`topbarAct`）—— 破了就是「点了没反应且不报错」；
+  ④ 顶栏编辑器的「库」= **服务端那份 ∩ 前端画得出的**（读 GET 回来的 `actions`），别只铺前端
+  那份 —— 不一致时用户能把一个存不进去的按钮拖上去，一保存报「不认识的按钮」。
+  「点了干什么」不在清单里，在 App 的 `topbarAct`（要用 App 的状态和 Session）；软键条把它
+  整张递进去用（`act={(a) => topbarAct[a]}`），**别再写第二份 act→动作的映射**。
+- 弹出组（`Key.Group` + `web/src/components/KeyGroupPopup.tsx`）：一个键在条上**只占一格**，
+  点开浮出一小片键（方向键就该是这个 —— 摊在条上要 3×2 六格，手机竖屏上是半条屏幕）。
+  五条：① **浮窗是 `fixed` 的，条一点都不重排** —— 内联展开会改 dock 高度，而那会一路触发
+  终端重算行列 + SIGWINCH + 冻帧（「改尺寸会闪一下全黑」那条），点一下方向键闪一次屏；
+  ② 视口一变（呼输入法、转屏）**重新定位，不关掉** —— 写成「resize 就关」是错的：Android 上
+  点一下就可能把输入法顶回来，浮窗刚开就自己关，那台机器上等于没这功能；③ 判「点到外面了」
+  只认 `pointerdown`（`click` 在触屏上会丢：浮层在 pointerup 里被卸掉，touch 的 target 钉在
+  已脱离文档的元素上，**不冒泡到 document**）；④ **组里不能再放组**（`resolveConfig` 挡，读盘
+  丢那一格、存盘报错）；⑤ 它是 Lib 里的**定义**不是 lane 上的排布 —— 所以它就是个普通键，
+  能上条、能进固定块、也能上顶栏，而成员键的渲染**复用调用方那一份 `renderKey`**（发字节 /
+  粘滞 / act / 两次确认一处都别重写）。
+- 软键条的宽度和固定块（`internal/softkeys` + `web/src/lib/keys.ts`）：宽度是**几格**
+  （`Key.Span` 1..3，一格 = 前端 `--sk-w`，手机窄一档），不是「宽不宽」—— 整数格才谈得上
+  跨行对齐。老字段 `wide` 留成**降级镜像**（span>=2 时照旧落盘，读的时候反过来认），
+  两个方向都得走通，漏一边的表现是「升级 / 降级之后我调过的宽键全变窄了」。
+  **固定块**（`Pad`）是钉在条一端、**不跟着横滑**的一小片对齐网格（方向键那种）。为什么
+  非得单独做一块：**两行各自横滑**和**跨行对齐**是互斥的（滑一下其中一行对齐就没了），
+  所以对齐只能存在于一块「压根不滑」的原子里。四条：① 它是**排布**不是定义，所以长在 lane
+  上、**每套一份**（格子里放的还是全局定义的 ID）；② `Cells` 按行读、长度固定 `Cols*MaxRows`
+  —— **别按当前 rows 截**，那样「切一行再切回两行」会把第二行的键悄悄吃掉；③ 删定义要清的
+  是**两处**（Bar 和 Pad.Cells），漏了固定块那处的表现是「网格上一个空洞 + 下次保存直接失败，
+  而用户什么都没改」；④ 编辑器里固定块那个筐是**定位格**不是插入序列（`chipdrag` 的
+  `slots`：比「离哪个格子中心最近」，而且空格也要挂 `data-chip`，不然空格压根不是落点），
+  块内两格互拖是**对调**（顶掉的话被顶那个会静悄悄消失）。改列数要**按行重映射**，
+  线性截断会把第二行整段错位。
 - 排布分套（`internal/profiles` + `web/src/lib/prefs.ts`）：**定义全局、排布分套**。软键条的
   「我的按键」是所有套共用一份（改一个按键谱两边一起变），`rows`/`bar` 和顶栏 `items` 每套一份。
   由此来的三条：① 删一个定义要把**所有套**条上的引用一起清掉（`Save` 里 prune），读的时候丢掉
   认不出的引用而**不是**整份退回出厂 —— 那会把没坏的一半也抹了；②「恢复默认」只动这一套的条，
   绝不整份恢复出厂（定义全局，那样会把别的套的键抹掉）；③ `softkeys.json` / `topbar.json` 里
   默认那一套要**镜像到顶层老字段**，不然降级回老版本看到的是「配置自己没了」。
+  **「我的按键」现在有两个界面**：顶栏 `items` 里除了内置按钮的 id 还能放 `key:<定义ID>`
+  （`topbar.KeyPrefix`）—— 动作库只有一份，「顶栏上能不能加个 ctrl+b z」不用每次动白名单。
+  由此三条：① 存盘严格（`Store.Keys` 钩子核定义在不在）、**读盘不核** —— 核的话一次
+  softkeys.json 读失败就能把人家配好的键从顶栏抹掉，认不出的引用交给前端渲染时丢；
+  ② 所以①里那条 prune 也要管顶栏（`topbar.PruneKeys`，挂在**软键条那个口**上，因为两个包
+  互不 import，线接在 `server.New`），漏了就是顶栏上一个画不出来的幽灵项占着名额；
+  ③ `softkeys` 的 `act` 白名单（kbd/img/panes/files/clip/paste）是 `TopbarId` 的**子集**，
+  所以顶栏上那种键的 act 直接走 `topbarAct`，别写第二份映射。
   绑定认的是前端生成的 `installId`，**不是 auth 的设备 ID**（本机直连压根没有那个）；
   设备类别只在「第一次来还没绑」时猜一次，**绝不按屏幕宽度自动切**。
   跟着套走的开关 = 设置里「终端」那一整页（白名单在 `profiles.Prefs`，前端那份在
@@ -80,8 +131,12 @@
 - 文件浏览（`internal/files`、`web/src/term/paths.ts`）：吐内容那条路**绝不能是
   `text/html`** —— 同源 HTML 就是一个能调 `/api/herdr/say` 的跳板。**SVG 能 inline 是
   因为走 `<img>`**（规范的 secure static mode）+ 顶层打开有 CSP `sandbox`，换成内联
-  `<svg>` 就是同源 XSS。认路径的正则要挡中文标点（`a.png。相对的` 会被吞成一个路径），
-  光秃秃的相对路径必须带扩展名（不然 `2026/08/21` 变链接）。都在 [SECURITY.md](SECURITY.md) 和 [MOBILE.md](MOBILE.md)。
+  `<svg>` 就是同源 XSS。认路径的正则要挡中文标点（`a.png。相对的` 会被吞成一个路径）和
+  pane 的竖线（`/tmp/a.pn│`），光秃秃的相对路径必须带扩展名（不然 `2026/08/21` 变链接）。
+  还有一条只在窄屏上现形：**判「路径折在两行上」不能只看 xterm 的 `isWrapped`** —— herdr
+  的 pane 是绝对定位重画的，那个标志永远是 false，于是手机上被 agent 折断的路径只认出前
+  半截。判据是「顶到内容区右边界、一个尾随空格都不剩」（Ink 的 `hard` 折行正好切在列宽上）。
+  都在 [SECURITY.md](docs/dev/SECURITY.md) 和 [MOBILE.md](docs/dev/MOBILE.md)。
 
 ## 约定
 
@@ -123,6 +178,9 @@ internal/
   outbox/             列目标 / 拉回 / 清空 / 投稿 / 推草稿
   softkeys/           软键条配置 + 按键谱解析（data.go 是从旧 JS 版生成的，不是手抄的；
                       testdata/js-snapshot.json 存着当时的快照，测试比对前 6 组）
+  capability/         **能做哪几件事的唯一一份清单**（id + 能出现在哪些界面上）。顶栏的白名单、
+                      软键条的 act 白名单、前端那份按钮目录都从它来 —— 为什么合成一份、
+                      散着会怎么静默出错，在包注释里
   topbar/             顶栏放哪几个按钮（一串 id + 白名单）。和软键条**分两个文件两个口**：
                       混在一起就得处理「只改一半」的偏更新语义，那是静默丢配置的来路
   profiles/           「这台设备用哪一套排布」：名册 + 每个浏览器绑在哪一套 + 跟着套走的
@@ -149,9 +207,12 @@ assets/               图标（herdr 的羊关在浏览器窗口里）。**别�
                       一条 1800+ 字符描图路径，而同一份图形要出圆角版 / 方角版 / 三种 png
 web/                  Vite + React + TS + Tailwind v4 + shadcn 风格组件
   public/             图标和 manifest（Vite 原样拷进 dist，走 / 根路径）
+  src/capabilities.tsx  **能做哪几件事**那份清单的前端一半（图标 / 名字 / 一句说明 + 从表里
+                      推出来的 KeyAct / PanelId）。服务端那一半在 internal/capability
   src/term/           xterm.js 胶水：补协议、触屏手势、重绘看门狗（命令式，不套 React）
-                      paths.ts 把终端里的文件路径变成可点的链接（折行拼回、中文标点
-                      当终止符、截断过的不给链接 —— 每条都是实测踩出来的）
+                      paths.ts 把终端里的文件路径变成可点的链接（折行拼回 —— xterm 折的
+                      和 TUI 自己折的两套、中文标点和竖线当终止符、截断过的不给链接 ——
+                      每条都是实测踩出来的）
                       mobilebar.ts 认 herdr 移动端顶栏那个 switch 按钮（按背景色摊色块），
                       给「点它开我们的面板一览」当判据
   src/hooks/          useCompose（发件箱状态机）、useNotices（提示轮询 + 红点）、
@@ -168,9 +229,14 @@ web/                  Vite + React + TS + Tailwind v4 + shadcn 风格组件
                       Pairing.tsx 是配对页（没配对时只渲染它）
                       SettingsPanel.tsx 是设置面板，顶栏 / 软键条 / 设备是它的三页，
                       ProfilePicker.tsx 是分页条上面那行「这台设备用哪一套排布」
-                      TopbarPanel.tsx 是顶栏编辑器，topbarItems.tsx 是「有哪些按钮」的
-                      唯一一份清单（服务端白名单要和它一致，有测试盯着）
+                      TopbarPanel.tsx 是顶栏编辑器（三个筐：顶栏 / 内置按钮 / 我的按键），
+                      「有哪些内置按钮」在 `src/capabilities.tsx`（那是**全部能做的事**那一份，
+                      服务端 internal/capability 要和它一致，有测试盯着）；「我的按键」那一档
+                      是 `key:<定义ID>` 引用
                       QrScan.tsx 是配对页里的扫码器（BarcodeDetector + 后摄）
+docs/dev/             **开发理由**：为什么这么设计、实测出来的语义、会静默出错的坑
+                      （HERDR-API / COMPOSER / OUTBOX / MOBILE / SECURITY，索引在 README.md）。
+                      根目录只留使用说明 —— 两种读者要的东西不一样
 reference/            最早的 Python 原型，那三份文档里的「已验证」都是拿它验的
 npm/herdr-web/        npm 根包 @bysir/herdr-web：一个 JS 壳，按平台找二进制
 scripts/npm-*.mjs     把 goreleaser 产物摊成 npm 包 / 按顺序发布
@@ -265,6 +331,17 @@ token 全定在 `web/src/index.css` 的 `@theme` 里（暗亮各一份），组�
   ② 视口长回去（键盘没了）而焦点还在输入框上时**主动 blur**，让状态和事实一致 —— 顶栏自己就回来了，
   而且没有可编辑元素可弹。②的判据只在「这个浏览器确实会因为键盘压缩视口」时才生效（有的浏览器
   纹丝不动，见上面「手机」那节）。
+  另外**「键盘收没收」这个判据不能拿 `window.innerHeight` 当基准**：viewport meta 里的
+  `interactive-widget=resizes-content` 会让布局视口跟着键盘一起缩，比值恒等于 1、信号恒 false ——
+  iOS 上照旧对，只在安卓上现形（②那条补救等不到触发，⌨ 一直亮着、要点两下才弹键盘）。
+  基准是「这个朝向上见过的最高那次」（`useKeyboardUp`）。
+- **后台标签页里量不出「打开态 / 高亮」这类样式。** `document.hidden` 为真时 Chrome 不渲染，
+  CSS transition 永远停在 `currentTime: 0`，于是 `getComputedStyle(el).backgroundColor` 返回的是
+  **过渡前**那个颜色 —— 而元素上的 class 明明是对的。用浏览器自动化验样式时会得出「`bg-brand`
+  没生效」这种结论，而且**新建一个同 class 的探针会报出正确的终值**（它没有过渡要跑），于是
+  看着像「同样的 class 在这个位置就是不生效」，能查很久（查过两次）。判据：先看 `document.hidden`
+  和 `requestAnimationFrame` 还跑不跑；要量就先塞一条 `*{transition:none!important}`，
+  或者干脆只断言 class。
 - **触屏上「点了没反应 / 键盘自己弹出来 / 焦点被拽走」这一类，别用合成事件验。** 这条是三轮没修掉
   同一个 bug 换来的：`dispatchEvent` 派出去的合成事件**不会派生兼容鼠标事件**，于是我手动补了一个
   `touchend` —— 而真机上那一下恰恰是唯一必然丢失的事件（浮层在 `pointerup` 的处理里被卸掉，而 touch

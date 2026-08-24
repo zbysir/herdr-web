@@ -80,7 +80,7 @@ The ⚙ at the right end of the top bar is the **settings panel**; its "Devices"
 
 **Out of codes? Go back to the machine and run `herdr-web pair`.** That is not laziness either — see below.
 
-The old never-expiring `~/.herdr-web/token` is demoted to **bootstrap only**: an old bookmark exchanges it for a device credential on first open and scrubs the token out of the URL, after which you should `rm ~/.herdr-web/token`. Details and reasoning in [SECURITY.md](SECURITY.md) (Chinese).
+The old never-expiring `~/.herdr-web/token` is demoted to **bootstrap only**: an old bookmark exchanges it for a device credential on first open and scrubs the token out of the URL, after which you should `rm ~/.herdr-web/token`. Details and reasoning in [SECURITY.md](docs/dev/SECURITY.md) (Chinese).
 
 Once connected it **types `herdr` for you**. To type something else, or nothing: `HERDR_WEB_ONCONNECT` (set it to an empty string to stay in the shell). Adding a path segment to the URL (`/work`) gives you **a different herdr session** — see [First run](#first-run). The old "run herdr" button in the top bar is gone: with autotyping it earns its place less than once a day, and the soft key bar ships a preset for it if you want one.
 
@@ -150,7 +150,7 @@ the page** (an image in the clipboard is uploaded directly). Where the path land
 the outbox is open — appended to your draft, or typed straight into the terminal.
 
 → Why a separate box at all, how images actually work, the two-way caveats, measured polling
-latency: [OUTBOX.md](OUTBOX.md)
+latency: [OUTBOX.md](docs/dev/OUTBOX.md)
 
 ### Soft key bar
 
@@ -166,7 +166,7 @@ Settings → Soft keys.
   the combination.
 - `act:` actions run in the browser and send no bytes: `act:kbd` (system keyboard), `act:img`
   (upload), `act:panes` (pane list), `act:files` (file browsing), `act:clip` / `act:paste`
-  ([copy and paste on a phone](MOBILE.md#手机上怎么复制--粘贴)).
+  ([copy and paste on a phone](docs/dev/MOBILE.md#手机上怎么复制--粘贴)).
 - Every key has a **"double-tap"** checkbox; close pane / close tab / `/clear` ship with it on —
   keys sit close together and a misfire cannot be undone.
 - "Load presets" pours sixty-odd keys into "My keys", after which every one of them is yours to edit.
@@ -189,8 +189,8 @@ It is an index, not a second interface: after the tap you are looking at the sam
 every keyboard habit is unchanged.
 
 → Sort order, the "3 minutes ago" column, when a notice fires, how the badge counts, system
-notifications: [MOBILE.md](MOBILE.md)
-　How that text is scraped off the screen: [COMPOSER.md](COMPOSER.md)
+notifications: [MOBILE.md](docs/dev/MOBILE.md)
+　How that text is scraped off the screen: [COMPOSER.md](docs/dev/COMPOSER.md)
 
 ### File browsing
 
@@ -208,7 +208,7 @@ allowlist would not stop them and would only get in the way daily. If you want o
 `HERDR_WEB_FILE_ROOTS` (that is a real jail); to remove the feature, `HERDR_WEB_FILES=0`.
 
 → The short-lived link route and the four hard rules on it (never `text/html`, why SVG is safe to
-render): [SECURITY.md](SECURITY.md)
+render): [SECURITY.md](docs/dev/SECURITY.md)
 
 ### Phones and tablets
 
@@ -234,7 +234,7 @@ row of keys. **Landscape and portrait keep separate sets**, swapped on rotation.
 arranged on a phone do not follow you to the desktop, while the definitions stay shared.
 
 → Why the gestures are split this way, how the keyboard is handled, copy and paste on a phone, the
-details of the dock and the top bar: [MOBILE.md](MOBILE.md)
+details of the dock and the top bar: [MOBILE.md](docs/dev/MOBILE.md)
 
 ### Settings panel
 
@@ -255,7 +255,7 @@ Keys the browser keeps for itself: on macOS `⌘W` `⌘T` `⌘N` `Ctrl+Tab`; on 
 
 Copy `⌘C` (or `Ctrl+Shift+C`) · paste `⌘V` · clear `⌘K` · `Option` is Meta by default. Copy and
 paste on a phone is a different story — herdr copies to the clipboard of **the machine running
-herdr** — see [MOBILE.md](MOBILE.md#手机上怎么复制--粘贴).
+herdr** — see [MOBILE.md](docs/dev/MOBILE.md#手机上怎么复制--粘贴).
 
 ## Configuration
 
@@ -311,7 +311,7 @@ Changes take effect on restart — configuration is read once at startup. To con
 
 ### Exposure / TLS / credentials
 
-Details in [SECURITY.md](SECURITY.md) (Chinese).
+Details in [SECURITY.md](docs/dev/SECURITY.md) (Chinese).
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -469,20 +469,22 @@ without a PTY), so the door is designed on that premise. What is implemented:
   moving to a new device does not require going back to the machine, and session credential lifetime
   can drop from three months to one day.
 
-→ Threat model, the reasoning behind each choice, what is not built yet: [SECURITY.md](SECURITY.md)
+→ Threat model, the reasoning behind each choice, what is not built yet: [SECURITY.md](docs/dev/SECURITY.md)
 　Reaching it from the internet (frp / tunnels) and the four TLS tiers: [DEPLOY.md](DEPLOY.md)
 
 ## Documents
 
 Everything below is in Chinese — that is where the "why" lives.
 
+**This file, plus DEPLOY / DNS, is the user documentation.** The first five below live in [`docs/dev/`](docs/dev/README.md) — that layer is *why it is built this way*: design rationale, hand-verified semantics, and the traps that fail silently.
+
 | What you want | Where |
 |---|---|
-| Outbox: why a separate box, how images work, measured polling latency | [OUTBOX.md](OUTBOX.md) |
-| Reading the screen: scraping the input line, scraping what the agent said | [COMPOSER.md](COMPOSER.md) |
-| herdr socket API semantics, verified by hand | [HERDR-API.md](HERDR-API.md) |
-| The whole phone / tablet layer (gestures, keyboard, dock, top bar, notices, clipboard) | [MOBILE.md](MOBILE.md) |
-| Security design and threat model; the rules on the file-serving route | [SECURITY.md](SECURITY.md) |
+| Outbox: why a separate box, how images work, measured polling latency | [OUTBOX.md](docs/dev/OUTBOX.md) |
+| Reading the screen: scraping the input line, scraping what the agent said | [COMPOSER.md](docs/dev/COMPOSER.md) |
+| herdr socket API semantics, verified by hand | [HERDR-API.md](docs/dev/HERDR-API.md) |
+| The whole phone / tablet layer (gestures, keyboard, dock, top bar, notices, clipboard) | [MOBILE.md](docs/dev/MOBILE.md) |
+| Security design and threat model; the rules on the file-serving route | [SECURITY.md](docs/dev/SECURITY.md) |
 | Where to run it, public access, TLS tiers | [DEPLOY.md](DEPLOY.md) |
 | Getting a DNS token from each provider and the scope it needs | [DNS.md](DNS.md) |
 | Read before changing code (layout, releasing, colours, the silent traps) | [CLAUDE.md](CLAUDE.md) |

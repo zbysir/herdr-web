@@ -594,3 +594,344 @@ func TestResetRefusesWhenLibFull(t *testing.T) {
 		t.Fatalf("报错之后库被改了：%d 个", len(c.Lib))
 	}
 }
+
+/* ---------------------------------------------------------------- 宽度（span） */
+
+// TestSpanReadLenientWriteStrict 宽度这一档：读盘夹、存盘报错。
+//
+// 两侧不对称是有意的（和 Load / Save 整体一致）：读面对的是老文件和「从新版本降级回来」
+// 的文件，把它挡在门外等于把人家整份配置弄没；存面对的是编辑器，段控件只发 1/2/3，
+// 超范围就是前端有 bug，静默夹只会让 bug 留在那儿。
+func TestSpanReadLenientWriteStrict(t *testing.T) {
+	dir := t.TempDir()
+	s := &Store{Dir: dir}
+
+	// 读：span 超上限夹到 MaxSpan，负数当 1
+	body := `{"keys":[
+		{"id":"k1","label":"A","send":"a","span":99},
+		{"id":"k2","label":"B","send":"b","span":-3}
+	],"bar":[["k1","k2"]]}`
+	if err := os.WriteFile(filepath.Join(dir, "softkeys.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := s.Load(profiles.Default)
+	if got := c.Lib[0].Span; got != MaxSpan {
+		t.Errorf("span 超上限该夹到 %d，拿到 %d", MaxSpan, got)
+	}
+	if got := c.Lib[1].Span; got != 1 {
+		t.Errorf("负数 span 该当 1，拿到 %d", got)
+	}
+
+	// 存：超范围报错
+	if _, err := s.Save(profiles.Default, Config{Rows: 1,
+		Lib: []Key{{ID: "k1", Label: "A", Send: "a", Span: MaxSpan + 1}},
+		Bar: [][]string{{"k1"}}}); err == nil {
+		t.Error("span 超上限该报错")
+	}
+}
+
+// TestSpanMirrorsWideBothWays wide 是 span 的降级镜像，两个方向都要走通。
+//
+// 漏了任一边的表现都是「宽度自己没了」，而且只在升降级之间出现：老版本只认 wide，
+// 不写它就是降级后所有宽键变窄；老版本存回来的文件只有 wide，不认它就是升级后变窄。
+func TestSpanMirrorsWideBothWays(t *testing.T) {
+	dir := t.TempDir()
+	s := &Store{Dir: dir}
+
+	// span >= 2 落盘时要顺带写 wide（给老版本看）
+	if _, err := s.Save(profiles.Default, Config{Rows: 1,
+		Lib: []Key{{ID: "k1", Label: "宽", Send: "a", Span: 2}},
+		Bar: [][]string{{"k1"}}}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "softkeys.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f file
+	if err := json.Unmarshal(b, &f); err != nil {
+		t.Fatal(err)
+	}
+	if f.Keys[0].Span != 2 || !f.Keys[0].Wide {
+		t.Errorf("span=2 该同时落 span 和 wide（降级镜像）：%+v", f.Keys[0])
+	}
+
+	// 反过来：只有 wide 的老文件（或降级后存的）读出来是 2 格
+	old := `{"keys":[{"id":"k1","label":"宽","send":"a","wide":true}],"bar":[["k1"]]}`
+	if err := os.WriteFile(filepath.Join(dir, "softkeys.json"), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Load(profiles.Default).Lib[0].Span; got != 2 {
+		t.Errorf("只有 wide 的老文件该读成 2 格，拿到 %d", got)
+	}
+
+	// 1 格不写 wide（别在文件里留一个和 span 打架的字段）
+	if _, err := s.Save(profiles.Default, Config{Rows: 1,
+		Lib: []Key{{ID: "k1", Label: "窄", Send: "a", Span: 1}},
+		Bar: [][]string{{"k1"}}}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = os.ReadFile(filepath.Join(dir, "softkeys.json"))
+	if strings.Contains(string(b), `"wide"`) {
+		t.Errorf("1 格不该落 wide：%s", b)
+	}
+}
+
+/* ------------------------------------------------------------ 固定块（Pad） */
+
+// TestPadRoundTripAndValidation 固定块存得进、读得回，列数和引用都校验。
+func TestPadRoundTripAndValidation(t *testing.T) {
+	dir := t.TempDir()
+	s := &Store{Dir: dir}
+	lib := []Key{
+		{ID: "k1", Label: "↑", Send: "up"}, {ID: "k2", Label: "↓", Send: "down"},
+		{ID: "k3", Label: "←", Send: "left"}, {ID: "k4", Label: "→", Send: "right"},
+	}
+	// 经典方向键盘：上面一行中间一个 ↑，下面一行 ← ↓ →
+	arrows := &Pad{Cols: 3, Cells: []string{"", "k1", "", "k3", "k2", "k4"}}
+
+	out, err := s.Save(profiles.Default, Config{Rows: 2, Lib: lib, Bar: [][]string{{"k1"}, {}}, Pad: arrows})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Pad == nil || out.Pad.Cols != 3 || out.Pad.Side != "right" {
+		t.Fatalf("存回来的固定块不对（side 该默认靠右）：%+v", out.Pad)
+	}
+	if got := strings.Join(out.Pad.Cells, ","); got != ",k1,,k3,k2,k4" {
+		t.Fatalf("格子顺序该原样保住（按行读）：%q", got)
+	}
+	if got := s.Load(profiles.Default).Pad; got == nil || strings.Join(got.Cells, ",") != ",k1,,k3,k2,k4" {
+		t.Fatalf("读回来的固定块不对：%+v", got)
+	}
+
+	// 列数越界
+	if _, err := s.Save(profiles.Default, Config{Rows: 2, Lib: lib, Bar: [][]string{{"k1"}},
+		Pad: &Pad{Cols: MaxPadCols + 1, Cells: []string{"k1"}}}); err == nil {
+		t.Error("列数超上限该报错")
+	}
+	// 引用不存在的定义：存盘报错
+	if _, err := s.Save(profiles.Default, Config{Rows: 2, Lib: lib, Bar: [][]string{{"k1"}},
+		Pad: &Pad{Cols: 2, Cells: []string{"k9"}}}); err == nil {
+		t.Error("固定块引用不存在的定义该报错")
+	}
+	// 一个键都没有 = 没有固定块（别在条上留一块看不见的空地）
+	got, err := s.Save(profiles.Default, Config{Rows: 2, Lib: lib, Bar: [][]string{{"k1"}},
+		Pad: &Pad{Cols: 2, Cells: []string{"", "", "", ""}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Pad != nil {
+		t.Errorf("空的固定块该当成没有：%+v", got.Pad)
+	}
+}
+
+// TestPadCellsKeepFullHeight 格子数**按 Cols*MaxRows 补齐**，不按当前 rows 截。
+//
+// 按 rows 截的话「切一行、再切回两行」会把第二行的键悄悄吃掉 —— 用户只是切了两下显示，
+// 配置却少了东西。
+func TestPadCellsKeepFullHeight(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	lib := []Key{{ID: "k1", Label: "↑", Send: "up"}, {ID: "k2", Label: "↓", Send: "down"}}
+
+	out, err := s.Save(profiles.Default, Config{Rows: 1, Lib: lib, Bar: [][]string{{"k1"}},
+		Pad: &Pad{Cols: 2, Cells: []string{"k1", "", "k2", ""}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(out.Pad.Cells); n != 2*MaxRows {
+		t.Fatalf("格子数该补齐到 %d，拿到 %d", 2*MaxRows, n)
+	}
+	// 一行的时候第二行那个 k2 也还在配置里（显示上接到第一行后面，见 Pad 的注释）
+	if strings.Join(out.Pad.Cells, ",") != "k1,,k2," {
+		t.Fatalf("一行时第二行的格子不该被吃掉：%q", strings.Join(out.Pad.Cells, ","))
+	}
+}
+
+// TestPruneClearsPadCells 删掉一个定义，固定块格子里那个引用也要清掉。
+//
+// 漏了这一处的表现最难查：那块网格上留一个空洞，而且**下次存盘会因为「引用了不存在的
+// 按键」直接失败** —— 而用户什么都没改。
+func TestPruneClearsPadCells(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	lib := []Key{{ID: "k1", Label: "↑", Send: "up"}, {ID: "k2", Label: "↓", Send: "down"}}
+	if _, err := s.Save(profiles.Default, Config{Rows: 2, Lib: lib, Bar: [][]string{{"k1"}, {}},
+		Pad: &Pad{Cols: 2, Cells: []string{"k1", "k2", "", ""}}}); err != nil {
+		t.Fatal(err)
+	}
+	// 在另一套上把 k2 删掉（定义是全局的，这一下会打到默认那一套的固定块上）
+	if _, err := s.Save("p2", Config{Rows: 1, Lib: lib[:1], Bar: [][]string{{"k1"}}}); err != nil {
+		t.Fatal(err)
+	}
+	pad := s.Load(profiles.Default).Pad
+	if pad == nil {
+		t.Fatal("固定块整块不该消失（k1 还在）")
+	}
+	if strings.Join(pad.Cells, ",") != "k1,,," {
+		t.Fatalf("k2 那一格该清空、k1 该留着：%q", strings.Join(pad.Cells, ","))
+	}
+	// 存盘不该因为幽灵引用失败
+	if _, err := s.Save(profiles.Default, s.Load(profiles.Default)); err != nil {
+		t.Errorf("清干净之后该能原样存回去：%v", err)
+	}
+}
+
+// TestPadIsPerProfile 固定块是**排布**，所以每套一份 —— 改一套不该动另一套。
+func TestPadIsPerProfile(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	lib := []Key{{ID: "k1", Label: "↑", Send: "up"}}
+	if _, err := s.Save(profiles.Default, Config{Rows: 2, Lib: lib, Bar: [][]string{{"k1"}, {}},
+		Pad: &Pad{Cols: 1, Cells: []string{"k1", ""}, Side: "left"}}); err != nil {
+		t.Fatal(err)
+	}
+	// p2 上不要固定块
+	if _, err := s.Save("p2", Config{Rows: 1, Lib: lib, Bar: [][]string{{"k1"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Load("p2").Pad; got != nil {
+		t.Errorf("p2 上不该有固定块：%+v", got)
+	}
+	d := s.Load(profiles.Default).Pad
+	if d == nil || d.Side != "left" {
+		t.Errorf("默认那一套的固定块该原样在（side=left）：%+v", d)
+	}
+}
+
+// TestCopyCarriesPad 新建一套是「复制一套」（见 Store.Copy），固定块得跟着走。
+//
+// 漏了的表现是「新建的那一套莫名少了方向键盘」—— 而它是**排布**的一部分，就该跟着复制。
+func TestCopyCarriesPad(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	lib := []Key{{ID: "k1", Label: "↑", Send: "up"}, {ID: "k2", Label: "↓", Send: "down"}}
+	if _, err := s.Save(profiles.Default, Config{Rows: 2, Lib: lib, Bar: [][]string{{"k1"}, {}},
+		Pad: &Pad{Cols: 2, Cells: []string{"k1", "", "k2", ""}, Side: "left"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Copy(profiles.Default, "p2"); err != nil {
+		t.Fatal(err)
+	}
+	got := s.Load("p2").Pad
+	if got == nil {
+		t.Fatal("复制过来的那一套没有固定块")
+	}
+	if got.Cols != 2 || got.Side != "left" || strings.Join(got.Cells, ",") != "k1,,k2," {
+		t.Errorf("复制过来的固定块不对：%+v", got)
+	}
+	// 复制完两套各自一份，改一套不该动另一套
+	if _, err := s.Save("p2", Config{Rows: 1, Lib: lib, Bar: [][]string{{"k1"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if d := s.Load(profiles.Default).Pad; d == nil || d.Side != "left" {
+		t.Errorf("改 p2 不该动默认那一套的固定块：%+v", d)
+	}
+}
+
+/* ------------------------------------------------------------ 弹出组（Group） */
+
+// TestGroupRoundTrip 弹出组：占一格、点开是一片网格。存得进、读得回。
+func TestGroupRoundTrip(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	lib := []Key{
+		{ID: "k1", Label: "↑", Send: "up"}, {ID: "k2", Label: "↓", Send: "down"},
+		{ID: "k3", Label: "←", Send: "left"}, {ID: "k4", Label: "→", Send: "right"},
+		// 条上只占一格的那个键
+		{ID: "g1", Label: "方向", Group: &Group{Cols: 3, Cells: []string{"", "k1", "", "k3", "k2", "k4"}}},
+	}
+	out, err := s.Save(profiles.Default, Config{Rows: 1, Lib: lib, Bar: [][]string{{"g1"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := out.Lib[4].Group
+	if g == nil || g.Cols != 3 {
+		t.Fatalf("组没存住：%+v", out.Lib[4])
+	}
+	// 格子补齐到 Cols*MaxGroupRows，前六格按行原样
+	if n := len(g.Cells); n != 3*MaxGroupRows {
+		t.Errorf("格子该补齐到 %d，拿到 %d", 3*MaxGroupRows, n)
+	}
+	if strings.Join(g.Cells[:6], ",") != ",k1,,k3,k2,k4" {
+		t.Errorf("格子顺序该原样（按行读）：%q", strings.Join(g.Cells[:6], ","))
+	}
+	// 条上只占一格
+	if strings.Join(out.Bar[0], ",") != "g1" {
+		t.Errorf("条上该只有那一个组键：%v", out.Bar[0])
+	}
+	if got := s.Load(profiles.Default).Lib[4].Group; got == nil || strings.Join(got.Cells[:6], ",") != ",k1,,k3,k2,k4" {
+		t.Errorf("读回来的组不对：%+v", got)
+	}
+}
+
+// TestGroupIsItsOwnKind group 和 send / sticky / act 是**四选一**，而且必须有名字。
+//
+// 名字是硬要求：组键在条上只占一格，格子上那个名字是它唯一的说明。别的形态能从按键谱 / act
+// 兜出一个名字，这个兜不出来 —— 空着就是一个看不出是什么的方块。
+func TestGroupIsItsOwnKind(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	g := &Group{Cols: 2, Cells: []string{"k1"}}
+	lib := func(k Key) []Key { return []Key{{ID: "k1", Label: "↑", Send: "up"}, k} }
+
+	// 又是 group 又是 send
+	if _, err := s.Save(profiles.Default, Config{Rows: 1,
+		Lib: lib(Key{ID: "g1", Label: "两种", Send: "esc", Group: g}), Bar: [][]string{{"k1"}}}); err == nil {
+		t.Error("group + send 该报错（四选一）")
+	}
+	// 没名字
+	if _, err := s.Save(profiles.Default, Config{Rows: 1,
+		Lib: lib(Key{ID: "g1", Group: g}), Bar: [][]string{{"k1"}}}); err == nil {
+		t.Error("组键没名字该报错")
+	}
+	// 列数越界
+	if _, err := s.Save(profiles.Default, Config{Rows: 1,
+		Lib: lib(Key{ID: "g1", Label: "宽", Group: &Group{Cols: MaxGroupCols + 1, Cells: []string{"k1"}}}),
+		Bar: [][]string{{"k1"}}}); err == nil {
+		t.Error("列数超上限该报错")
+	}
+}
+
+// TestGroupCannotNest 组里不能再放组 —— 一层就够，嵌套只会变成「点开还要再点开」。
+func TestGroupCannotNest(t *testing.T) {
+	dir := t.TempDir()
+	s := &Store{Dir: dir}
+	inner := Key{ID: "g1", Label: "里", Group: &Group{Cols: 1, Cells: []string{"k1"}}}
+	outer := Key{ID: "g2", Label: "外", Group: &Group{Cols: 1, Cells: []string{"g1"}}}
+	lib := []Key{{ID: "k1", Label: "↑", Send: "up"}, inner, outer}
+
+	if _, err := s.Save(profiles.Default, Config{Rows: 1, Lib: lib, Bar: [][]string{{"k1"}}}); err == nil {
+		t.Fatal("组里放组该报错")
+	}
+	// 读盘那侧**丢掉**那一格而不是整份作废（手改过文件 / 从新版本降级回来）
+	body := `{"keys":[
+		{"id":"k1","label":"↑","send":"up"},
+		{"id":"g1","label":"里","group":{"cols":1,"cells":["k1"]}},
+		{"id":"g2","label":"外","group":{"cols":1,"cells":["g1"]}}
+	],"bar":[["k1"]]}`
+	if err := os.WriteFile(filepath.Join(dir, "softkeys.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := s.Load(profiles.Default)
+	if len(c.Lib) != 3 {
+		t.Fatalf("整份不该作废：%+v", c.Lib)
+	}
+	for _, cell := range c.Lib[2].Group.Cells {
+		if cell == "g1" {
+			t.Error("嵌套那一格该被丢掉")
+		}
+	}
+}
+
+// TestPadCanHoldGroup 固定块里**可以**放组键 —— 那正好是最省地方的用法：
+// 一个永远不滑走的格子，点开是方向键盘。
+func TestPadCanHoldGroup(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	lib := []Key{
+		{ID: "k1", Label: "↑", Send: "up"},
+		{ID: "g1", Label: "方向", Group: &Group{Cols: 1, Cells: []string{"k1"}}},
+	}
+	out, err := s.Save(profiles.Default, Config{Rows: 1, Lib: lib, Bar: [][]string{{"k1"}},
+		Pad: &Pad{Cols: 1, Cells: []string{"g1", ""}}})
+	if err != nil {
+		t.Fatalf("固定块里放组键该允许：%v", err)
+	}
+	if out.Pad == nil || out.Pad.Cells[0] != "g1" {
+		t.Errorf("组键没进固定块：%+v", out.Pad)
+	}
+}

@@ -1,8 +1,10 @@
+import type { KeyAct } from '@/capabilities'
+
 // 所有接口都在 /api 下。
 //
 // 认证走 **HttpOnly cookie**（服务端下发，JS 读不到也改不了），所以 URL 里不再有任何
 // 秘密 —— 书签、浏览器历史、云同步、截图都不再是泄露渠道。凭据绑设备不绑 IP，所以
-// 换 Wi-Fi、换网段都不掉线。一台设备配一次，见 SECURITY.md。
+// 换 Wi-Fi、换网段都不掉线。一台设备配一次，见 docs/dev/SECURITY.md。
 //
 // 凭据放 cookie 而不是 localStorage 是硬要求：iOS 的 ITP 会把「脚本能写的存储」在站点
 // 七天没交互之后清掉，那就变成「隔一周回来又要重新配对」。
@@ -382,6 +384,12 @@ export const filesApi = {
 export interface SoftKey {
   id?: string         // 稳定标识，软键条按这个引用（服务端存盘时补齐）
   label: string
+  /**
+   * 占几格宽（1..MAX_SPAN，见 lib/keys.ts）。一格 = `--sk-w`。
+   * 存「几格」而不是像素，是为了固定块里跨行对得齐 —— 见 `spanStyle` 的注释。
+   */
+  span?: number
+  /** @deprecated span 的降级镜像（服务端按 span 现算下发）。新代码只读 span */
   wide?: boolean
   confirm?: boolean   // 要点两下才发（防误触）
   send?: string    // 解析出来的字节（前端照发）
@@ -391,10 +399,40 @@ export interface SoftKey {
    * 网页端自己处理的动作，不发字节。剪贴板那两个是**两个键**：手机浏览器只在用户手势里
    * 给读 / 写剪贴板，所以「取」（机器剪贴板 → 手机）和「粘」（手机剪贴板 → 终端）各要
    * 用户自己点一下，合不成一个「同步」。
+   *
+   * 类型是**从那份清单推出来的**（`@/capabilities` 的 `KeyAct`，服务端同一张表在
+   * `internal/capability`）——以前这儿手写一份联合类型，和服务端那个白名单对不上时是
+   * 完全静默的：键点下去什么都不发生。
    */
-  act?: 'kbd' | 'img' | 'panes' | 'clip' | 'paste' | 'files'
+  act?: KeyAct
+  /**
+   * 弹出组：这个键在条上**只占一格**，点一下在它旁边弹一小片网格，里面才是那几个键。
+   * 方向键盘就该是这个 —— 摊在条上要 3×2 六格，手机竖屏上那是半条屏幕。
+   *
+   * 这是**原始形状**（格子里是 ID），给编辑器用。渲染看下面那个 `members`。
+   */
+  group?: { cols: number; cells: string[] }
+  /**
+   * `group` 解析好的成员（`libMap` 填上；`null` = 空格子）。**渲染只看这个**。
+   * 组里不能再放组（服务端挡着），所以解析一遍就够，不用递归。
+   */
+  members?: (SoftKey | null)[]
 }
 export interface PresetGroup { group: string; items: SoftKey[] }
+
+/**
+ * 固定块：钉在条一端的一小片**对齐网格**（方向键那种），**不跟着横滑**。
+ *
+ * 为什么要它而不是「把 ← ↓ → 放到 ↑ 底下」：两行各自横滑和跨行对齐是互斥的 —— 滑一下
+ * 其中一行，对齐当场就没了。所以对齐只能存在于「作为一个整体参与滑动的原子」里。
+ *
+ * `cells` **按行读**，长度是 `cols * 2`（两行），空串 = 空格子 —— 方向键盘上方那两个空位
+ * 就是靠它占出来的。它是**排布**不是定义，所以按套存（见 internal/softkeys 的包注释）。
+ */
+export interface Pad { cols: number; cells: string[]; side?: 'left' | 'right' }
+
+/** 解析好的固定块：格子里换成真的定义，`null` = 空格子 */
+export interface ResolvedPad { cols: number; side: 'left' | 'right'; cells: (SoftKey | null)[] }
 /**
  * 软键条配置分两半（见服务端 internal/softkeys 的包注释）：
  * `lib` 是「我的按键」的定义，`bar` 每行是一串指向 lib 的 **id**。
@@ -404,17 +442,45 @@ export interface SoftkeysConfig {
   rows: 1 | 2
   lib: SoftKey[]
   bar: string[][]
+  /** 固定块（没有就是 null / 缺失）。见 Pad */
+  pad?: Pad | null
   /** 这一份是**哪一套**排布的（服务端算出来的，不是请求里那个）—— 编辑器照它写标题 */
   profile?: string
 }
-export interface SoftkeysResponse extends SoftkeysConfig { max: number; maxBar: number; presets: PresetGroup[] }
+export interface SoftkeysResponse extends SoftkeysConfig {
+  max: number
+  maxBar: number
+  /** 固定块最多几列（服务端的 softkeys.MaxPadCols） */
+  maxPadCols: number
+  presets: PresetGroup[]
+}
 
 /**
  * 顶栏配置：`items` 是**一串按钮 id**（顺序就是顶栏上的顺序），按钮长什么样在
- * `components/topbarItems.tsx`。`actions` 是服务端认的全部 id、`pinned` 是不能删的那几个
- * （设置 ⚙ —— 删了就没路回来改配置了），`max` 是上限。
+ * `components/topbarItems.tsx`。`actions` 是服务端认的全部内置 id、`pinned` 是不能删的
+ * 那几个（设置 ⚙ —— 删了就没路回来改配置了），`max` 是上限。
+ *
+ * items 里还可以放 `key:<定义ID>` —— 那不是内置按钮，是「我的按键」里的一个定义
+ * （见 `TOPBAR_KEY` 和服务端 internal/topbar 的包注释）。`actions` 里**不列这些**：
+ * 那份是内置白名单，引用的合法性靠「定义在不在」判。
  */
 export interface TopbarResponse { items: string[]; actions: string[]; pinned: string[]; max: number; profile?: string }
+
+/**
+ * 顶栏上「这一项是引用，不是内置按钮」的记号：`key:k3` 指向「我的按键」里 ID 为 k3 的定义。
+ * 和服务端 `topbar.KeyPrefix` 是同一个字符串。
+ */
+export const TOPBAR_KEY = 'key:'
+
+/**
+ * 认「这一项是不是引用」，给出被引用的定义 ID（不是引用就给 null）。
+ *
+ * 只查形状，**不查定义在不在** —— 那一步在渲染的地方做（拿 `libMap` 查不到就整项跳过，
+ * 和 `resolveBar` 一个做法）。服务端读盘也不核，理由见 internal/topbar 的包注释。
+ */
+export function topbarKeyRef(item: string): string | null {
+  return item.startsWith(TOPBAR_KEY) ? item.slice(TOPBAR_KEY.length) || null : null
+}
 
 /**
  * 一套排布（profile）。**装的是「这类设备上怎么排」**：软键条几行 / 哪些键、顶栏放哪几个、
@@ -437,8 +503,42 @@ export interface ProfilesResponse {
   maxName: number
 }
 
+/**
+ * 「我的按键」按 ID 索引。软键条的 bar、固定块的格子、顶栏的 `key:` 引用都靠它落到定义上。
+ *
+ * 顺手把**弹出组的格子解析成成员**（`members`）：组里放的是引用，而渲染的地方（软键条 /
+ * 顶栏）拿到的是一个个已经解析好的键、手上没有整份 lib。组里不能再放组，所以第二遍就够。
+ */
+export function libMap(lib: SoftKey[]): Map<string, SoftKey> {
+  const raw = new Map(lib.filter((k) => !!k.id).map((k) => [k.id!, k]))
+  const out = new Map<string, SoftKey>()
+  for (const [id, k] of raw) {
+    out.set(id, k.group ? { ...k, members: k.group.cells.map((c) => raw.get(c) ?? null) } : k)
+  }
+  return out
+}
+
+/**
+ * 把固定块格子里的 id 换成真的定义。认不出的当空格子（服务端读盘也是丢掉不报错）。
+ *
+ * `rows` 是这一套的行数：**只有一行时把第二行的格子接到第一行后面**（和 bar 那条规则一个
+ * 道理，服务端在 Config 里留着全部格子不截 —— 切一行再切回两行不该把键吃掉）。那时候谈不上
+ * 对齐，但「不跟着滑」还在。
+ */
+export function resolvePad(lib: SoftKey[], pad: Pad | null | undefined, rows: number): ResolvedPad | null {
+  if (!pad || pad.cols < 1) return null
+  const by = libMap(lib)
+  const side = pad.side === 'left' ? 'left' : 'right'
+  const cells = pad.cells.map((id) => by.get(id) ?? null)
+  if (rows === 1) {
+    const flat = cells.filter((k): k is SoftKey => !!k)
+    return flat.length ? { cols: flat.length, side, cells: flat } : null
+  }
+  return cells.some(Boolean) ? { cols: pad.cols, side, cells } : null
+}
+
 /** 把 bar 里的 id 换成真的按键定义。认不出的 id 直接跳过（服务端不该给出这种，防一手） */
 export function resolveBar(lib: SoftKey[], bar: string[][]): SoftKey[][] {
-  const by = new Map(lib.map((k) => [k.id, k]))
+  const by = libMap(lib)
   return bar.map((row) => row.map((id) => by.get(id)).filter((k): k is SoftKey => !!k))
 }

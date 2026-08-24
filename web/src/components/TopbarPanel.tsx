@@ -1,46 +1,82 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { X } from 'lucide-react'
-import { api, type TopbarResponse } from '@/lib/api'
+import { api, libMap, TOPBAR_KEY, topbarKeyRef, type SoftKey, type SoftkeysResponse, type TopbarResponse } from '@/lib/api'
 import { useChipDrag, type ChipAt } from '@/lib/chipdrag'
-import { TOPBAR_BY_ID, TOPBAR_ITEMS, type TopbarId } from './topbarItems'
+import { spanStyle } from '@/lib/keys'
+import { CAP_BY_ID, TOPBAR_ITEMS, type CapId } from '@/capabilities'
 import { Button } from './ui/button'
 import { cn } from '@/lib/utils'
 
 /**
- * 顶栏编辑器：**上面是顶栏，下面是没上栏的按钮，按住拖上去**。
+ * 顶栏编辑器：**上面是顶栏，下面是没上栏的，按住拖上去**。
  *
  * 和软键条那一页是同一个形状（库在下、栏在上、拖进去），手势也是同一份
  * （`lib/chipdrag`）—— 两套排布界面各写一遍拖动，是「同一个动作两种手感」的来路。
  *
- * 差别在数据：顶栏就是**一串 id**，没有「定义」那一层（按钮长什么样是内置的，见
- * `topbarItems.tsx`），所以库里那些是「还没上栏的」，拖上去就从库里消失 —— 顶栏上同一个
- * 按钮放两次没有意义（软键条那边 Esc 两行各放一个是有意义的，这里没有对应的场景，
- * 服务端也直接拒了重复）。
+ * 下面的库有**两个**：
+ *
+ *   - 「内置按钮」：这一版有哪些功能按钮，唯一一份清单在 `topbarItems.tsx`（服务端有一份
+ *     一样的白名单，有测试盯着）。拖上去就从库里消失 —— 顶栏上同一个按钮放两次没有意义
+ *     （软键条那边 Esc 两行各放一个是有意义的，这里没有对应的场景，服务端也直接拒重复）。
+ *   - 「我的按键」：软键条那份定义（`internal/softkeys` 的 Lib）。顶栏上存成
+ *     `key:<定义ID>`，**定义还是那一份** —— 改一处按键谱，软键条和顶栏一起变。于是
+ *     「顶栏上能不能加个 ctrl+b z」不用每次都动一遍白名单。
  *
  * ⚙ 设置**拖不下来**：那是唯一一条改回这份配置的路，而配置是跟着人走的（存服务端），
  * 在手机上删掉，电脑上也就没了。服务端存盘时也会把它补回去，两头都拦一道。
  */
-type Zone = 'bar' | 'lib'
+type Zone = 'bar' | 'lib' | 'keys'
 type At = ChipAt<Zone>
+
+/** 库那两个筐里的顺序都是固定的（内置目录顺序 / 定义顺序），排不动 —— 只有顶栏能排 */
+const isLib = (z: Zone) => z !== 'bar'
+
+/**
+ * 一个 item 在编辑器里长什么样。`gone` = 引用指到空处了（定义被删掉了）。
+ * `span` 只有「我的按键」那种有：编辑器里也照它显示宽窄，不然拖上去才发现顶栏上不一样。
+ */
+interface Face { label: string; hint: string; icon?: ReactNode; mono?: boolean; gone?: boolean; span?: number }
 
 export function TopbarPanel({
   onSaved, toast, profile,
 }: {
   /** 存好之后把新顺序交回去，顶栏立刻跟着变（不用刷新页面） */
-  onSaved: (items: TopbarId[]) => void
+  onSaved: (items: string[]) => void
   toast: (m: string) => void
   /** 改**哪一套**（见 internal/profiles 和 SoftkeysPanel 里同一个 prop 的注释） */
   profile: { id: string; name: string }
 }) {
-  const [items, setItems] = useState<TopbarId[]>([])
+  const [items, setItems] = useState<string[]>([])
+  /** 「我的按键」的定义（全局的，不分套）—— 顶栏上那些 `key:` 引用靠它落地 */
+  const [keys, setKeys] = useState<SoftKey[]>([])
   const [pinned, setPinned] = useState<string[]>(['settings'])
+  /**
+   * **服务端说哪些能放顶栏**（`capability.TopbarIDs()`）。
+   *
+   * 以前这儿不看它，库直接铺前端那份目录 —— 只要两边有一点不一致，用户就能把一个存不进去的
+   * 按钮拖上去，一保存报「不认识的按钮」。「编辑器里拖得上去、一存报错」是这个项目最不想有的
+   * 那种交互，所以现在**库 = 服务端那份 ∩ 前端认得画的**。
+   *
+   * 空 = 服务端没说（旧后端），那就退回前端那份目录，别把库变成空的。
+   */
+  const [actions, setActions] = useState<string[]>([])
   const [max, setMax] = useState(24)
   const [err, setErr] = useState('')
   const [dirty, setDirty] = useState(false)
 
+  const byKey = libMap(keys)
+
+  /**
+   * 只按**形状**过一遍，不核「这个定义还在不在」。
+   *
+   * 核的话就得等 /softkeys 那一趟也回来才敢渲染，而两趟是并发的 —— 谁先回来决定要不要
+   * 把人家的配置抹掉，这种时序 bug 的表现是「偶尔保存完少一个键」。指到空处的引用照旧
+   * 留在 items 里，画成一块红的「已删掉」让人自己拿下来（见 face）。
+   */
   const take = (r: TopbarResponse) => {
-    setItems(r.items.filter((id): id is TopbarId => TOPBAR_BY_ID.has(id as TopbarId)))
+    setItems(r.items.filter((id) => CAP_BY_ID.has(id as CapId) || !!topbarKeyRef(id)))
     setPinned(r.pinned)
+    setActions(r.actions ?? [])
     setMax(r.max || 24)
     setDirty(false)
   }
@@ -48,7 +84,14 @@ export function TopbarPanel({
   useEffect(() => {
     void (async () => {
       try {
-        take(await api.get<TopbarResponse>(`/topbar?profile=${encodeURIComponent(profile.id)}`))
+        // 两趟一起发、一起落地：分开 set 的话会先闪一排「已删掉」再变回来
+        const [tb, sk] = await Promise.all([
+          api.get<TopbarResponse>(`/topbar?profile=${encodeURIComponent(profile.id)}`),
+          // 定义是全局的，不用带 ?profile=
+          api.get<SoftkeysResponse>('/softkeys'),
+        ])
+        setKeys(sk.lib)
+        take(tb)
       } catch (e) {
         setErr((e as Error).message)
       }
@@ -56,11 +99,35 @@ export function TopbarPanel({
     // 换了一套就整份重读（上面那一行就在同一块面板里，开着也能换）
   }, [profile.id])
 
-  /** 库 = 还没上栏的，按内置目录的顺序（不是用户排的顺序，库里要好找） */
-  const lib = TOPBAR_ITEMS.filter((it) => !items.includes(it.id))
+  /** 内置库 = 服务端认的 ∩ 前端画得出的 ∩ 还没上栏的，按内置目录的顺序（库里要好找） */
+  const lib = TOPBAR_ITEMS.filter(
+    (it) => (actions.length === 0 || actions.includes(it.id)) && !items.includes(it.id),
+  )
+  /** 按键库 = 还没上栏的定义，按「我的按键」里的顺序 */
+  const keyLib = keys.filter((k) => !!k.id && !items.includes(TOPBAR_KEY + k.id))
 
-  const at = (zone: Zone, i: number): TopbarId | undefined =>
-    zone === 'bar' ? items[i] : lib[i]?.id
+  const at = (zone: Zone, i: number): string | undefined => {
+    if (zone === 'bar') return items[i]
+    if (zone === 'lib') return lib[i]?.id
+    const id = keyLib[i]?.id
+    return id ? TOPBAR_KEY + id : undefined
+  }
+
+  const face = (item: string): Face | null => {
+    const ref = topbarKeyRef(item)
+    if (ref) {
+      const k = byKey.get(ref)
+      if (!k) return { label: ref, hint: '这个按键已经不在「我的按键」里了 —— 点 ✕ 拿下来', mono: true, gone: true }
+      return {
+        label: k.label,
+        hint: `我的按键：${k.spec || k.sticky || k.act || ''}${k.confirm ? '（要点两下）' : ''}`,
+        mono: true,
+        span: k.span,
+      }
+    }
+    const it = CAP_BY_ID.get(item as CapId)
+    return it ? { label: it.label, hint: it.hint, icon: it.icon } : null
+  }
 
   /* ------------------------------------------------------------ 拖动 */
 
@@ -69,17 +136,17 @@ export function TopbarPanel({
   const drop = (from: At, to: At) => {
     const id = at(from.zone, from.i)
     if (!id) return
-    if (from.zone === to.zone && from.zone === 'lib') return // 库里的顺序是内置的，排不动
+    if (isLib(from.zone) && isLib(to.zone)) return // 库里的顺序是固定的，排不动
 
     // 库 → 栏：上栏
-    if (from.zone === 'lib' && to.zone === 'bar') {
+    if (isLib(from.zone)) {
       if (items.length >= max) { toast(`顶栏最多放 ${max} 个`); return }
       setItems((prev) => [...prev.slice(0, to.i), id, ...prev.slice(to.i)])
       setDirty(true)
       return
     }
     // 栏 → 栏：排序
-    if (from.zone === 'bar' && to.zone === 'bar') {
+    if (to.zone === 'bar') {
       setItems((prev) => {
         const next = [...prev]
         next.splice(from.i, 1)
@@ -97,7 +164,7 @@ export function TopbarPanel({
     const id = items[i]
     if (!id) return
     if (pinned.includes(id)) {
-      toast(`「${TOPBAR_BY_ID.get(id)?.label}」留着 —— 删了就没路回来改这份配置了`)
+      toast(`「${CAP_BY_ID.get(id as CapId)?.label}」留着 —— 删了就没路回来改这份配置了`)
       return
     }
     setItems((prev) => prev.filter((_, n) => n !== i))
@@ -105,7 +172,7 @@ export function TopbarPanel({
   }
 
   const { drag, over, onChipDown } = useChipDrag<Zone>({
-    zones: () => ['bar', 'lib'],
+    zones: () => ['bar', 'lib', 'keys'],
     elOf: (z) => zoneEl.current[z],
     onDrop: drop,
   })
@@ -116,7 +183,7 @@ export function TopbarPanel({
       if (from.zone !== 'bar') return
       e.preventDefault()
       drop(from, { zone: 'bar', i: from.i + (e.key === 'ArrowLeft' ? -1 : 2) })
-    } else if (e.key === 'ArrowUp' && from.zone === 'lib') {
+    } else if (e.key === 'ArrowUp' && isLib(from.zone)) {
       e.preventDefault()
       drop(from, { zone: 'bar', i: items.length })
     } else if ((e.key === 'ArrowDown' || e.key === 'Delete' || e.key === 'Backspace') && from.zone === 'bar') {
@@ -124,7 +191,7 @@ export function TopbarPanel({
       remove(from.i)
     } else if (e.key === 'Enter' || e.key === ' ') {
       // 点一下 / 回车 = 上栏（拖不动的时候的那条路：鼠标点、键盘按都走这儿）
-      if (from.zone === 'lib') {
+      if (isLib(from.zone)) {
         e.preventDefault()
         drop(from, { zone: 'bar', i: items.length })
       }
@@ -138,7 +205,7 @@ export function TopbarPanel({
     try {
       const r = await api.put<TopbarResponse>(`/topbar?profile=${encodeURIComponent(profile.id)}`, { items })
       take(r)
-      onSaved(r.items.filter((id): id is TopbarId => TOPBAR_BY_ID.has(id as TopbarId)))
+      onSaved(r.items)
       toast(`「${profile.name}」的顶栏已保存`)
     } catch (e) {
       setErr((e as Error).message)
@@ -150,7 +217,7 @@ export function TopbarPanel({
     try {
       const r = await api.del<TopbarResponse>(`/topbar?profile=${encodeURIComponent(profile.id)}`)
       take(r)
-      onSaved(r.items.filter((id): id is TopbarId => TOPBAR_BY_ID.has(id as TopbarId)))
+      onSaved(r.items)
       toast('已恢复默认')
     } catch (e) {
       setErr((e as Error).message)
@@ -159,33 +226,38 @@ export function TopbarPanel({
 
   /* ------------------------------------------------------------ 渲染 */
 
-  const chip = (zone: Zone, i: number, id: TopbarId) => {
-    const it = TOPBAR_BY_ID.get(id)!
-    const fixed = zone === 'bar' && pinned.includes(id)
+  const chip = (zone: Zone, i: number, item: string) => {
+    const f = face(item)
+    if (!f) return null
+    const fixed = zone === 'bar' && pinned.includes(item)
     return (
-      <div key={`${zone}-${id}`} className="flex items-center">
+      <div key={`${zone}-${item}`} className="flex items-center">
         {over?.zone === zone && over.i === i && <span className="mr-1 h-7 w-0.5 shrink-0 rounded-full bg-brand" />}
         <span
           data-chip
-          data-testid={`topbar-chip-${zone}-${id}`}
+          data-testid={`topbar-chip-${zone}-${item}`}
           role="button"
           tabIndex={0}
           title={zone === 'bar'
-            ? `${it.hint} —— 按住拖动排序${fixed ? '（这个删不掉）' : '，✕ 从顶栏拿下来'}`
-            : `${it.hint} —— 按住拖到上面，或者点一下就上栏`}
+            ? `${f.hint} —— 按住拖动排序${fixed ? '（这个删不掉）' : '，✕ 从顶栏拿下来'}`
+            : `${f.hint} —— 按住拖到上面，或者点一下就上栏`}
           className={cn(
             'flex shrink-0 items-center gap-1.5 rounded-md border border-line bg-ctl px-2 py-1.5',
             'text-xs text-fg cursor-grab select-none active:cursor-grabbing',
             'transition-[background-color,border-color] duration-100 hover:border-line-hi hover:bg-ctl-hi',
             fixed && 'border-brand/40 bg-brand/10 text-brand',
+            // 「我的按键」用 mono：和内置按钮（有图标）在同一个筐里也分得开
+            f.mono && 'font-mono',
+            f.gone && 'border-bad/45 bg-bad/10 text-bad',
           )}
+          style={spanStyle(f.span)}
           onPointerDown={(e) => onChipDown(e, { zone, i })}
           onKeyDown={(e) => onChipKey(e, { zone, i })}
           // 库里的点一下就上栏（拖是给排序用的；「加一个」不该非得学会拖）
-          onClick={() => { if (zone === 'lib') drop({ zone, i }, { zone: 'bar', i: items.length }) }}
+          onClick={() => { if (isLib(zone)) drop({ zone, i }, { zone: 'bar', i: items.length }) }}
         >
-          {it.icon}
-          <span className="whitespace-nowrap">{it.label}</span>
+          {f.icon}
+          <span className="whitespace-nowrap">{f.label}</span>
           {zone === 'bar' && !fixed && (
             <X
               className="size-3 shrink-0 text-muted hover:text-bad"
@@ -199,9 +271,9 @@ export function TopbarPanel({
     )
   }
 
-  const box = (zone: Zone, label: string, hint: string, ids: TopbarId[]) => (
+  const box = (zone: Zone, label: string, hint: string, list: string[]) => (
     <div className="flex items-start gap-2">
-      <span className="w-11 shrink-0 pt-2.5 text-xs text-faint">{label}</span>
+      <span className="w-16 shrink-0 pt-2.5 text-xs text-faint">{label}</span>
       <div
         ref={(el) => { zoneEl.current[zone] = el }}
         data-testid={`topbar-zone-${zone}`}
@@ -212,9 +284,9 @@ export function TopbarPanel({
           over?.zone === zone && 'border-brand/60 bg-brand/8',
         )}
       >
-        {ids.map((id, i) => chip(zone, i, id))}
-        {over?.zone === zone && over.i >= ids.length && <span className="h-7 w-0.5 rounded-full bg-brand" />}
-        {ids.length === 0 && over?.zone !== zone && <span className="px-1 py-1.5 text-xs text-faint">{hint}</span>}
+        {list.map((it, i) => chip(zone, i, it))}
+        {over?.zone === zone && over.i >= list.length && <span className="h-7 w-0.5 rounded-full bg-brand" />}
+        {list.length === 0 && over?.zone !== zone && <span className="px-1 py-1.5 text-xs text-faint">{hint}</span>}
       </div>
     </div>
   )
@@ -235,35 +307,47 @@ export function TopbarPanel({
       </div>
 
       {box('bar', '顶栏', '空的 —— 从下面拖一个上来', items)}
-      {box('lib', '没上栏', '都在顶栏上了', lib.map((it) => it.id))}
+      {box('lib', '内置按钮', '都在顶栏上了', lib.map((it) => it.id))}
+      {box('keys', '我的按键', '「我的按键」里的都在顶栏上了 —— 去「软键条」那页加', keyLib.map((k) => TOPBAR_KEY + k.id))}
 
       {err && <p className="text-xs text-bad">{err}</p>}
 
-      <p className="text-xs/relaxed text-muted">
-        按住一个方块拖：从下面拖上去就是加，从上面拖下来（或者点 ✕）就是去掉，栏里拖是排序。
-        库里的方块<strong className="font-medium text-fg">点一下</strong>也能直接加到末尾。手机上按住
-        0.25 秒才算拿起 —— 这一页要能上下滚，不按住就没法区分「滚页面」和「拖这个」。
-        <br />
-        顶栏放不下会<strong className="font-medium text-fg">自己横滑</strong>，不换行、也不会藏起来
-        （原来字号 ± / 明暗在手机竖屏是 CSS 藏掉的）。
-        这一份是<strong className="font-medium text-fg">「{profile.name}」这一套</strong>的，
-        存在服务端（<code className="rounded border border-line bg-ctl px-1 py-px font-mono text-[11px]">~/.herdr-web/topbar.json</code>）——
-        平板放八个图标、手机竖屏放三个，各存一份互不影响；换一套在上面那一行。
-      </p>
+      {/* 就地说明：**只写「怎么用」**，不写「为什么这么设计」—— 理由归 docs/dev/MOBILE.md。
+          混进来的后果是用户面前这一块变成一堵墙（软键条那一页犯过，用户报的） */}
+      <div className="text-xs/relaxed text-muted
+                      [&_code]:rounded [&_code]:border [&_code]:border-line [&_code]:bg-ctl
+                      [&_code]:px-1 [&_code]:py-px [&_code]:font-mono [&_code]:text-[11px] [&_code]:text-fg
+                      [&_strong]:font-medium [&_strong]:text-fg">
+        <ul className="ml-3.5 list-disc space-y-0.5">
+          <li>下面的方块<strong>点一下</strong>就加到顶栏末尾，<strong>按住拖</strong>能放到指定位置。</li>
+          <li>顶栏里拖是排序；拖下来（或点 ✕）就是去掉。⚙ 设置去不掉。</li>
+          <li><strong>「我的按键」</strong>那一筐是软键条上那份定义：拖上来就多一个键。
+            改一处按键谱（在「软键条」那页）两边一起变，在那儿删掉一个，顶栏上也跟着没了 ——
+            所以 <code>ctrl+b z</code> 这种自己配一个拖上来就行。</li>
+          <li>顶栏放不下会<strong>自己横滑</strong>，不换行、也不会藏起来。</li>
+        </ul>
+        <p className="mt-2">
+          这一份是「{profile.name}」这一套自己的 —— 平板放八个图标、手机竖屏放三个，各存一份互不影响；
+          换一套在上面那一行。
+        </p>
+      </div>
 
       {/* 跟着手指走的残影。fixed + pointer-events-none：它自己不能挡住命中判定 */}
       {drag && (() => {
         const id = at(drag.from.zone, drag.from.i)
-        const it = id && TOPBAR_BY_ID.get(id)
-        return it ? (
+        const f = id ? face(id) : null
+        return f ? (
           <span
-            className="pointer-events-none fixed z-50 flex -translate-x-1/2 -translate-y-1/2 items-center gap-1.5
-                       rounded-md border border-brand-line bg-brand-bg px-2 py-1.5 text-xs text-brand-fg
-                       shadow-[0_10px_24px_-8px_rgba(0,0,0,.7)]"
+            className={cn(
+              'pointer-events-none fixed z-50 flex -translate-x-1/2 -translate-y-1/2 items-center gap-1.5',
+              'rounded-md border border-brand-line bg-brand-bg px-2 py-1.5 text-xs text-brand-fg',
+              'shadow-[0_10px_24px_-8px_rgba(0,0,0,.7)]',
+              f.mono && 'font-mono',
+            )}
             style={{ left: drag.x, top: drag.y }}
           >
-            {it.icon}
-            {it.label}
+            {f.icon}
+            {f.label}
           </span>
         ) : null
       })()}

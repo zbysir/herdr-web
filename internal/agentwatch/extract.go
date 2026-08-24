@@ -5,7 +5,7 @@ import "strings"
 // 从一屏终端文字里抽出「这条提示要说的那段话」。
 //
 // 为什么必须读屏抽：herdr 的 API 里没有「agent 最后说了什么」这种字段（和
-// COMPOSER.md 里「没有输入框内容字段」是同一回事，grep 过整份 schema）。而整屏原样塞进
+// docs/dev/COMPOSER.md 里「没有输入框内容字段」是同一回事，grep 过整份 schema）。而整屏原样塞进
 // 弹窗没法看 —— 一屏里除了要看的那段，还躺着上一个任务的尾巴、spinner（`✻ Baked for 20s`）、
 // recap（`※ recap: …`）、输入框那一圈 `────` / `❯`、底下的状态栏（`~/path git:(master)`、
 // `⏵⏵ auto mode`）。
@@ -120,7 +120,7 @@ func askBlock(lines []string, maxLines int) []string {
 	}
 	if start < 0 {
 		// 屏幕上没有对话框。**这不是异常**：`agent_status` 判断不了「正开着对话框」
-		// （实测同一个选择器，一次报 idle 一次报 blocked，见 HERDR-API.md），所以
+		// （实测同一个选择器，一次报 idle 一次报 blocked，见 docs/dev/HERDR-API.md），所以
 		// blocked 常常配着一屏普通输出。这时候按「跑完了」那套抽最后一段话 —— 至少说得出
 		// 它最后说了什么，比把屏幕最底下那二十行原样端上来强得多（那多半是 spinner 和状态栏）。
 		return answerBlock(lines, maxLines)

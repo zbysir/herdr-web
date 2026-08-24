@@ -233,7 +233,7 @@ func TestHandoffMintsTokenNotPairCode(t *testing.T) {
 		t.Error("响应里应当有 handoff")
 	}
 	if out.Code != "" {
-		t.Error("不该再出 code —— 那正是 SECURITY.md §11 禁的那条路")
+		t.Error("不该再出 code —— 那正是 docs/dev/SECURITY.md §11 禁的那条路")
 	}
 	if _, _, err := store.Redeem(banner, "ua", "1.2.3.4"); err != nil {
 		t.Errorf("横幅上那枚配对码被顶掉了：%v", err)

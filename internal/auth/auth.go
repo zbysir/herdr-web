@@ -9,7 +9,7 @@
 //     injection 读走是日常风险，不是理论风险。
 //   - 配对码只在内存里、5 分钟过期、用一次就废。所以磁盘上不存在任何能直接登录的明文。
 //
-// 轮换和重用检测（SECURITY.md 的 L4）还没做，Hash 现在是一个而不是一串。
+// 轮换和重用检测（docs/dev/SECURITY.md 的 L4）还没做，Hash 现在是一个而不是一串。
 package auth
 
 import (
@@ -58,7 +58,7 @@ type Device struct {
 	// Parent 是「把我带出来的那份凭据」的设备 ID（局域网直连交接出来的那种，见
 	// MintHandoff）。空 = 自己配的对，没有上级。
 	//
-	// 这个字段的**唯一**用途是让撤销级联：SECURITY.md §11 不许网页上出配对码，理由是
+	// 这个字段的**唯一**用途是让撤销级联：docs/dev/SECURITY.md §11 不许网页上出配对码，理由是
 	// 「配对码创造的是一份不随创造者一起被撤销的凭据」—— 手机被拿走一次就能留下一台
 	// 踢不掉的设备。交接这条路要成立，就必须让它随上级一起死，否则那条理由原样成立。
 	Parent string `json:"parent,omitempty"`
@@ -78,7 +78,7 @@ type Config struct {
 	// Secure 决定 cookie 要不要 Secure 属性。**http 下必须是 false**，否则浏览器压根
 	// 不发这个 cookie，表现是「一直跳回配对页」而不是报错。
 	Secure bool
-	// LegacyToken："on" | "loopback" | "off"，见 SECURITY.md 的迁移路径。
+	// LegacyToken："on" | "loopback" | "off"，见 docs/dev/SECURITY.md 的迁移路径。
 	LegacyToken string
 	Token       string
 	// TrustLoopback：从 127.0.0.1 连上来的直接放行。**默认关，套 frp / 反代时必须关**
@@ -96,7 +96,7 @@ type Store struct {
 	devs  []*Device
 	codes map[string]time.Time // 配对码 → 过期时刻
 	// handoffs 局域网直连的交接令牌 → 谁交接的 + 什么时候过期。和配对码分开是**故意**的：
-	// 配对码那条路「只有坐在机器前的人能出」是一条写在 SECURITY.md 里的性质，网页上
+	// 配对码那条路「只有坐在机器前的人能出」是一条写在 docs/dev/SECURITY.md 里的性质，网页上
 	// 不能有任何出码的路径。交接令牌是另一种东西 —— 短命、只能在直连那个口上兑换、
 	// 兑出来的设备随上级一起被撤销，见 MintHandoff。
 	handoffs map[string]handoff
@@ -219,7 +219,7 @@ var ErrBadHandoff = errors.New("交接令牌不对、过期了，或者已经用
 
 // MintHandoff 出一枚**局域网直连专用**的交接令牌。
 //
-// 为什么不能复用配对码（这是这块最容易改错的地方）：SECURITY.md §11 明确写了「网页上
+// 为什么不能复用配对码（这是这块最容易改错的地方）：docs/dev/SECURITY.md §11 明确写了「网页上
 // 不出配对码」，理由是配对码创造的是一份**不随创造者一起被撤销**的独立凭据 —— 一份被偷
 // 的 cookie 就成了无限发凭据的机器，`revoke` 变成打地鼠。所以交接令牌在三处都比它窄：
 //
@@ -367,7 +367,7 @@ func (s *Store) Devices() []Device {
 // Revoke 撤销一台设备，**连它交接出去的那些一起**。
 //
 // 级联不是顺手做的方便：局域网直连交接出来的设备（Parent 指着这一台）如果能留下来，
-// 那 SECURITY.md §11 反对「网页上出码」的理由就原样成立了 —— 手机被拿走一次，就留下
+// 那 docs/dev/SECURITY.md §11 反对「网页上出码」的理由就原样成立了 —— 手机被拿走一次，就留下
 // 一台你踢不掉的设备。所以「踢掉手机」必须意味着「它带出来的那些也一起没」。
 func (s *Store) Revoke(id string) (string, bool) {
 	s.mu.Lock()

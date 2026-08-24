@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { X } from 'lucide-react'
 import { AArrowDown, AArrowUp, CircleHalf } from '@/icons'
-import type { ProfilesResponse, SoftKey, State } from '@/lib/api'
+import type { ProfilesResponse, SoftkeysConfig, State } from '@/lib/api'
 import { enableNotify, notifyState, testNotify, type NotifyState } from '@/lib/notify'
 import { Panel } from './ui/panel'
 import { Button } from './ui/button'
@@ -10,7 +10,6 @@ import { Select } from './ui/select'
 import { SoftkeysPanel } from './SoftkeysPanel'
 import { TopbarPanel } from './TopbarPanel'
 import { ProfilePicker } from './ProfilePicker'
-import type { TopbarId } from './topbarItems'
 import { DevicesPanel } from './DevicesPanel'
 import { lanAuto, onLanNow, setLanAuto } from '@/hooks/useLanDirect'
 import { cn } from '@/lib/utils'
@@ -76,9 +75,10 @@ export function SettingsPanel({
   kbdFull: boolean
   onKbdFull: (v: boolean) => void
   heals: number
-  onSaved: (lib: SoftKey[], bar: string[][]) => void
+  onSaved: (c: SoftkeysConfig) => void
   /** 顶栏存好了：把新的那一串 id 交回去，顶栏立刻跟着变（不用刷新页面） */
-  onTopbar: (items: TopbarId[]) => void
+  /** 顶栏那一串：内置按钮的 id，也可能是 `key:<定义ID>`（「我的按键」上了顶栏） */
+  onTopbar: (items: string[]) => void
   toast: (m: string) => void
   /** 启动时那次 /api/state 的结果，「终端」页底下当环境信息显示；没拿到就不显示 */
   state?: State | null

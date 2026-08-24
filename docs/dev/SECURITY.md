@@ -172,7 +172,7 @@ SHA-256 哈希**外加元数据：设备 id、标签（从 UA 猜，可改名）
 - WebSocket 同源握手会自动带 cookie，`/pty` 不用再在 query 里挂秘密（顺带修掉「秘密
   出现在反代 access log 里」）。
 - **一台设备可能有两份凭据**，因为 cookie 是 host-only 的：开了局域网直连
-  （`HERDR_WEB_LAN_PORT`，见 [DEPLOY.md](DEPLOY.md)）之后，同一台平板在公网那个 origin
+  （`HERDR_WEB_LAN_PORT`，见 [DEPLOY.md](../../DEPLOY.md)）之后，同一台平板在公网那个 origin
   和直连那个 origin 上各有一份，设备面板里出现两条。这是作用域决定的，不是重复登记 ——
   而且是个好性质：两份能分别撤销（「家里那份留着，公网那份踢掉」）。切过去那一下靠一个
   **一次性配对码**把凭据带过去（走的就是配对那条路，只是码由已认证的会话自己要），
@@ -260,7 +260,7 @@ SHA-256 哈希**外加元数据：设备 id、标签（从 UA 猜，可改名）
   裸 IP 那个 origin 过了重验窗口只能靠**重新配对**回来。要么把重验关掉，要么让直连地址
   也是个域名（内网 DNS 覆盖，或一条指向内网 IP 的公网 A 记录 —— DNS-01 不需要公网可达，
   那种记录一样能拿到真证书），然后把 `HERDR_WEB_RPID` 设成两个名字的上级域名，两个 origin
-  共用一套 passkey。取舍写在 [DEPLOY.md](DEPLOY.md) 的「凭据在直连那一侧会怎样」。
+  共用一套 passkey。取舍写在 [DEPLOY.md](../../DEPLOY.md) 的「凭据在直连那一侧会怎样」。
 
 结论：**已经在 Tailscale 上的话，passkey 是最优解**（可以直接替掉 TOTP）；裸 LAN IP
 上就走 (a)+(b)。实现成本比 TOTP 高一个量级（注册 + 断言验证，或者引一个

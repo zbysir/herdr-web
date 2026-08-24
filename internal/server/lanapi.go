@@ -39,7 +39,7 @@ func (s *Server) lanInfo() map[string]any {
 
 // apiHandoff 出一枚**局域网直连专用**的交接令牌，只给已认证的会话。
 //
-// 以前这里出的是一枚正常的配对码（`MintCode`），那是个洞：SECURITY.md §11 明确写了
+// 以前这里出的是一枚正常的配对码（`MintCode`），那是个洞：docs/dev/SECURITY.md §11 明确写了
 // 「网页上不出配对码」，理由是配对码创造的是一份**不随创造者一起被撤销**的独立凭据 ——
 // 于是一份被偷的 cookie 就成了无限发凭据的机器，`revoke <id>` 变成打地鼠。现在换成
 // auth.MintHandoff：60 秒、一次性、**只能在直连那个监听上兑换**、兑出来的设备随上级

@@ -87,7 +87,7 @@ async function jump(origin: string) {
   try {
     // 交接令牌，**不是配对码**：60 秒、一次性、只能在直连那个监听上兑换、兑出来的设备
     // 随上级一起被撤销。为什么不能用配对码，见 internal/auth 的 MintHandoff 和
-    // SECURITY.md §11 —— 那是这块唯一不能走捷径的地方。
+    // docs/dev/SECURITY.md §11 —— 那是这块唯一不能走捷径的地方。
     const { handoff } = await api.post<{ handoff: string }>('/handoff')
     u += '?handoff=' + encodeURIComponent(handoff)
   } catch {

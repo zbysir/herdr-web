@@ -129,7 +129,7 @@ type Config struct {
 	ReauthHours int
 
 	// 旧 token 的兼容档位："on" | "loopback" | "off"。
-	// 见 SECURITY.md 的「迁移路径」：这把 token 是明文落盘的长期秘密，只留着换一次
+	// 见 docs/dev/SECURITY.md 的「迁移路径」：这把 token 是明文落盘的长期秘密，只留着换一次
 	// 设备凭据，换完就该删。
 	LegacyToken string
 	Token       string // 旧 token 的明文；没有这个文件就是空
@@ -424,7 +424,7 @@ func (c *Config) BrowserHTTPS() bool { return c.ServesTLS() || c.TLSMode == "pro
 // auth 那边发现新位置没文件、旧位置有，就搬过去。
 func (c *Config) LegacyDataFile(name string) string { return filepath.Join(c.Dir, name) }
 
-// TokenFile 是旧 token 的落盘位置。迁移完就该删掉它（见 SECURITY.md）。
+// TokenFile 是旧 token 的落盘位置。迁移完就该删掉它（见 docs/dev/SECURITY.md）。
 func (c *Config) TokenFile() string { return filepath.Join(c.Dir, "token") }
 
 // legacyToken 只**读**不生成。

@@ -29,7 +29,9 @@ const buttonVariants = cva(
         destructive: 'border border-bad/55 bg-bad/18 text-bad hover:bg-bad/26',
         /** 软键条上的大按键：手指点得中。手机竖屏上窄一号（见 size.key 那条注释） */
         key:
-          'border border-line bg-ctl text-fg font-mono min-w-11 max-phone:min-w-9 ' +
+          // 最小宽 = 一格（--sk-w，手机上窄一档）。占几格由 lib/keys.ts 的 spanStyle
+          // 算成行内 min-width 盖上来 —— 两边同一个变量，格子才对得齐
+          'border border-line bg-ctl text-fg font-mono min-w-[var(--sk-w)] ' +
           'hover:border-line-hi hover:bg-ctl-hi ' +
           // 按下去那一瞬间给绿：触屏上没有 hover，这是唯一的「点到了」的反馈
           'active:translate-y-px active:border-brand/45 active:bg-brand/15 active:text-brand',

@@ -136,6 +136,10 @@ func New(cfg *config.Config, web fs.FS, a *auth.Store, g *auth.Gate, opt Options
 		sess:        map[string]*live{},
 	}
 	s.def = &live{socket: cfg.Socket, outbox: ob, agents: opt.Agents}
+	// 顶栏可以放「我的按键」（items 里的 `key:k3`，见 internal/topbar）。存盘时要核一下
+	// 那个定义还在不在，而 topbar 那个包**故意不 import softkeys**（两个文件两个口），
+	// 所以在这儿把线接上。
+	s.Topbar.Keys = s.Softkeys.LibIDs
 	// 签名密钥在这儿生成：一个进程一把、只在内存里，重启就把所有旧链接作废。
 	// 生成不出来（拿不到系统熵）就让 Sign 留 nil —— 那时候 /_f/ 直接 404，
 	// 文件浏览退化成「列得出来但打不开」，而不是拿一把可预测的密钥继续跑。
@@ -359,7 +363,23 @@ func (s *Server) apiSoftkeys(w http.ResponseWriter, r *http.Request) {
 	prof := s.profileOf(r)
 	out := func(c softkeys.Config) {
 		writeJSON(w, 200, map[string]any{"lib": c.Lib, "bar": c.Bar, "rows": c.Rows,
-			"max": softkeys.MaxKeys, "maxBar": softkeys.MaxBar, "profile": prof})
+			"pad": c.Pad, "max": softkeys.MaxKeys, "maxBar": softkeys.MaxBar,
+			"maxPadCols": softkeys.MaxPadCols, "profile": prof})
+	}
+	// 删掉一个定义之后，顶栏上指向它的 `key:` 引用也得清掉 —— 顶栏和软键条现在共用同一份
+	// 「我的按键」（见 internal/topbar 的包注释）。软键条自己那一侧（条上的引用）在
+	// Save 里已经 prune 过了，这儿补的是另一个界面。
+	//
+	// 失败**不改这次请求的结果**：软键条已经存好了，回一个 400 只会让人再点一次保存
+	// （而那一次一样会失败）。留下的顶栏幽灵项在编辑器里下一次保存时自然消失。
+	prune := func(c softkeys.Config) {
+		keep := make(map[string]bool, len(c.Lib))
+		for _, k := range c.Lib {
+			keep[k.ID] = true
+		}
+		if err := s.Topbar.PruneKeys(keep); err != nil {
+			log.Printf("顶栏清引用：%v", err)
+		}
 	}
 	switch r.Method {
 	case http.MethodGet:
@@ -367,8 +387,9 @@ func (s *Server) apiSoftkeys(w http.ResponseWriter, r *http.Request) {
 		// 的那一套并在响应里说清是哪一套（前端照着改标题）。写才严格，见下面。
 		c := s.Softkeys.Load(prof)
 		writeJSON(w, 200, map[string]any{
-			"lib": c.Lib, "bar": c.Bar, "rows": c.Rows, "profile": prof,
-			"max": softkeys.MaxKeys, "maxBar": softkeys.MaxBar, "presets": softkeys.Presets(),
+			"lib": c.Lib, "bar": c.Bar, "rows": c.Rows, "pad": c.Pad, "profile": prof,
+			"max": softkeys.MaxKeys, "maxBar": softkeys.MaxBar,
+			"maxPadCols": softkeys.MaxPadCols, "presets": softkeys.Presets(),
 		})
 	case http.MethodPut:
 		if err := s.mustProfile(prof); err != nil {
@@ -385,6 +406,7 @@ func (s *Server) apiSoftkeys(w http.ResponseWriter, r *http.Request) {
 			fail(w, 400, err)
 			return
 		}
+		prune(c)
 		out(c)
 	case http.MethodDelete:
 		if err := s.mustProfile(prof); err != nil {
@@ -399,6 +421,7 @@ func (s *Server) apiSoftkeys(w http.ResponseWriter, r *http.Request) {
 			fail(w, 400, err)
 			return
 		}
+		prune(c)
 		out(c)
 	default:
 		fail(w, 405, errf("方法不对"))

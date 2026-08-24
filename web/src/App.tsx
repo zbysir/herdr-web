@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Maximize, Minimize } from './icons'
-import { api, deviceKind, filesApi, resolveBar, SESSION, UNAUTHED, type ClipResult, type FileStat, type Notice, type ProfilesResponse, type SoftKey, type SoftkeysResponse, type State, type TopbarResponse, type UnauthedDetail, type WhoAmI } from '@/lib/api'
+import { api, deviceKind, filesApi, libMap, resolveBar, resolvePad, SESSION, topbarKeyRef, UNAUTHED, type ClipResult, type FileStat, type Notice, type ProfilesResponse, type ResolvedPad, type SoftKey, type SoftkeysConfig, type SoftkeysResponse, type State, type TopbarResponse, type UnauthedDetail, type WhoAmI } from '@/lib/api'
 import { applyPrefs, pushPref } from '@/lib/prefs'
 import { readClipboard, writeClipboard } from '@/lib/clipboard'
 import { Session } from '@/term/session'
@@ -12,6 +12,8 @@ import { useLanDirect } from '@/hooks/useLanDirect'
 import { away, onNotifyClick, showNotify } from '@/lib/notify'
 import { usePhone } from '@/hooks/usePhone'
 import { useKeyboardUp } from '@/hooks/useKeyboardUp'
+import { useArm } from '@/hooks/useArm'
+import { spanStyle } from '@/lib/keys'
 import { Button } from '@/components/ui/button'
 import { Toast } from '@/components/ui/toast'
 import { Dock } from '@/components/Dock'
@@ -19,7 +21,7 @@ import { Softkeys } from '@/components/Softkeys'
 import { Compose } from '@/components/Compose'
 import { SettingsPanel, type SettingsTab, type TermOpts } from '@/components/SettingsPanel'
 import { PaneSwitcher, paneZoomPref } from '@/components/PaneSwitcher'
-import { TOPBAR_BY_ID, TOPBAR_DEFAULT, type TopbarId } from '@/components/topbarItems'
+import { CAP_BY_ID, TOPBAR_DEFAULT, type CapId, type PanelId } from '@/capabilities'
 import { AUTO_MS_DEFAULT, Notices } from '@/components/Notices'
 import { FilesPanel } from '@/components/FilesPanel'
 import { FileViewer } from '@/components/FileViewer'
@@ -28,6 +30,7 @@ import { CopyPrompt } from '@/components/CopyPrompt'
 import { LanPrompt } from '@/components/LanPrompt'
 import { PastePrompt } from '@/components/PastePrompt'
 import { Logo } from '@/components/Logo'
+import { KeyGroupPopup } from '@/components/KeyGroupPopup'
 import { cn } from '@/lib/utils'
 
 /** Safari 的私有全屏 API。lib.dom 里没有这几个，本地补上，省得到处 as any */
@@ -134,7 +137,8 @@ export default function App() {
    *
    * 面板一览（panes）在手机上是换 pane 唯一走得通的路，见 PaneSwitcher。
    */
-  const [panel, setPanel] = useState<'panes' | 'files' | 'settings' | null>(null)
+  // 哪块浮层开着。类型从那份清单推（`PanelId`）—— 以前这儿手写第三份枚举
+  const [panel, setPanel] = useState<PanelId | null>(null)
   const settings = panel === 'settings'
   const panesOpen = panel === 'panes'
   const filesOpen = panel === 'files'
@@ -196,13 +200,29 @@ export default function App() {
   // 编辑器存完把整份配置回传过来
   const [bar, setBar] = useState<SoftKey[][]>([])
   /**
-   * 顶栏上那排图标：**放哪几个、什么顺序**也是服务端存的配置（`topbar.json`，见
+   * 「我的按键」按 ID 索引。软键条的 `bar` 已经解析成定义了，这一份是给**顶栏**用的 ——
+   * 顶栏上放的是 `key:<定义ID>`（见 internal/topbar），渲染时才落到定义上。
+   *
+   * 为什么不在服务端就解析好：定义是全局的、顶栏配置是分套的，服务端那边一解析就等于把
+   * 两个口的数据焊在一起，而「读盘不核引用」那条规矩正是靠它们分开才成立的。
+   */
+  const [keyLib, setKeyLib] = useState<Map<string, SoftKey>>(new Map())
+  /**
+   * 固定块：钉在软键条一端、**不跟着横滑**的一小片对齐网格（方向键那种，见 lib/api.ts
+   * 的 `Pad`）。null = 这一套没配。
+   */
+  const [pad, setPad] = useState<ResolvedPad | null>(null)
+  /**
+   * 顶栏上那排按钮：**放哪几个、什么顺序**也是服务端存的配置（`topbar.json`，见
    * internal/topbar），在设置 →「顶栏」页里拖。这里存的就是那一串 id。
+   *
+   * 一项可能是内置按钮的 id（`CAP_BY_ID` 里那些），也可能是 `key:<定义ID>` ——
+   * 「我的按键」里的一个键放到了顶栏上。所以这儿是 `string[]` 不是 `CapId[]`。
    *
    * 初值用前端那份出厂顺序，别先渲染一条空栏 —— 请求回来之前那一两拍顶栏是空的话，
    * 看着就像坏了（而且「设置」那个入口也不在，连改都没法改）。
    */
-  const [topbar, setTopbar] = useState<TopbarId[]>(TOPBAR_DEFAULT)
+  const [topbar, setTopbar] = useState<string[]>(TOPBAR_DEFAULT)
   /**
    * 这台设备用哪一套排布（profile，见 internal/profiles）。
    *
@@ -550,15 +570,26 @@ export default function App() {
    * 不带 `?profile=`：**哪一套由服务端按这台设备的绑定算**，前端这份 profile.id 只是显示用。
    * 换一套之后也走这儿 —— 绑定在服务端已经改了，这一趟拿回来的就是新那一套。
    */
+  /**
+   * 一份软键条配置铺到界面上。**读回来和编辑器存完都走这一条** —— 两处各摊一遍字段的话，
+   * 加一个字段（rows / pad 都是这么来的）就会漏掉一处，表现是「存完没变，刷新才出来」。
+   */
+  const applySoftkeys = useCallback((c: SoftkeysConfig) => {
+    setBar(resolveBar(c.lib, c.bar))
+    setKeyLib(libMap(c.lib))
+    setPad(resolvePad(c.lib, c.pad, c.rows))
+  }, [])
+
   const loadLayout = useCallback(async () => {
     try {
-      const sk = await api.get<SoftkeysResponse>('/softkeys')
-      setBar(resolveBar(sk.lib, sk.bar))
+      applySoftkeys(await api.get<SoftkeysResponse>('/softkeys'))
     } catch { /* 软键条拿不到就先空着，面板里还能改 */ }
     try {
       const tb = await api.get<TopbarResponse>('/topbar')
-      // 认不出的 id 直接跳过（服务端不该给，防一手 —— 新版本存的配置在旧前端上读到过）
-      setTopbar(tb.items.filter((id): id is TopbarId => TOPBAR_BY_ID.has(id as TopbarId)))
+      // 认不出的直接跳过（服务端不该给，防一手 —— 新版本存的配置在旧前端上读到过）。
+      // `key:` 引用只查形状：那个定义在不在，渲染时拿 keyLib 查（服务端读盘也不核，
+      // 见 internal/topbar 的包注释）
+      setTopbar(tb.items.filter((id) => CAP_BY_ID.has(id as CapId) || !!topbarKeyRef(id)))
     } catch { /* 拿不到就用出厂顺序，顶栏不能空 */ }
   }, [])
 
@@ -997,7 +1028,17 @@ export default function App() {
    * 而这些动作要用 App 的状态和 Session，搬不出去。两边靠 id 对上，服务端那份白名单也是
    * 同一批 id（internal/topbar，有测试盯着两边一致）。
    */
-  const topbarAct: Partial<Record<TopbarId, {
+  // 顶栏上放的「我的按键」里也可能有打了 confirm 的（关 pane 那种）。坐标用 item 本身
+  // （顶栏上一个按钮只有一个，服务端拒重复），keyLib 换了就放下。见 hooks/useArm
+  const { armed, tap } = useArm(keyLib)
+  /**
+   * 顶栏上开着的那个**弹出组**（那一项 + 它的 DOM，浮窗贴着它摆）。
+   * 顶栏在屏幕上半，所以浮窗朝下弹（见 KeyGroupPopup）—— 一个图标格子点开方向键，
+   * 这是最省地方的放法。
+   */
+  const [openGroup, setOpenGroup] = useState<{ item: string; el: HTMLElement } | null>(null)
+
+  const topbarAct: Partial<Record<CapId, {
     on?: boolean
     run: () => void
     /** 覆盖 title（面板一览要写清「几条没看」，全屏要说清是进还是出） */
@@ -1049,20 +1090,70 @@ export default function App() {
    *
    * ring 用顶栏底色，让它像贴在图标上的徽标而不是浮在半空的一块红。
    */
+  const badgeEl = (badge?: number) => !!badge && (
+    <span
+      data-testid="notice-badge"
+      className="absolute -top-1 -right-1 grid h-4 min-w-4 place-items-center rounded-full bg-bad px-1
+                 font-mono text-[10px]/none font-medium text-white ring-2 ring-bar tabular-nums"
+    >
+      {badge > 9 ? '9+' : badge}
+    </span>
+  )
+
   const iconBtn = (title: string, on: boolean, onClick: () => void, child: React.ReactNode, cls?: string, badge?: number) => (
     <Button variant="default" size="icon" on={on} title={title} className={cn('relative', cls)} onClick={onClick} onMouseDown={(e) => e.preventDefault()}>
       {child}
-      {!!badge && (
-        <span
-          data-testid="notice-badge"
-          className="absolute -top-1 -right-1 grid h-4 min-w-4 place-items-center rounded-full bg-bad px-1
-                     font-mono text-[10px]/none font-medium text-white ring-2 ring-bar tabular-nums"
-        >
-          {badge > 9 ? '9+' : badge}
-        </span>
-      )}
+      {badgeEl(badge)}
     </Button>
   )
+
+  /**
+   * 顶栏上的一个**「我的按键」**（items 里的 `key:<定义ID>`，见 internal/topbar）。
+   *
+   * 画成软键条那种 mono 方块而不是图标：顶栏上「图标 = 内置功能、mono 方块 = 我自己配的键」
+   * 一眼分得开，而这两类点下去的后果差得远（一个开面板，一个往 pane 里发字节）。
+   * 高度还是 32px —— `variant="key"` 配默认 size，**别用 `size="key"`**：那一档在手机上
+   * 矮一号（h-7），混在一排图标里就歪了。
+   *
+   * act 那一档直接走 `topbarAct`：softkeys 的 act 白名单（kbd / img / panes / files /
+   * clip / paste）正好是 CapId 的子集，**同一个 id 就是同一件事** —— 亮不亮、角标、
+   * 「这个部署有没有这项」全都跟着内置那份走，不写第二份映射。这也是「动作库只有一份」
+   * 这件事在代码里的样子。
+   */
+  const keyBtn = (item: string, k: SoftKey) => {
+    const ta = k.act ? topbarAct[k.act] : undefined
+    if (ta?.hide) return null   // 比如文件浏览在服务端关掉了：画出来点开是一片 404
+    const up = armed === item   // 举起来了，等第二下
+    const isGroup = !!k.members
+    return (
+      <Button
+        variant="key"
+        on={isGroup ? openGroup?.item === item : (k.sticky ? sticky[k.sticky] : !!ta?.on)}
+        title={up ? '再点一次才真的发出去'
+          : isGroup ? `${k.label}：点开一小片键（浮在下面，不占顶栏的地方）`
+            : `${k.label} —— ${k.spec || k.sticky || k.act || ''}${k.confirm ? '（要点两下）' : ''}`}
+        className={cn('relative',
+          // 举起来只换颜色，**不换文字**：改字会让按键变宽，手指底下的键当场挪位置
+          up && 'border-bad bg-bad text-white hover:border-bad hover:bg-bad')}
+        style={spanStyle(k.span)}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={(e) => {
+          if (!tap(item, k.confirm)) return   // 这一下只是举起来
+          if (isGroup) {
+            const el = e.currentTarget as HTMLElement
+            setOpenGroup((cur) => (cur?.item === item ? null : { item, el }))
+            return
+          }
+          if (ta) ta.run()
+          else if (k.sticky) sess.current?.toggleSticky(k.sticky)
+          else if (k.send) { sess.current?.sendKey(k.send); if (kbdUp) sess.current?.focus() }
+        }}
+      >
+        {k.label}
+        {badgeEl(ta?.badge)}
+      </Button>
+    )
+  }
 
   // 还在查凭据：什么都别渲染。这一步是本机调用，快到看不见；而要是先把主界面铺出来，
   // 就会白建一个 Session —— 服务端那边等于白起一个登录 shell、还按 HERDR_WEB_ONCONNECT
@@ -1190,12 +1281,22 @@ export default function App() {
           className="flex min-w-0 shrink items-center gap-1 overscroll-contain
                      [scrollbar-width:none] flex-nowrap overflow-x-auto [&::-webkit-scrollbar]:hidden"
         >
-          {topbar.map((id) => {
-            const it = TOPBAR_BY_ID.get(id)
-            const act = topbarAct[id]
+          {topbar.map((item) => {
+            // 「我的按键」：定义此刻不在（在别的设备上删掉了）就整项跳过，别画一个
+            // 点了没反应的方块。服务端读盘故意不核这个，见 internal/topbar 的包注释
+            const ref = topbarKeyRef(item)
+            if (ref) {
+              const k = keyLib.get(ref)
+              // 整项都不画（不是画一个空的 span）—— 外面那层有 gap-1，空 span 会留下一道
+              // 说不清来路的缝
+              const el = k && keyBtn(item, k)
+              return el ? <span key={item} className="shrink-0">{el}</span> : null
+            }
+            const it = CAP_BY_ID.get(item as CapId)
+            const act = topbarAct[item as CapId]
             if (!it || !act || act.hide) return null
             return (
-              <span key={id} className="shrink-0">
+              <span key={item} className="shrink-0">
                 {iconBtn(act.title ?? `${it.label}：${it.hint}`, !!act.on, act.run, act.icon ?? it.icon, undefined, act.badge)}
               </span>
             )
@@ -1203,6 +1304,23 @@ export default function App() {
         </div>
       </header>
       )}
+
+      {/* 顶栏上那个组键点开的浮窗。fixed，所以挂在这儿不影响任何布局；
+          顶栏收起来（键盘弹起）时 openGroup 也就没有锚点了，一起收掉 */}
+      {openGroup && !barHidden && (() => {
+        const ref = topbarKeyRef(openGroup.item)
+        const k = ref ? keyLib.get(ref) : undefined
+        if (!k?.members || !k.group) return null
+        return (
+          <KeyGroupPopup
+            cols={k.group.cols}
+            members={k.members}
+            anchor={openGroup.el}
+            onClose={() => setOpenGroup(null)}
+            renderKey={(m, at) => keyBtn(`${openGroup.item}/${at}`, m)}
+          />
+        )
+      })()}
 
       <main className="relative min-h-0 flex-1">
         {/* overflow-hidden：容器一缩（呼输入法）到终端重排完之间，xterm 的画布还是旧的高度，
@@ -1270,7 +1388,8 @@ export default function App() {
             kbdFull={kbdFull}
             onKbdFull={(v) => { setKbdFull(v); pushPref(profile.id, 'kbdFull', v ? '1' : '0', toast) }}
             heals={heals}
-            onSaved={(lib, b) => setBar(resolveBar(lib, b))}
+            // 存完把整份配置回传过来：软键条那一条和顶栏上放的「我的按键」是同一份定义
+            onSaved={applySoftkeys}
             onTopbar={setTopbar}
             toast={toast}
             state={state}
@@ -1324,17 +1443,14 @@ export default function App() {
           keys={showKeys ? (
             <Softkeys
               bar={bar}
+              pad={pad}
               sticky={sticky}
-              kbdUp={kbdUp}
               onSend={(b) => { sess.current?.sendKey(b); if (kbdUp) sess.current?.focus() }}
               onSticky={(w) => sess.current?.toggleSticky(w)}
-              onKeyboard={() => { if (kbdFull && !kbdUp) enterFull(true); sess.current?.toggleKeyboard() }}
-              onImage={() => picker.current?.click()}
-              onPanes={openPanes}
-              notice={noticeDot ? notices.unread.length : 0}
-              onFiles={() => openFiles()}
-              onClip={() => void pullClip()}
-              onPaste={() => void pastePhone()}
+              // act 那一档直接走顶栏那张动作表：softkeys 的 act 白名单是 CapId 的**子集**
+              // （internal/capability 那张表里 Key 那一列），同一个 id 就是同一件事 ——
+              // 亮不亮、角标、「这个部署有没有这项」全都跟着走，不写第二份映射
+              act={(a) => topbarAct[a]}
             />
           ) : null}
         >
