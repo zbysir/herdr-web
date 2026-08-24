@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { X } from 'lucide-react'
 import { api, libMap, TOPBAR_KEY, topbarKeyRef, type SoftKey, type SoftkeysResponse, type TopbarResponse } from '@/lib/api'
 import { useChipDrag, type ChipAt } from '@/lib/chipdrag'
-import { spanStyle } from '@/lib/keys'
 import { CAP_BY_ID, TOPBAR_ITEMS, type CapId } from '@/capabilities'
 import { Button } from './ui/button'
 import { cn } from '@/lib/utils'
@@ -33,9 +32,8 @@ const isLib = (z: Zone) => z !== 'bar'
 
 /**
  * 一个 item 在编辑器里长什么样。`gone` = 引用指到空处了（定义被删掉了）。
- * `span` 只有「我的按键」那种有：编辑器里也照它显示宽窄，不然拖上去才发现顶栏上不一样。
  */
-interface Face { label: string; hint: string; icon?: ReactNode; mono?: boolean; gone?: boolean; span?: number }
+interface Face { label: string; hint: string; icon?: ReactNode; mono?: boolean; gone?: boolean }
 
 export function TopbarPanel({
   onSaved, toast, profile,
@@ -122,7 +120,6 @@ export function TopbarPanel({
         label: k.label,
         hint: `我的按键：${k.spec || k.sticky || k.act || ''}${k.confirm ? '（要点两下）' : ''}`,
         mono: true,
-        span: k.span,
       }
     }
     const it = CAP_BY_ID.get(item as CapId)
@@ -250,7 +247,6 @@ export function TopbarPanel({
             f.mono && 'font-mono',
             f.gone && 'border-bad/45 bg-bad/10 text-bad',
           )}
-          style={spanStyle(f.span)}
           onPointerDown={(e) => onChipDown(e, { zone, i })}
           onKeyDown={(e) => onChipKey(e, { zone, i })}
           // 库里的点一下就上栏（拖是给排序用的；「加一个」不该非得学会拖）

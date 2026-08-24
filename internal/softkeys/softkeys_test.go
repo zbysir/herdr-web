@@ -262,7 +262,7 @@ func TestMatchesJSSnapshot(t *testing.T) {
 	// 快照管的是「按键谱有没有抄错」，不是「后来不许改行为」。哪些预设带 confirm
 	// 由 TestPresetsConfirm 单独锁。
 	cmp := func(what string, got Key, want jsKey) {
-		if got.Label != want.Label || got.Wide != want.Wide ||
+		if got.Label != want.Label ||
 			got.Send != want.Send || got.Sticky != want.Sticky || got.Act != want.Act {
 			t.Errorf("%s 不一致\n go %+v\n js %+v", what, got, want)
 		}
@@ -597,86 +597,6 @@ func TestResetRefusesWhenLibFull(t *testing.T) {
 }
 
 /* ---------------------------------------------------------------- 宽度（span） */
-
-// TestSpanReadLenientWriteStrict 宽度这一档：读盘夹、存盘报错。
-//
-// 两侧不对称是有意的（和 Load / Save 整体一致）：读面对的是老文件和「从新版本降级回来」
-// 的文件，把它挡在门外等于把人家整份配置弄没；存面对的是编辑器，段控件只发 1/2/3，
-// 超范围就是前端有 bug，静默夹只会让 bug 留在那儿。
-func TestSpanReadLenientWriteStrict(t *testing.T) {
-	dir := t.TempDir()
-	s := &Store{Dir: dir}
-
-	// 读：span 超上限夹到 MaxSpan，负数当 1
-	body := `{"keys":[
-		{"id":"k1","label":"A","send":"a","span":99},
-		{"id":"k2","label":"B","send":"b","span":-3}
-	],"bar":[["k1","k2"]]}`
-	if err := os.WriteFile(filepath.Join(dir, "softkeys.json"), []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	c := s.Load(profiles.Default)
-	if got := c.Lib[0].Span; got != MaxSpan {
-		t.Errorf("span 超上限该夹到 %d，拿到 %d", MaxSpan, got)
-	}
-	if got := c.Lib[1].Span; got != 1 {
-		t.Errorf("负数 span 该当 1，拿到 %d", got)
-	}
-
-	// 存：超范围报错
-	if _, err := s.Save(profiles.Default, Config{Rows: 1,
-		Lib: []Key{{ID: "k1", Label: "A", Send: "a", Span: MaxSpan + 1}},
-		Bar: [][]string{{"k1"}}}); err == nil {
-		t.Error("span 超上限该报错")
-	}
-}
-
-// TestSpanMirrorsWideBothWays wide 是 span 的降级镜像，两个方向都要走通。
-//
-// 漏了任一边的表现都是「宽度自己没了」，而且只在升降级之间出现：老版本只认 wide，
-// 不写它就是降级后所有宽键变窄；老版本存回来的文件只有 wide，不认它就是升级后变窄。
-func TestSpanMirrorsWideBothWays(t *testing.T) {
-	dir := t.TempDir()
-	s := &Store{Dir: dir}
-
-	// span >= 2 落盘时要顺带写 wide（给老版本看）
-	if _, err := s.Save(profiles.Default, Config{Rows: 1,
-		Lib: []Key{{ID: "k1", Label: "宽", Send: "a", Span: 2}},
-		Bar: [][]string{{"k1"}}}); err != nil {
-		t.Fatal(err)
-	}
-	b, err := os.ReadFile(filepath.Join(dir, "softkeys.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var f file
-	if err := json.Unmarshal(b, &f); err != nil {
-		t.Fatal(err)
-	}
-	if f.Keys[0].Span != 2 || !f.Keys[0].Wide {
-		t.Errorf("span=2 该同时落 span 和 wide（降级镜像）：%+v", f.Keys[0])
-	}
-
-	// 反过来：只有 wide 的老文件（或降级后存的）读出来是 2 格
-	old := `{"keys":[{"id":"k1","label":"宽","send":"a","wide":true}],"bar":[["k1"]]}`
-	if err := os.WriteFile(filepath.Join(dir, "softkeys.json"), []byte(old), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if got := s.Load(profiles.Default).Lib[0].Span; got != 2 {
-		t.Errorf("只有 wide 的老文件该读成 2 格，拿到 %d", got)
-	}
-
-	// 1 格不写 wide（别在文件里留一个和 span 打架的字段）
-	if _, err := s.Save(profiles.Default, Config{Rows: 1,
-		Lib: []Key{{ID: "k1", Label: "窄", Send: "a", Span: 1}},
-		Bar: [][]string{{"k1"}}}); err != nil {
-		t.Fatal(err)
-	}
-	b, _ = os.ReadFile(filepath.Join(dir, "softkeys.json"))
-	if strings.Contains(string(b), `"wide"`) {
-		t.Errorf("1 格不该落 wide：%s", b)
-	}
-}
 
 /* ------------------------------------------------------------ 固定块（Pad） */
 

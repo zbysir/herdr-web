@@ -396,6 +396,11 @@ export interface SoftKey {
    * `label` 照旧是**名字** —— 挑了图标它还在，只是条上不画字。
    */
   icon?: string
+  /**
+   * 图标摆在哪儿：`only`（默认，只画图标）/ `pre`（图标在前）/ `post`（图标在后）。
+   * `^B 前缀` 这种键名字里那个 `B` 是有意义的，所以要能「图标 + 文字」一起画。
+   */
+  iconAt?: 'only' | 'pre' | 'post'
   confirm?: boolean   // 要点两下才发（防误触）
   send?: string    // 解析出来的字节（前端照发）
   spec?: string    // 用户写的按键谱（编辑器回显）

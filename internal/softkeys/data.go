@@ -15,7 +15,11 @@ func Defaults() []Key {
 		// 出厂就挑好图标的那几个：`⌨` / `↵` 这类字形在很多字体里缺（显示成方框）或者很难看。
 		// **Label 一个字都没动** —— sigOf 认它（「恢复默认」的去重）、快照测试也比它。
 		{Label: "⌨", Icon: "keyboard", Act: "kbd"},
-		{Label: "⌃B 前缀", Wide: true, Send: "ctrl+b"},
+		// 前缀键**不配图标**：它的 Label 里已经有 `⌃` 了，再加一个 ctrl 图标就是
+		// 「^ ⌃B 前缀」两个尖角（试过，更难看）。要图标 + 字的话得把 Label 改成「B 前缀」，
+		// 而 Label 是 sigOf 的一半（「恢复默认」靠它去重）也是快照测试比的东西 —— 为了
+		// 演示一个功能去动出厂 Label 不值当。用户自己在编辑器里改一下就是了。
+		{Label: "⌃B 前缀", Send: "ctrl+b"},
 		{Label: "Ctrl", Sticky: "ctrl"},
 		{Label: "Alt", Sticky: "alt"},
 		{Label: "Esc", Send: "esc"},
@@ -99,7 +103,7 @@ func DefaultBar() []Key {
 func Presets() []PresetGroup {
 	return []PresetGroup{
 		{Group: "前缀 / 通用", Items: []Key{
-			{Label: "⌃B 前缀", Wide: true, Send: "ctrl+b"},
+			{Label: "⌃B 前缀", Send: "ctrl+b"},
 			{Label: "帮助", Send: "ctrl+b ?"},
 			{Label: "设置", Send: "ctrl+b s"},
 			{Label: "侧边栏", Send: "ctrl+b b"},
@@ -158,8 +162,8 @@ func Presets() []PresetGroup {
 			{Label: "⌨ 键盘", Act: "kbd"},
 			{Label: "Ctrl", Sticky: "ctrl"},
 			{Label: "Alt", Sticky: "alt"},
-			{Label: "敲 herdr", Wide: true, Send: "\"herdr\" enter"},
-			{Label: "git status", Wide: true, Send: "\"git status\" enter"},
+			{Label: "敲 herdr", Send: "\"herdr\" enter"},
+			{Label: "git status", Send: "\"git status\" enter"},
 		}},
 		// Claude Code 的斜杠命令。这些不是按键，是往输入框里打字，所以走 text:。
 		// 都带 enter 是为了一下点完 —— 命令补全菜单里已经是唯一匹配，回车直接执行；
@@ -170,9 +174,9 @@ func Presets() []PresetGroup {
 		{Group: "Claude 命令", Items: []Key{
 			{Label: "/new", Send: "text:/new enter"},
 			{Label: "/clear", Send: "text:/clear enter", Confirm: true},
-			{Label: "/compact", Wide: true, Send: "text:/compact enter"},
+			{Label: "/compact", Send: "text:/compact enter"},
 			{Label: "/usage", Send: "text:/usage enter"},
-			{Label: "/context", Wide: true, Send: "text:/context enter"},
+			{Label: "/context", Send: "text:/context enter"},
 			{Label: "/model", Send: "text:/model enter"},
 			{Label: "/resume", Send: "text:/resume enter"},
 			{Label: "/cost", Send: "text:/cost enter"},
@@ -184,16 +188,16 @@ func Presets() []PresetGroup {
 		// 「面板一览」放在软键条上是有讲究的：手机上键盘一弹起来顶栏整段就收掉了（那时候
 		// 那个入口点不到），而软键条正好在拇指底下。
 		{Group: "网页端动作", Items: []Key{
-			{Label: "🖼 传图", Wide: true, Act: "img"},
+			{Label: "🖼 传图", Act: "img"},
 			{Label: "⌨ 键盘", Act: "kbd"},
-			{Label: "▦ 面板", Wide: true, Act: "panes"},
-			{Label: "📁 文件", Wide: true, Act: "files"},
+			{Label: "▦ 面板", Act: "panes"},
+			{Label: "📁 文件", Act: "files"},
 			// 剪贴板两条**必须是两个键**：手机浏览器只在用户手势里给读 / 写剪贴板，
 			// 所以「取」和「粘」各要用户自己点一下，没法合成一个「同步」。
 			// 「取」拿的是跑 herdr 那台机器的剪贴板 —— herdr 的复制落在那儿（实测），
 			// 不取过来手机上哪儿都粘不出来。
-			{Label: "📋 取", Wide: true, Act: "clip"},
-			{Label: "📥 粘", Wide: true, Act: "paste"},
+			{Label: "📋 取", Act: "clip"},
+			{Label: "📥 粘", Act: "paste"},
 		}},
 	}
 }

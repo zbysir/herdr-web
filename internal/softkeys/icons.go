@@ -25,7 +25,7 @@ var KeyIcons = []string{
 	"plus", "minus", "zoom-in", "zoom-out", "max", "min",
 	"split", "menu",
 	// 界面里那几件事 —— 软键 `act:` 那一档最常用的就是这几个，得有对应的图标可挑
-	"panes", "files", "image", "compose", "settings", "theme",
+	"panes", "files", "image", "compose", "settings", "theme", "exit",
 }
 
 // IconOK 这个图标 id 认不认。空串 = 不挑图标（画文字标签），也算认。
@@ -48,6 +48,27 @@ func IconOK(id string) bool {
 func iconOf(id string) string {
 	if IconOK(id) {
 		return id
+	}
+	return ""
+}
+
+// IconAt 图标摆在哪儿（只在挑了图标时有意义）：
+//
+//	""/"only"  只画图标，不画名字（默认，也是原来唯一的行为）
+//	"pre"      图标当**前缀**，后面接名字 —— `[⌃ B]`
+//	"post"     名字在前，图标当**后缀** —— `[新建 +]`
+//
+// 为什么要这一档：`^B 前缀` 这种键，名字里那个 `B` 是**有意义的**（换成别的字母就是另一个
+// 键），而 `^` 那个字形恰恰是丑的那半。只能「图标或文字」二选一的话，这类键只能忍字形。
+var iconAts = map[string]bool{"": true, "only": true, "pre": true, "post": true}
+
+// IconAtOK 认不认这个摆法。
+func IconAtOK(s string) bool { return iconAts[s] }
+
+// iconAtOf 读路径用：认不出的当默认（只画图标）。和 iconOf / spanOf 一个道理。
+func iconAtOf(s string) string {
+	if IconAtOK(s) {
+		return s
 	}
 	return ""
 }

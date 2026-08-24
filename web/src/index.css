@@ -90,12 +90,11 @@
 :root { color-scheme: dark; }
 :root.light { color-scheme: light; }
 
-/* 软键条的**格宽**：一个键 = 一格，`span` 就是「占几格」。
-   固定块（对齐网格）里跨行对齐全靠它是整数格 —— 一个 2 格的键和它上面两个 1 格的键
-   左右边缘对得齐，只有这样才谈得上「对齐」。
-   手机竖屏窄一档（和 --breakpoint-phone 是同一个断点）。
-   变量在这儿而不是写在类名里：button 的 variant.key 和 lib/keys.ts 的 span 都读它，
-   一个数改一处。 */
+/* 软键条的键位宽。现在只有两个用途：
+   ① **可点的最小宽**（键宽本身按内容走 —— 条是横滑的，格子对不齐，所以没有「占几格」
+      那种设置，理由见 internal/softkeys 包注释「宽度」那节）；
+   ② **弹出组浮窗**的列宽 —— 那儿不滚动，所以那里的对齐是真的。
+   手机竖屏窄一档（和 --breakpoint-phone 是同一个断点）。 */
 :root { --sk-w: 44px; --sk-gap: 6px; }
 @media (width < 440px) { :root { --sk-w: 36px; } }
 

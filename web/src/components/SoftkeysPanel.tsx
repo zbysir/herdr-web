@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Download, Plus, Trash2, X } from 'lucide-react'
 import { api, type Pin, type PresetGroup, type SoftKey, type SoftkeysConfig, type SoftkeysResponse } from '@/lib/api'
 import { useChipDrag, type ChipAt } from '@/lib/chipdrag'
-import { MAX_GROUP_COLS, MAX_SPAN, spanStyle } from '@/lib/keys'
+import { MAX_GROUP_COLS } from '@/lib/keys'
 import { KEY_ICONS, keyFace } from '@/keyicons'
 import type { KeyAct } from '@/capabilities'
 import { Button } from './ui/button'
@@ -34,9 +34,9 @@ const kindOf = (k: SoftKey) =>
       : k.act ? `act:${k.act}`
         : (k.spec ?? k.send ?? ''))
 
-/** 把「按键」栏的文本解回一条 SoftKey。id / 名字 / 宽 / 两下这些原样留着。 */
+/** 把「按键」栏的文本解回一条 SoftKey。id / 名字 / 图标 / 两下这些原样留着。 */
 function parseKind(spec: string, k: SoftKey): SoftKey {
-  const keep = { id: k.id, label: k.label, span: k.span, icon: k.icon, confirm: k.confirm }
+  const keep = { id: k.id, label: k.label, icon: k.icon, iconAt: k.iconAt, confirm: k.confirm }
   const m = spec.match(/^(sticky|act):(.+)$/)
   if (m) {
     return m[1] === 'sticky'
@@ -439,8 +439,6 @@ export function SoftkeysPanel({
       'flex shrink-0 items-center gap-1 rounded-md border border-line bg-ctl px-2.5 py-1.5',
       'font-mono text-xs text-fg cursor-grab select-none active:cursor-grabbing',
       'transition-[background-color,border-color,color] duration-100 hover:border-line-hi hover:bg-ctl-hi',
-      // 宽窄跟条上同一个算法（style 里的 spanStyle），不然编辑器里看着一样、拖上去才
-      // 发现不一样。
       // 正在改的那个：淡绿底 + 绿字。别整块涂满 —— 库里几十个键并排，
       // 一块饱和色会把周围的键全压下去
       on && 'border-brand/50 bg-brand/12 text-brand hover:border-brand/50 hover:bg-brand/12',
@@ -477,7 +475,6 @@ export function SoftkeysPanel({
                 role="button"
                 tabIndex={0}
                 className={chipCls(selId === k.id)}
-                style={spanStyle(k.span)}
                 title={
                   zone === 'lib'
                     ? `${kindOf(k)} —— 点一下改它，按住拖到上面就上条（库里这个还在）`
@@ -486,7 +483,7 @@ export function SoftkeysPanel({
                 onPointerDown={(e) => onChipDown(e, { zone, i })}
                 onKeyDown={(e) => onChipKey(e, { zone, i })}
               >
-                {keyFace(k.icon, k.label || kindOf(k) || '（空）')}
+                {keyFace(k, kindOf(k) || '（空）')}
                 {zone !== 'lib' && (
                   <X
                     className="size-3 shrink-0 text-muted hover:text-bad"
@@ -511,8 +508,7 @@ export function SoftkeysPanel({
    * 弹出组那个筐。**定长网格**：空格子也画出来（而且也带 `data-chip`）—— 「往空格里放
    * 一个」是这种筐最主要的用法，不画的话它压根不是落点（见 chipdrag 的 `slots`）。
    *
-   * 列宽用 `minmax(var(--sk-w), auto)`：这一格至少是条上一个键位那么宽，但方块上还有名字
-   * 和 ✕，撑得开就让它撑 —— 编辑器给的是**排布**（哪一格放什么），真正的宽度在条上。
+   * 列宽用 `minmax(var(--sk-w), auto)`：至少一个可点宽，方块上还有名字和 ✕，撑得开就让它撑。
    */
   /* ---------------------------------------------------------------- 钉住 */
 
@@ -577,8 +573,7 @@ export function SoftkeysPanel({
    * 弹出组那片定位格。**空格子也画出来、也带 `data-chip`** ——
    * 「往空格里放一个」是这种筐最主要的用法，不画的话它压根不是落点（见 chipdrag 的 `slots`）。
    *
-   * 列宽用 `minmax(var(--sk-w), auto)`：至少一个键位宽，但方块上还有名字和 ✕，撑得开就让它撑
-   * —— 编辑器给的是**排布**（哪一格放什么），真正的宽度在条上 / 浮窗里。
+   * 列宽用 `minmax(var(--sk-w), auto)`：至少一个可点宽，方块上还有名字和 ✕，撑得开就让它撑。
    */
   const gridBox = (zone: 'group', label: string, cols: number, cells: string[]) => (
     <div className="flex items-start gap-2">
@@ -624,7 +619,7 @@ export function SoftkeysPanel({
               onPointerDown={(e) => onChipDown(e, { zone, i })}
               onKeyDown={(e) => onChipKey(e, { zone, i })}
             >
-              {keyFace(k.icon, k.label || kindOf(k))}
+              {keyFace(k, kindOf(k))}
               <X
                 className="size-3 shrink-0 text-muted hover:text-bad"
                 onPointerDown={(ev) => { ev.stopPropagation(); ev.preventDefault() }}
@@ -758,26 +753,6 @@ export function SoftkeysPanel({
                 onChange={(e) => patchSel((x) => parseKind(e.target.value, x))}
               />
             )}
-            {/* 宽度是**几格**，不是一个「宽不宽」的勾：格数才能跨行对齐（见 lib/keys.ts）。
-                贴成分段控件，和上面「一行 / 两行」同一个样子 —— 三个独立按钮并排时看不出
-                它们是同一个选择 */}
-            <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted">
-              宽
-              <div className="flex overflow-hidden rounded-md border border-line">
-                {Array.from({ length: MAX_SPAN }, (_, i) => i + 1).map((n) => (
-                  <Button
-                    key={n}
-                    size="tiny"
-                    on={(sel.span ?? 1) === n}
-                    title={`占 ${n} 格宽`}
-                    className={cn('rounded-none border-0 px-2', n < MAX_SPAN && 'border-r border-line')}
-                    onClick={() => patchSel((x) => ({ ...x, span: n }))}
-                  >
-                    {n}
-                  </Button>
-                ))}
-              </div>
-            </div>
             <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-muted" title="点两下才真发出去：第一下只是举起来（变红），3 秒不点就放下">
               <Checkbox checked={!!sel.confirm} onCheckedChange={(v) => patchSel((x) => ({ ...x, confirm: !!v }))} />
               两下
@@ -815,6 +790,38 @@ export function SoftkeysPanel({
               </div>
             </div>
 
+            {/* 挑了图标才有意义：图标是**替掉**名字，还是当前缀 / 后缀接着名字。
+                `^B 前缀` 这种键名字里那个 B 是有意义的，只能二选一的话就只能忍 `^` 的字形 */}
+            {sel.icon && (
+              <div className="flex w-full items-center gap-1.5">
+                <span className="shrink-0 text-xs text-faint">摆哪儿</span>
+                <div className="flex overflow-hidden rounded-md border border-line">
+                  {([
+                    ['only', '只图标', '只画图标，不画名字'],
+                    ['pre', '图标+字', '图标在前，名字在后 —— 比如 ⌃ B'],
+                    ['post', '字+图标', '名字在前，图标在后 —— 比如 新建 +'],
+                  ] as const).map(([v, txt, tip], n) => (
+                    <Button
+                      key={v}
+                      size="tiny"
+                      on={(sel.iconAt ?? 'only') === v}
+                      title={tip}
+                      className={cn('rounded-none border-0 px-2', n < 2 && 'border-r border-line')}
+                      onClick={() => patchSel((x) => ({ ...x, iconAt: v }))}
+                    >
+                      {txt}
+                    </Button>
+                  ))}
+                </div>
+                <span className="min-w-0 truncate text-xs text-faint">
+                  条上长这样：
+                </span>
+                <span className="shrink-0 rounded-md border border-line bg-ctl px-2 py-1 font-mono text-xs">
+                  {keyFace(sel, kindOf(sel))}
+                </span>
+              </div>
+            )}
+
             {/* 组里放什么：往空格（·）上拖就是放进那一格，格里两格互拖是对调 */}
             {sel.group && (
               <div className="w-full">{gridBox('group', '组里', sel.group.cols, sel.group.cells)}</div>
@@ -837,23 +844,16 @@ export function SoftkeysPanel({
         <p className="mb-1 font-medium text-fg">怎么用</p>
         <ul className="mb-3 ml-3.5 list-disc space-y-0.5">
           <li>库里的键<strong>点一下改它</strong>，<strong>按住拖到上面</strong>就上条。
-            条上的 ✕ 只是拿下来，定义还在库里 —— 同一个键两行各放一个也行。</li>
-          <li><strong>图标</strong>：挑一个内置的（四十多个：修饰键 / 编辑键 / 方向 / 面板 /
-            文件 / 传图 …），条上就画它不画字。<strong>名字还留着</strong> —— 编辑器里认它，
-            指上去也显示它。选「文字」就是不用图标。</li>
-          <li>整条的<strong>按键样式</strong>（有底色 / 无底色）在设置 →「终端」页，跟着这一套走。</li>
+            条上的 ✕ 只是拿下来，同一个键两行各放一个也行。</li>
           <li>改一处定义，条上（和顶栏上）所有引用一起变。</li>
-          <li>两行<strong>各自横滑</strong>，放不下就滑，不换行。</li>
-          <li><strong>宽</strong> = 占几格（1 / 2 / 3），一格就是一个键位那么宽。</li>
-          <li><strong>两下</strong> = 点两次才真发出去（第一下键变红，3 秒不点自己放下）。
-            关 pane / 关标签这种勾上。</li>
-          <li><strong>弹出组</strong> = 条上<strong>只占一格</strong>，点开在它上面浮出一小片键
-            （<strong>不占条上的地方，条也不重排</strong>）。点<strong>「方向键」</strong>一下就摆好；
-            要别的组合点「弹出组」自己往格子里拖。</li>
-          <li><strong>钉住</strong>：每行下面那条「钉住 左 n 右 n」说的是<strong>头几个 / 尾几个
-            不跟着横滑</strong>。「呼键盘」「Esc」这种每隔十秒要按一次的键，滑走了就等于没有 ——
-            钉住它，只有中间那段跟着滑。框里那条竖线就是界线。</li>
-          <li>弹出组的格子里往空格 <code>·</code> 上拖 = 放进那一格，两格互拖 = 对调。</li>
+          <li><strong>图标</strong>：挑一个内置的，再选摆哪儿（只图标 / 图标+字 / 字+图标）。
+            名字一直留着。</li>
+          <li><strong>两下</strong> = 点两次才发出去。常用于 关 pane、关标签。</li>
+          <li><strong>弹出组</strong> = 条上只占一格，点开浮出一小片键。点「方向键」一下就摆好。</li>
+          <li><strong>钉住</strong> = 每行头几个 / 尾几个不跟着横滑。常用于 键盘、Esc。</li>
+          <li>弹出组的格子里：往空格 <code>·</code> 上拖 = 放进那一格，两格互拖 = 对调。</li>
+          <li>两行<strong>各自横滑</strong>，不换行。键宽按内容自适应，没有「占几格」这回事。</li>
+          <li><strong>按键样式</strong>（有底色 / 无底色）在设置 →「终端」页。</li>
         </ul>
 
         <p className="mb-1 font-medium text-fg">按键谱（「按键」那一栏）</p>
@@ -892,7 +892,7 @@ export function SoftkeysPanel({
           className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-1/2 rounded-md border border-brand-line bg-brand-bg px-2.5 py-1.5 font-mono text-xs text-brand-fg shadow-[0_10px_24px_-8px_rgba(0,0,0,.7)]"
           style={{ left: drag.x, top: drag.y }}
         >
-          {(() => { const k = at(drag.from.zone, drag.from.i); return k ? keyFace(k.icon, k.label || kindOf(k)) : '' })()}
+          {(() => { const k = at(drag.from.zone, drag.from.i); return k ? keyFace(k, kindOf(k)) : '' })()}
         </span>
       )}
     </>

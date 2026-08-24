@@ -13,7 +13,6 @@ import { away, onNotifyClick, showNotify } from '@/lib/notify'
 import { usePhone } from '@/hooks/usePhone'
 import { useKeyboardUp } from '@/hooks/useKeyboardUp'
 import { useArm } from '@/hooks/useArm'
-import { spanStyle } from '@/lib/keys'
 import { keyFace } from '@/keyicons'
 import { Button } from '@/components/ui/button'
 import { Toast } from '@/components/ui/toast'
@@ -1136,7 +1135,6 @@ export default function App() {
         className={cn('relative',
           // 举起来只换颜色，**不换文字**：改字会让按键变宽，手指底下的键当场挪位置
           up && 'border-bad bg-bad text-white hover:border-bad hover:bg-bad')}
-        style={spanStyle(k.span)}
         onMouseDown={(e) => e.preventDefault()}
         onClick={(e) => {
           if (!tap(item, k.confirm)) return   // 这一下只是举起来
@@ -1150,7 +1148,7 @@ export default function App() {
           else if (k.send) { sess.current?.sendKey(k.send); if (kbdUp) sess.current?.focus() }
         }}
       >
-        {keyFace(k.icon, k.label)}
+        {keyFace(k)}
         {badgeEl(ta?.badge)}
       </Button>
     )

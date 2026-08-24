@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react'
 import {
   ArrowBigUp, ArrowDown, ArrowLeft, ArrowRight, ArrowRightToLine, ArrowUp,
-  Check, ChevronsDown, ChevronsUp, ChevronUp, CircleStop, ClipboardPaste, Contrast,
-  Command, Copy, CornerDownLeft, Delete, Eraser, FolderOpen, Image, LayoutGrid,
+  Check, ChevronsDown, ChevronsUp, ChevronUp, CircleStop, CircleX, ClipboardPaste, Contrast,
+  Command, Compass, Copy, CornerDownLeft, Delete, Eraser, FolderOpen, Image, LayoutGrid,
   LogOut, Maximize2, Menu, Minimize2, Minus, Option, Pencil, Plus, RefreshCw,
   Redo2, Search, Settings, Space, Split, Terminal, Trash2, Undo2, X, ZoomIn, ZoomOut,
 } from 'lucide-react'
@@ -22,6 +22,11 @@ import {
  *
  * 那个 Go 测试是拿正则从这个文件里抠 id 的（认「花括号 + id + 引号」这个开头），所以下面
  * 每一条都得让 id 排在最前面、整条写在一行里。
+ *
+ * **`esc` 为什么是 ⊗ 而不是键盘上那个 `⎋`**：`⎋`（缺口圆 + 朝左上的箭头）试了两版，
+ * 圆大了两者糊在一起、圆小了整体读成「撤销」那个 ↺ —— 16px 放不下「圆 + 分离的箭头」
+ * 这两个元素。⊗ 是「取消」，正好是 Esc 干的事，而且一笔一画都认得出。
+ * 门 + 箭头（lucide `LogOut`）不是 Esc，那是「退出 / 登出」，单独留成 `exit`。
  */
 export interface KeyIcon {
   id: string
@@ -74,25 +79,24 @@ const KeyboardGlyph = ({ className }: { className?: string }) => (
 )
 
 /**
- * 方向（一组方向键）：**也是自己画的**。
+ * 方向（一组方向键）：**一个圆 + 一根指针**（罗盘）。
  *
- * lucide 的 `Move` 是四条箭头铺满整个 24 画布，在这排键里比旁边的字重得多、也大得多
- * （用户：「方向按键也太大了吧」）。这儿换成四个**小三角**围着中心，只占框的六成 ——
- * 一眼还是「四个方向」，但重量和 13px 的字对得上。
+ * 这个字形改了五版。前四版全在犯同一个错 —— **想在 16px 里画四个东西**：
  *
- * 用填充三角而不是描边箭头：小尺寸上填充是实的，描边会散。
+ *   1. lucide `Move`（四条带箭杆的箭头铺满画布）：细、碎，比旁边 13px 的字重；
+ *   2. 四个小三角、离中心 3–5 单位：像一撮不相干的装饰点（散）；
+ *   3. 四个三角在中心汇合：连成一块了，但那形状就是 `✦`，读成「闪光」（还和满地的 AI
+ *      图标撞脸）；
+ *   4. 四个 V 形箭头：round cap 一糊，四个尖端连成一个 `◇` 菱形轮廓。
  *
- * 三角**要够大**：第一版收到 5.6–18.4（占框不到六成、每个三角 2.6 单位高），真机上看着
- * 像一撮装饰点而不是四个方向。现在是 4–20（占框七成），每个三角 5 单位高、6.8 宽 ——
- * 和旁边 13px 的字重量相当。
+ * 24 的画布上放四个带方向的标记，两两之间只剩一个描边的间距 —— 缩到 16px 必然粘在一起。
+ * 所以换成**一个**形状：圆 + 斜指针，本身就是「方向 / 导航」，而且只有两笔，缩到多小都不糊。
+ *
+ * 不满意的话别再调这个字形了 —— 那个键的图标是可配的，换成 `up`、或者干脆不用图标
+ * （画「方向」两个字）都行。
  */
 const DpadGlyph = ({ className }: { className?: string }) => (
-  <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden>
-    <path d="M12 4l3.4 5H8.6L12 4Z" />
-    <path d="M12 20l3.4-5H8.6L12 20Z" />
-    <path d="M4 12l5-3.4v6.8L4 12Z" />
-    <path d="M20 12l-5 3.4V8.6l5 3.4Z" />
-  </svg>
+  <Compass className={className} strokeWidth={SW} />
 )
 
 export const KEY_ICONS = [
@@ -100,7 +104,7 @@ export const KEY_ICONS = [
   { id: 'alt', hint: 'Alt / Option（⌥）', icon: <Option className={C} strokeWidth={SW} /> },
   { id: 'shift', hint: 'Shift（⇧）', icon: <ArrowBigUp className={C} strokeWidth={SW} /> },
   { id: 'cmd', hint: 'Cmd（⌘）', icon: <Command className={C} strokeWidth={SW} /> },
-  { id: 'esc', hint: 'Esc / 退出', icon: <LogOut className={C} strokeWidth={SW} /> },
+  { id: 'esc', hint: 'Esc / 取消', icon: <CircleX className={C} strokeWidth={SW} /> },
   { id: 'enter', hint: '回车', icon: <CornerDownLeft className={C} strokeWidth={SW} /> },
   { id: 'tab', hint: 'Tab（⇥）', icon: <ArrowRightToLine className={C} strokeWidth={SW} /> },
   { id: 'space', hint: '空格', icon: <Space className={C} strokeWidth={SW} /> },
@@ -139,14 +143,39 @@ export const KEY_ICONS = [
   { id: 'compose', hint: '发件箱', icon: <Pencil className={C} strokeWidth={SW} /> },
   { id: 'settings', hint: '设置', icon: <Settings className={C} strokeWidth={SW} /> },
   { id: 'theme', hint: '明暗', icon: <Contrast className={C} strokeWidth={SW} /> },
+  { id: 'exit', hint: '退出 / 断开（门 + 箭头）', icon: <LogOut className={C} strokeWidth={SW} /> },
 ] as const satisfies readonly KeyIcon[]
 
 export type KeyIconId = (typeof KEY_ICONS)[number]['id']
 
 const BY_ID = new Map<string, KeyIcon>(KEY_ICONS.map((k) => [k.id, k]))
 
-/** 这个键条上画什么：挑了图标就画图标，没挑就画名字。认不出的 id 退回名字 */
-export const keyFace = (icon: string | undefined, label: string): ReactNode =>
-  (icon && BY_ID.get(icon)?.icon) || label
+/**
+ * 这个键条上画什么。
+ *
+ * 没挑图标 → 画名字。挑了 → 按 `iconAt` 摆：
+ *
+ *	only（默认） 只画图标
+ *	pre          图标在前、名字在后 —— `[⌃ B]`
+ *	post         名字在前、图标在后 —— `[新建 +]`
+ *
+ * `pre` / `post` 是为 `^B 前缀` 这类键留的：名字里那个 `B` **是有意义的**（换个字母就是
+ * 另一个键），而 `^` 那个字形恰恰是丑的那半 —— 只能二选一的话这类键只能忍字形。
+ *
+ * 间距用 `gap-1` 自己包一层，不吃 Button 的 `gap-1.5`：软键上 6px 太宽，两格宽的键会被
+ * 撑到三格。认不出的 icon id 退回只画名字。
+ */
+export function keyFace(k: { icon?: string; iconAt?: string; label?: string }, fallback = ''): ReactNode {
+  const glyph = k.icon ? BY_ID.get(k.icon)?.icon : undefined
+  const text = k.label || fallback
+  if (!glyph) return text
+  if (k.iconAt !== 'pre' && k.iconAt !== 'post') return glyph
+  if (!text) return glyph
+  return (
+    <span className="inline-flex items-center gap-1">
+      {k.iconAt === 'pre' ? <>{glyph}{text}</> : <>{text}{glyph}</>}
+    </span>
+  )
+}
 
 export const keyIconHint = (icon?: string) => (icon ? BY_ID.get(icon)?.hint : undefined)

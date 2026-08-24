@@ -50,6 +50,22 @@
 // 占一行终端便宜，但「最常用的几个」和「次常用的几个」分两行、各滑各的，比十几个键排成
 // 一条长龙好找。
 //
+// # 宽度：按内容自适应，没有「几格」这回事
+//
+// 一个键有多宽就是它的内容有多宽（外加一个够手指点的最小宽）。**刻意不给「占几格」那种
+// 设置** —— 格子只在**不滚动**的地方才有意义，而这条是横滑的，滑一下上下两行就对不齐了，
+// 所谓「对齐」压根不成立。
+//
+// 这一条是走过弯路才想清的：以前有 Span（1..3 格）+ Wide，理由写的是「整数格才谈得上跨行
+// 对齐」，可同一份注释里还写着「两行各自横滑」—— 两条直接矛盾。当时是拿「固定块」（一片
+// 不滚动的对齐网格）圆的，固定块删掉之后这个理由就空了。
+//
+// 现在唯一还需要固定格宽的是**弹出组的浮窗**：它不滚动，所以那里的对齐是真的。
+// （前端 --sk-w 那个变量因此只剩两个用途：可点的最小宽 + 浮窗网格的列宽。）
+//
+// 老文件里的 span / wide 读进来**直接忽略**，也不再写出去。宽度本来就该等于内容 ——
+// 「/new 这个键要宽一点」这种需求，按内容算自然就宽了。
+//
 // # 钉住（Pin）
 //
 // **一行的两端可以钉住几个键：它们不跟着横滑。** 手机上条是横滑的，而「呼键盘」「Esc」
@@ -92,27 +108,6 @@ const MaxKeys = 120
 // 就该拿去当终端了（一行 28px ≈ 两行终端）。真要更多键就横滑，别往下堆。
 const MaxRows = 2
 
-// MaxSpan 一个键最多占几格宽。3 格（≈144px，手机上 ≈120px）已经是半条屏幕，
-// 再宽就该拆成两个键了。前端那份上限在 web/src/lib/keys.ts。
-const MaxSpan = 3
-
-// spanOf 把「宽」这个老字段收敛成格数。**只给读路径用**（读得宽松，见 Load）。
-//
-// span 缺失而 wide=true 就算 2 格：老文件、以及从新版本降级回去写过的文件，都只有 wide。
-// 不认它的话升级一次所有宽键一起变窄 —— 而那是用户自己调过的东西。
-func spanOf(span int, wide bool) int {
-	if span <= 0 {
-		if wide {
-			return 2
-		}
-		return 1
-	}
-	if span > MaxSpan {
-		return MaxSpan
-	}
-	return span
-}
-
 // MaxGroupCols 弹出组最多几列。浮窗要能落在屏幕里，5 列 ≈ 244px 已经接近手机竖屏的宽度。
 const MaxGroupCols = 5
 
@@ -146,19 +141,14 @@ const MaxBar = 40
 type Key struct {
 	ID    string `json:"id,omitempty"` // 稳定标识，软键条按这个引用（存盘时补齐）
 	Label string `json:"label"`
-	// Span 占几格宽（1..MaxSpan）。一格 = 前端那个 --sk-w（44px，手机 36px）。
-	// 存「几格」而不是像素：跨行对齐要的就是整数格 —— 一个 2 格的键和它上面两个 1 格的
-	// 键左右边缘对得齐，而这是固定块（对齐网格）唯一站得住的前提。
-	Span int `json:"span,omitempty"`
-	// Wide 是 Span 的**降级镜像**，只为老版本留着（span>=2 时写 true）。
-	// 老版本只认得它，不写的话降级看到的是「我调过的宽键全变窄了」。
-	// 读的时候反过来认（见 spanOf）：从新版本降级回去再升上来，宽度不该丢。
-	Wide bool `json:"wide,omitempty"`
 	// Icon 条上画哪个**内置图标**（空 = 画 Label 那段文字）。白名单见 icons.go ——
 	// 字形（`⌨` 这种）在很多字体里压根缺（显示成方框）、有的字体里很难看、大小和基线还跟
 	// 旁边的字母对不齐；图标是 SVG，三个问题一起没了。
 	// **Label 照旧是名字**（编辑器认它、组键靠它、title 里显示它），Icon 只决定条上画什么。
-	Icon    string `json:"icon,omitempty"`
+	Icon string `json:"icon,omitempty"`
+	// IconAt 图标摆在哪儿：只画图标（默认）/ 当前缀 / 当后缀。见 icons.go 的 IconAt。
+	// `^B 前缀` 这种键名字里那个 B 是有意义的，只能二选一的话就只能忍 `^` 那个丑字形。
+	IconAt  string `json:"iconAt,omitempty"`
 	Confirm bool   `json:"confirm,omitempty"` // 要点两下才发（防误触）
 	Send    string `json:"send,omitempty"`    // 解析出来的字节（下发给前端）
 	Spec    string `json:"spec,omitempty"`    // 用户写的按键谱（回显到编辑器）
@@ -169,11 +159,15 @@ type Key struct {
 
 // stored 是落盘的形状：只存用户写的东西，不存解析结果。
 type stored struct {
-	ID      string `json:"id,omitempty"`
-	Label   string `json:"label"`
-	Span    int    `json:"span,omitempty"`
-	Wide    bool   `json:"wide,omitempty"` // Span 的降级镜像，见 Key.Wide
+	ID    string `json:"id,omitempty"`
+	Label string `json:"label"`
+	// 老字段，只为**读老文件**留着（新版本不再写）：宽度以前是「占几格」（span / wide），
+	// 现在按内容自适应 —— 见包注释「宽度」那一节。读进来直接忽略。
+	Span int  `json:"span,omitempty"`
+	Wide bool `json:"wide,omitempty"`
+
 	Icon    string `json:"icon,omitempty"`
+	IconAt  string `json:"iconAt,omitempty"`
 	Confirm bool   `json:"confirm,omitempty"`
 	Send    string `json:"send,omitempty"`
 	Sticky  string `json:"sticky,omitempty"`
@@ -354,26 +348,15 @@ func normalize(k Key, i int) (Key, error) {
 
 	// confirm 对 sticky / act 也照样透传：粘滞键和键盘键误触无所谓，但这里不拦，
 	// 少一条规则就少一句要背的话，前端一视同仁处理。
-	// 宽度：存盘这一侧**严格**。段控件只发 1/2/3，超出范围就是前端有 bug，
-	// 静默夹到边界只会让那个 bug 留在那儿（读路径那侧是 spanOf 在夹，见 Load）。
-	span := k.Span
-	if span == 0 {
-		// 只给了老字段（降级回去存过一版，或者手改的文件）
-		if k.Wide {
-			span = 2
-		} else {
-			span = 1
-		}
-	}
-	if span < 1 || span > MaxSpan {
-		return Key{}, fmt.Errorf("%s 的宽只能是 1 到 %d 格", at, MaxSpan)
-	}
 	// 图标：存盘这一侧**严格**。选择器只发白名单里的 id，超出去就是前端有 bug，
 	// 静默丢掉只会让 bug 留在那儿（读路径那侧是 keysOf 在丢，见 Load）
 	if !IconOK(k.Icon) {
 		return Key{}, fmt.Errorf("%s 的图标不认识：%q", at, k.Icon)
 	}
-	out := Key{ID: k.ID, Label: label, Span: span, Wide: span >= 2, Icon: k.Icon, Confirm: k.Confirm}
+	if !IconAtOK(k.IconAt) {
+		return Key{}, fmt.Errorf("%s 的图标摆法不认识：%q（只能是 only / pre / post）", at, k.IconAt)
+	}
+	out := Key{ID: k.ID, Label: label, Icon: k.Icon, IconAt: k.IconAt, Confirm: k.Confirm}
 	switch {
 	case k.Group != nil:
 		// 只查形状。格子里那些引用要等整份 Lib 的 ID 都定下来才查得了（和 Bar 一样
@@ -536,9 +519,9 @@ func keysOf(f file) []Key {
 	lib := make([]Key, len(f.Keys))
 	for i, k := range f.Keys {
 		lib[i] = Key{
-			ID: k.ID, Label: k.Label, Span: spanOf(k.Span, k.Wide), Confirm: k.Confirm,
-			// 认不出的图标就当没挑（画文字标签）—— 整份退回出厂太贵，而 Label 一直在
-			Icon: iconOf(k.Icon),
+			ID: k.ID, Label: k.Label, Confirm: k.Confirm,
+			// 认不出的图标 / 摆法就当没挑（退回画文字）—— 整份退回出厂太贵，而 Label 一直在
+			Icon: iconOf(k.Icon), IconAt: iconAtOf(k.IconAt),
 			Send: k.Send, Sticky: k.Sticky, Act: k.Act, Group: k.Group,
 		}
 	}
@@ -734,8 +717,9 @@ func (s *Store) write(profile string, c Config) (Config, error) {
 	raw := make([]stored, len(out.Lib))
 	for i, k := range out.Lib {
 		// Wide 是给老版本看的镜像（见 Key.Wide），所以按 Span 现算，不抄 k.Wide
-		raw[i] = stored{ID: k.ID, Label: k.Label, Span: k.Span, Wide: k.Span >= 2,
-			Icon: k.Icon, Confirm: k.Confirm, Sticky: k.Sticky, Act: k.Act, Group: k.Group}
+		raw[i] = stored{ID: k.ID, Label: k.Label,
+			Icon: k.Icon, IconAt: k.IconAt, Confirm: k.Confirm,
+			Sticky: k.Sticky, Act: k.Act, Group: k.Group}
 		if k.Sticky == "" && k.Act == "" {
 			raw[i].Send = strings.TrimSpace(firstNonEmpty(k.Spec, k.Send))
 		}

@@ -5,7 +5,6 @@ import type { RowSegments, SoftKey } from '@/lib/api'
 import type { KeyAct } from '@/capabilities'
 import { usePhone } from '@/hooks/usePhone'
 import { useArm } from '@/hooks/useArm'
-import { spanStyle } from '@/lib/keys'
 import { keyStyle } from '@/lib/prefs'
 import { keyFace } from '@/keyicons'
 import { cn } from '@/lib/utils'
@@ -92,10 +91,8 @@ export function Softkeys({
    * 一个键。`at` 是它在界面上的坐标（条上是「第几行第几个」，固定块里是「第几格」）——
    * 二次确认举起来的必须是**手指点的那一个**，同一个定义可能在界面上出现好几次。
    *
-   * `inPad` 时**不套宽度**：固定块的格子是按位置排的（cells 是定长数组），让某个键占两格
-   * 会把后面的格子顶出去，整块就不是网格了。
    */
-  const renderKey = (k: SoftKey, at: string, inPad = false) => {
+  const renderKey = (k: SoftKey, at: string) => {
     const a = k.act ? act(k.act) : undefined
     const isGroup = !!k.members
     // 这个部署没有这项（比如服务端关掉了文件浏览）：整个键不画。
@@ -116,7 +113,6 @@ export function Softkeys({
           'relative',
           up && 'border-bad bg-bad text-white hover:border-bad hover:bg-bad',
         )}
-        style={inPad ? undefined : spanStyle(k.span)}
         title={up ? '再点一次才真的发出去'
           : isGroup ? `${k.label}：点开一小片键（浮在上面，不占条上的地方）`
             // 挑了图标之后条上不画字了，名字得进 title —— 否则那个键是什么全靠猜
@@ -136,7 +132,7 @@ export function Softkeys({
           else if (k.send) onSend(k.send)
         }}
       >
-        {keyFace(k.icon, k.label)}
+        {keyFace(k)}
         {/* ring 用面板底色，让角标看着像贴在键上的徽标而不是浮在半空。
             顶栏那个 ▦ 上已经有一个了，这儿还要一个是因为**手机上键盘一弹起来顶栏整条就收掉**
             （见 App 里的 barHidden）——而那正是你在跟 agent 说话、最该知道「另一个在等你」的时候 */}
@@ -193,7 +189,7 @@ export function Softkeys({
         anchor={open.el}
         onClose={() => setOpen(null)}
         // 成员键用**同一份** renderKey：发字节 / 粘滞 / act / 两次确认一处都不用重写
-        renderKey={(k, at) => renderKey(k, `${open.at}/${at}`, true)}
+        renderKey={(k, at) => renderKey(k, `${open.at}/${at}`)}
       />
     )
   })()
