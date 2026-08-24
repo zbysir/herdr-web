@@ -1,0 +1,113 @@
+/**
+ * 折行拼回来那套判据的回归测试（`tuiWrap`，见 paths.ts）。
+ *
+ * **为什么是这个跑法**：`node --experimental-strip-types` 直接跑这个 .ts 文件，不装
+ * 测试框架。前端这边只有这一处需要「拿真机量出来的几何钉住」，为它引一整套 vitest
+ * （加依赖、加配置、CI 多装一遍）不值当；而这条判据已经**静默坏过两次**了 ——
+ * 先是只认 xterm 的 `isWrapped`（herdr 的 pane 永远是 false），后是把「顶到右边界」
+ * 判成「一个尾随空格都不剩」（Ink 自己还让出两列）。两次的表现一模一样：手机上折行
+ * 的路径只认出前半截，点开报「找不到」，而屏幕上那条下划线看着完全正常。
+ *
+ * 跑：`node web/src/term/paths.test.ts`（`make test` 里有）。
+ */
+import type { Terminal } from '@xterm/xterm'
+import { linkAtCell, pathLinkProvider } from './paths.ts'
+
+/**
+ * 手搓一个假 buffer。
+ *
+ * 42 列不是随手挑的：那是用户报「超链接换行分成了两段」那张截图里的 pane 宽度
+ * （量法：herdr 的顶栏铺满 0..41 列，消息框里的字最多画到第 39 列 —— 差两格）。
+ */
+const COLS = 42
+
+/** 宽字符（中文）占两格，第二格没有自己的内容 —— 和真 buffer 一样 */
+const WIDE = /[ᄀ-ᅟ⺀-䶿一-鿿豈-﫿︰-﹏＀-｠￠-￦]/
+
+function mk(lines: string[], cols = COLS): Terminal {
+  const grid = lines.map((s) => {
+    const cells: { ch: string; w: number }[] = []
+    for (const ch of s) {
+      const w = WIDE.test(ch) ? 2 : 1
+      cells.push({ ch, w })
+      if (w === 2) cells.push({ ch: '', w: 0 })
+    }
+    while (cells.length < cols) cells.push({ ch: ' ', w: 1 })
+    return cells
+  })
+  const active = {
+    length: grid.length,
+    viewportY: 0,
+    getLine: (y: number) => (y < 0 || y >= grid.length ? undefined : {
+      isWrapped: false, // herdr 的 pane 就是这样：xterm 压根不知道 TUI 自己折了行
+      getCell: (x: number) => {
+        const c = grid[y][x]
+        return c ? { getChars: () => c.ch, getWidth: () => c.w } : undefined
+      },
+    }),
+  }
+  return { cols, buffer: { active } } as unknown as Terminal
+}
+
+let fails = 0
+function links(term: Terminal, row: number): string[] {
+  let got: { text: string }[] = []
+  pathLinkProvider(term, () => {}).provideLinks(row + 1, (ls) => { got = ls ?? [] })
+  return got.map((l) => l.text)
+}
+function check(name: string, got: unknown, want: unknown) {
+  const ok = JSON.stringify(got) === JSON.stringify(want)
+  if (!ok) fails++
+  console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}`)
+  if (!ok) console.log(`     got  ${JSON.stringify(got)}\n     want ${JSON.stringify(want)}`)
+}
+
+const JPG = '/Users/bysir/.herdr-web/uploads/20260824-173712-e33266.jpg'
+
+/* 1. 用户报的那一屏：Claude Code 的消息框把路径切成两行，字只画到第 39 列 */
+const real = mk([
+  '❯ /clear',
+  '',
+  '❯ /Users/bysir/.herdr-web/uploads/202608',
+  '  24-173712-e33266.jpg clear',
+  '  超过了按钮宽度',
+])
+check('折行的路径拼回来（首行）', links(real, 2), [JPG])
+check('折行的路径拼回来（续行）', links(real, 3), [JPG])
+check('续行上 tap 也认得', linkAtCell(real, 4, 4)?.text, JPG)
+
+/* 2. 正常断句（右边剩一截）不许拼 —— 拼出来的链接看着和好的一模一样 */
+check('正常断句不拼', links(mk([
+  '  I will now check whether the deploy',
+  '  target is reachable from here',
+]), 0), [])
+
+/* 3. 结尾已经是个完整文件名：差一两格也不许把下一行的头一个词粘上来 */
+check('差一格但结尾是完整文件名：不拼', links(mk([
+  '/Users/bysir/dev/bysir/herdr/a/report.txt', // 41 字符 → 只差一格
+  'found 3 matches',
+]), 0), ['/Users/bysir/dev/bysir/herdr/a/report.txt'])
+
+/* 4. 分栏：另一半 pane 的内容在带子外面，拼一下就把它整段丢了 */
+check('分栏不拼', links(mk([
+  '/Users/bysir/.herdr-web/uploads/2026 │ other',
+  '08-24-x.jpg                          │ stuff',
+], 44), 0), ['/Users/bysir/.herdr-web/uploads/2026'])
+
+/* 5. 竖线框里（`╭…╮` 的问题块、左右分栏的左边那半）：离竖线差两格也算顶到边 */
+check('框里的路径拼回来', links(mk([
+  '│ /Users/bysir/.herdr-web/uploads/2026  │',
+  '│ 0824-173712-e33266.jpg                │',
+]), 0), [JPG])
+
+/* 6. 续行是中文：断点不是路径字符，只认前半截 */
+check('续行是中文：只认前半截', links(mk([
+  '❯ /Users/bysir/.herdr-web/uploads/202608',
+  '  中文接着说',
+]), 0), ['/Users/bysir/.herdr-web/uploads/202608'])
+
+if (fails) {
+  console.error(`\n${fails} 处不对`)
+  process.exit(1)
+}
+console.log('\npaths: all ok')

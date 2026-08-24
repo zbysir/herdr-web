@@ -128,6 +128,24 @@ const FRAME = /[│┃║╎╏┆┇┊┋]/
 /** 折断点两侧都得是路径能用的字符，不然那是正常断句，不是被切开的 token */
 const PATHCH = /[\w~@+%:./-]/
 
+/**
+ * 「顶到右边界」容几格空白。**不是 0** —— TUI 在自己那一层还会让出几列。
+ *
+ * 实测（手机上 42 列的 pane，Claude Code v2.1.x）：herdr 的顶栏铺满 0..41 列，而
+ * 消息框的底色只画到第 40 列、框里的字最多画到第 39 列 —— 也就是**离右边界差两格**。
+ * 按「一个尾随空格都不剩」判的话，窄屏上每一条折行的路径都只认得出前半截（用户报的：
+ * 「超链接换行分成了两段」）。
+ */
+const EDGE_SLACK = 2
+
+/**
+ * 结尾那个词**看着已经是个完整文件名**了：`…/a.png`、`…/main.go`。
+ *
+ * 判据是「最后一段里有个不在开头的点，点后面 1–5 位字母数字」—— 开头那个点不算，
+ * `.herdr-web` / `.bin` 是目录名不是扩展名（而路径正好被切在那儿是常事）。
+ */
+const FINISHED = /\/[^/]*[^/.]\.[A-Za-z0-9]{1,5}$/
+
 /** 一格的内容。空格子和宽字符的第二格都是空串 */
 function chAt(term: Terminal, y: number, x: number): string {
   return term.buffer.active.getLine(y)?.getCell(x)?.getChars() ?? ''
@@ -172,15 +190,20 @@ function blank(term: Terminal, y: number, from: number, to: number): boolean {
  * 独立一行，`isWrapped` 永远是 false。于是窄屏上一条 58 字符的路径被 agent 折成两行
  * 之后，这边只认出前半截，点下去报「没有这个文件」—— 屏幕上那条下划线还看着挺正常。
  *
- * 判据三条，缺哪条都会**静默**出错（拼错的链接看着和好的一模一样）：
+ * 判据四条，缺哪条都会**静默**出错（拼错的链接看着和好的一模一样）：
  *
- *   1. **顶到右边界，一个尾随空格都不剩。** Claude Code（Ink）折行走的是 `wrap-ansi`
+ *   1. **顶到右边界（容 `EDGE_SLACK` 格）。** Claude Code（Ink）折行走的是 `wrap-ansi`
  *      的 `hard: true`（bundle 里 `if(K==="wrap")return _q6(A,q,{trim:!1,hard:!0})`），
- *      路径这种断不了词的长 token 会正好切在列宽上；正常断句断在空格上，右边一定剩几格。
- *      框线（`│ 内容 │`）里内容和竖线之间有一格 padding，所以**有竖线时容一格**。
+ *      路径这种断不了词的长 token 会正好切在**它自己那一层的列宽**上；正常断句断在
+ *      空格上，右边一定剩一截。差别在于「它自己那一层」比 pane 窄几列（根 Box 让一列、
+ *      框里还有 padding），所以判据不能是「一格都不剩」，见 `EDGE_SLACK`。
+ *      框线（`│ 内容 │`）里内容和竖线之间另有一格 padding，所以有竖线时再容一格。
  *   2. **这两行的内容全落在同一条带子里。** 分栏时另一半 pane 的内容在带子外面。
  *   3. **被切开的那个词真的一行装不下。** 光靠第 1 条会把「英文单词正好压线」当成折断，
  *      实测在真 pane 上就有 3 处 —— 见下面那段。
+ *   4. **结尾那个词不能看着已经是个完整文件名。** 这条是第 1 条容了两格之后才需要的：
+ *      「一条正好差一两格填满这行的路径」和「被切开的路径」几何上分不开了，而这时第 3 条
+ *      压根不起作用（结尾那个词自己就顶满一行）。见 `FINISHED` 那儿。
  *
  * 中文不用单独防：它占两格，落在边界上会剩 1–2 格，断点也不是路径字符，前两条自然挡掉。
  */
@@ -197,7 +220,11 @@ function tuiWrap(term: Terminal, y: number): { to: number; next: number } | null
     tail = lastEnd(term, y, edge)
     if (tail.end < 0) return null
   }
-  if (tail.end < edge - (edge === term.cols ? 0 : 1)) return null
+  // 顶到右边界。**容 `EDGE_SLACK` 格**（TUI 自己那一层比 pane 窄几列），有竖线的话
+  // 再容一格（框线和内容之间那个 padding）。`strict` 是原来那条严判据，第 4 条要用它
+  // 分辨「这一下是不是靠 slack 才过的」
+  const strict = edge - (edge === term.cols ? 0 : 1)
+  if (tail.end < strict - EDGE_SLACK) return null
   if (!PATHCH.test(tail.ch)) return null
   // 右边那条竖线在下一行也得在，不然这两行不是同一个内容带
   if (edge < term.cols && !FRAME.test(chAt(term, y + 1, edge))) return null
@@ -247,6 +274,18 @@ function tuiWrap(term: Terminal, y: number): { to: number; next: number } | null
   let we = next
   while (we < edge && !blankAt(chAt(term, y + 1, we))) we++
   if (tail.end - ws + (we - next) < width) return null
+
+  // **第四道：靠 slack 才算「顶到边界」的那些，结尾那个词不能看着已经是个完整文件名。**
+  //
+  // 上面那道（切开的词得装不下）在这儿是空的：结尾那个词自己就顶满一行，它一个人就够长。
+  // 于是「一条正好差一两格填满这行的路径」会把下一行的头一个词粘上来 —— 原来那条好好的
+  // 链接变成点开报「找不到」的。真被切开的路径**极少**正好切在扩展名后面，而切在那儿
+  // 的话本来也不用拼（路径已经完整，下一行是别的内容）。
+  if (tail.end < strict) {
+    let word = ''
+    for (let x = ws; x < tail.end; x++) word += chAt(term, y, x)
+    if (FINISHED.test(word)) return null
+  }
 
   // 这一行读到**最后一个字符为止**，不是读到 edge：框线里内容和竖线之间还有一格
   // padding，把它读进来就等于在路径中间插了个空格，白拼

@@ -78,6 +78,9 @@ dev-server:
 test:
 	go test ./...
 	npm --prefix web run typecheck
+# 前端就这一处要「拿真机量出来的几何钉住」（终端里折行的路径拼回来，静默坏过两次）。
+# node 直接跑那个 .ts，不引测试框架 —— 理由写在 web/src/term/paths.test.ts 开头
+	node web/src/term/paths.test.ts
 
 ## release-dry —— 本地把整条发版链跑一遍，不推任何东西
 # 干跑能抓到的：goreleaser 配置错、交叉编译不过、npm 包缺文件。抓不到的只有
