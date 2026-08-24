@@ -35,6 +35,17 @@ const buttonVariants = cva(
           'hover:border-line-hi hover:bg-ctl-hi ' +
           // 按下去那一瞬间给绿：触屏上没有 hover，这是唯一的「点到了」的反馈
           'active:translate-y-px active:border-brand/45 active:bg-brand/15 active:text-brand',
+        /**
+         * 软键条的「无底色」样式（设置 →「终端」里选）：没有底、没有边，只剩字和图标。
+         *
+         * 只有**静息态**没底色。`on`（粘滞 Ctrl 亮着、面板开着）和二次确认举起来那一下
+         * 照旧要有填充 —— 那是「按下去了必须一眼看见」的状态，见 CLAUDE.md 配色那节。
+         * 全都不给底的话，一条无底色的键上分不出哪个是亮着的。
+         */
+        keyPlain:
+          'border border-transparent bg-transparent text-fg font-mono min-w-[var(--sk-w)] ' +
+          'hover:bg-ctl/60 ' +
+          'active:translate-y-px active:text-brand',
       },
       /*
         尺寸只有**一套**：高度写死 h-8（32px）、左右内边距 8px，图标按钮就是 32×32 的
@@ -61,6 +72,8 @@ const buttonVariants = cva(
       { on: true, variant: 'default', class: 'border-brand/40 bg-brand/12 text-brand hover:border-brand/55 hover:bg-brand/18' },
       // 粘滞 Ctrl / Alt 和「键盘正弹着」：这是**状态**不是选项，要在一排键里跳出来
       { on: true, variant: 'key', class: 'border-brand bg-brand text-bg hover:border-brand hover:bg-brand' },
+      // 无底色那一档的「亮着」：照旧给饱和填充（理由见 variant.keyPlain 的注释）
+      { on: true, variant: 'keyPlain', class: 'border-brand bg-brand text-bg hover:border-brand hover:bg-brand' },
     ],
     defaultVariants: { variant: 'default', size: 'default', on: false },
   },

@@ -6,6 +6,7 @@ import type { KeyAct } from '@/capabilities'
 import { usePhone } from '@/hooks/usePhone'
 import { useArm } from '@/hooks/useArm'
 import { spanStyle } from '@/lib/keys'
+import { keyStyle } from '@/lib/prefs'
 import { keyFace } from '@/keyicons'
 import { cn } from '@/lib/utils'
 
@@ -57,6 +58,9 @@ export function Softkeys({
   act: (id: KeyAct) => { run: () => void; on?: boolean; badge?: number; hide?: boolean } | undefined
 }) {
   const phone = usePhone()
+  // 按键样式跟着 profile 走（设置 →「终端」）。**同步读镜像** —— 每个键都要它，
+  // 绕一圈 React state 不值当，见 lib/prefs.ts
+  const kv = keyStyle() === 'plain' ? 'keyPlain' : 'key'
 
   // 举着的那个键，坐标是「第几行第几个」：同一个定义可能在两行各有一个，举起来的必须是
   // **手指点的那个**。bar 变了（编辑器里存了一版）就放下，见 useArm。
@@ -103,7 +107,7 @@ export function Softkeys({
       <Button
         key={at}
         data-testid={up ? 'softkey-armed' : undefined}
-        variant="key"
+        variant={kv}
         size="key"
         on={isGroup ? open?.at === at : on}
         // 举起来只换颜色，**不换文字**：改字会让按键变宽，手指底下的键

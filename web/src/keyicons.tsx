@@ -1,10 +1,10 @@
 import type { ReactNode } from 'react'
 import {
   ArrowBigUp, ArrowDown, ArrowLeft, ArrowRight, ArrowRightToLine, ArrowUp,
-  Check, ChevronsDown, ChevronsUp, ChevronUp, CircleStop, ClipboardPaste,
-  Command, Copy, CornerDownLeft, Delete, Eraser, LogOut, Maximize2,
-  Menu, Minimize2, Minus, Move, Option, Plus, RefreshCw, Redo2, Search, Space,
-  Split, Terminal, Trash2, Undo2, X, ZoomIn, ZoomOut,
+  Check, ChevronsDown, ChevronsUp, ChevronUp, CircleStop, ClipboardPaste, Contrast,
+  Command, Copy, CornerDownLeft, Delete, Eraser, FolderOpen, Image, LayoutGrid,
+  LogOut, Maximize2, Menu, Minimize2, Minus, Option, Pencil, Plus, RefreshCw,
+  Redo2, Search, Settings, Space, Split, Terminal, Trash2, Undo2, X, ZoomIn, ZoomOut,
 } from 'lucide-react'
 
 /**
@@ -33,27 +33,65 @@ export interface KeyIcon {
 /**
  * 软键上图标的尺寸和描边。
  *
- * 18px + 1.75 描边，不是 15px + lucide 默认的 2 —— **小尺寸上细节会糊**。真机上
- * （截图为证）15px 的 lucide `Keyboard` 内部那八九个小点全糊成一团，看着就是一块脏东西。
- * 尺寸抬一档、线细一档，同一批图标立刻读得出来。
+ * **16px + 1.75 描边。** 三次真机反馈调出来的：
+ *
+ *   - 15px + lucide 默认的 2 → 细节糊成一团（`Keyboard` 内部那八九个小点）；
+ *   - 18px → 和旁边文字键（13px）比明显大一号，整条看着不齐（用户：「方向按键也太大了吧」）；
+ *   - 16px + 细一档的线 → 和 13px 的字在视觉上对得上，细节也还在。
+ *
+ * 尺寸只是一半：**画得太满或太碎都不行**。lucide 里那种「铺满 24 画布的四向箭头」在这个
+ * 尺寸上比字重得多，所以键盘和方向这两个都自己画了（见下面），占框七成、用**填充**而不是
+ * 细描边 —— 填充缩下去还是实的，1px 的描边缩下去就没了。
  */
-const C = 'size-[18px]'
+const C = 'size-4'
 const SW = 1.75
 
 /**
  * 键盘：**自己画的**，不用 lucide 那个。
  *
- * lucide 的 `Keyboard` 是「外框 + 内部八九个小键」，那个细节量在 18px 上照样糊
- * （用户连着说了两次「太丑」）。这儿只留两个特征：一个圆角外框 + 一条空格键 ——
- * 少即是清楚，小尺寸上一眼认得出是键盘。
+ * 三条都是真机上试出来的：
  *
- * 别往里加小键点：24 的画布上每个点不到 1px，缩到 18px 就是噪点。
+ *   - lucide 的 `Keyboard`（外框 + 八九个小键）在这个尺寸上糊成一块脏东西；
+ *   - 只画「外框 + 一条空格键」又太空 —— 读起来是「一个框」，压根不像键盘
+ *     （用户：「是不是没做键盘 icon?」）；
+ *   - 现在是**外框 + 三个键 + 一条空格键**，而那四个内部标记是**填充**的小圆角块，
+ *     不是描边。填充缩到 16px 还是实的；同样大小的描边缩下去就剩一层灰。
+ *
+ * 外框也铺开到 y 5–19（原来 6.25–17.75 太扁，像个横条）。别再往里加第二排小键：
+ * 24 的画布上再挤一排，每个块就不到 1px 了。
  */
 const KeyboardGlyph = ({ className }: { className?: string }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={SW}
-       strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
-    <rect x="2.25" y="6.25" width="19.5" height="11.5" rx="2.5" />
-    <path d="M8.5 14.25h7" />
+  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden>
+    <rect x="1.75" y="5" width="20.5" height="14" rx="2.75"
+          stroke="currentColor" strokeWidth={SW} />
+    <g fill="currentColor">
+      <rect x="4.9" y="8.6" width="3.1" height="1.9" rx="0.95" />
+      <rect x="10.45" y="8.6" width="3.1" height="1.9" rx="0.95" />
+      <rect x="16" y="8.6" width="3.1" height="1.9" rx="0.95" />
+      <rect x="7.5" y="13.1" width="9" height="1.9" rx="0.95" />
+    </g>
+  </svg>
+)
+
+/**
+ * 方向（一组方向键）：**也是自己画的**。
+ *
+ * lucide 的 `Move` 是四条箭头铺满整个 24 画布，在这排键里比旁边的字重得多、也大得多
+ * （用户：「方向按键也太大了吧」）。这儿换成四个**小三角**围着中心，只占框的六成 ——
+ * 一眼还是「四个方向」，但重量和 13px 的字对得上。
+ *
+ * 用填充三角而不是描边箭头：小尺寸上填充是实的，描边会散。
+ *
+ * 三角**要够大**：第一版收到 5.6–18.4（占框不到六成、每个三角 2.6 单位高），真机上看着
+ * 像一撮装饰点而不是四个方向。现在是 4–20（占框七成），每个三角 5 单位高、6.8 宽 ——
+ * 和旁边 13px 的字重量相当。
+ */
+const DpadGlyph = ({ className }: { className?: string }) => (
+  <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden>
+    <path d="M12 4l3.4 5H8.6L12 4Z" />
+    <path d="M12 20l3.4-5H8.6L12 20Z" />
+    <path d="M4 12l5-3.4v6.8L4 12Z" />
+    <path d="M20 12l-5 3.4V8.6l5 3.4Z" />
   </svg>
 )
 
@@ -72,7 +110,7 @@ export const KEY_ICONS = [
   { id: 'down', hint: '下', icon: <ArrowDown className={C} strokeWidth={SW} /> },
   { id: 'left', hint: '左', icon: <ArrowLeft className={C} strokeWidth={SW} /> },
   { id: 'right', hint: '右', icon: <ArrowRight className={C} strokeWidth={SW} /> },
-  { id: 'dpad', hint: '方向（四个方向那一组）', icon: <Move className={C} strokeWidth={SW} /> },
+  { id: 'dpad', hint: '方向（四个方向那一组）', icon: <DpadGlyph className={C} /> },
   { id: 'pgup', hint: '上一页', icon: <ChevronsUp className={C} strokeWidth={SW} /> },
   { id: 'pgdn', hint: '下一页', icon: <ChevronsDown className={C} strokeWidth={SW} /> },
   { id: 'keyboard', hint: '键盘', icon: <KeyboardGlyph className={C} /> },
@@ -95,6 +133,12 @@ export const KEY_ICONS = [
   { id: 'min', hint: '还原', icon: <Minimize2 className={C} strokeWidth={SW} /> },
   { id: 'split', hint: '分屏', icon: <Split className={C} strokeWidth={SW} /> },
   { id: 'menu', hint: '菜单', icon: <Menu className={C} strokeWidth={SW} /> },
+  { id: 'panes', hint: '面板一览（act:panes）', icon: <LayoutGrid className={C} strokeWidth={SW} /> },
+  { id: 'files', hint: '文件（act:files）', icon: <FolderOpen className={C} strokeWidth={SW} /> },
+  { id: 'image', hint: '传图（act:img）', icon: <Image className={C} strokeWidth={SW} /> },
+  { id: 'compose', hint: '发件箱', icon: <Pencil className={C} strokeWidth={SW} /> },
+  { id: 'settings', hint: '设置', icon: <Settings className={C} strokeWidth={SW} /> },
+  { id: 'theme', hint: '明暗', icon: <Contrast className={C} strokeWidth={SW} /> },
 ] as const satisfies readonly KeyIcon[]
 
 export type KeyIconId = (typeof KEY_ICONS)[number]['id']

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Maximize, Minimize } from './icons'
 import { api, deviceKind, filesApi, libMap, resolveRows, SESSION, topbarKeyRef, UNAUTHED, type ClipResult, type FileStat, type Notice, type ProfilesResponse, type RowSegments, type SoftKey, type SoftkeysConfig, type SoftkeysResponse, type State, type TopbarResponse, type UnauthedDetail, type WhoAmI } from '@/lib/api'
-import { applyPrefs, pushPref } from '@/lib/prefs'
+import { applyPrefs, keyStyle, pushPref, type KeyStyle } from '@/lib/prefs'
 import { readClipboard, writeClipboard } from '@/lib/clipboard'
 import { Session } from '@/term/session'
 import { initialScheme, type Scheme } from '@/term/themes'
@@ -193,6 +193,9 @@ export default function App() {
    * 「这开关点了没反应」那种查不出来的毛病。桌面上没有软键盘，这个开关等于不存在。
    */
   const [kbdFull, setKbdFull] = useState(() => lsBool('kbdFull', true))
+  // 软键条按键样式（有底色 / 无底色）。跟着排布那一套走 —— state 只为了改完立刻重渲染，
+  // **读的地方一律读镜像**（keyStyle()），见 lib/prefs.ts
+  const [keyStyleS, setKeyStyleS] = useState<KeyStyle>(keyStyle)
   /** 「跑完了」那种卡片挂多久（ms）；0 = 一直挂着。「等你回答」的永远挂着，不受这个管 */
   const [noticeMs, setNoticeMs] = useState(
     () => Number(localStorage.getItem('noticeCardMs') ?? AUTO_MS_DEFAULT) || 0,
@@ -606,6 +609,7 @@ export default function App() {
       sync2026: lsBool('sync2026', true), switchPanel: lsBool('switchPanel', true),
     })
     setKbdFull(lsBool('kbdFull', true))
+    setKeyStyleS(keyStyle())
     setNoticeDot(lsBool('noticeDot', true))
     setNoticeOS(lsBool('noticeOS', false))
     setNoticeOSFg(lsBool('noticeOSFg', false))
@@ -1124,7 +1128,7 @@ export default function App() {
     const isGroup = !!k.members
     return (
       <Button
-        variant="key"
+        variant={keyStyle() === 'plain' ? 'keyPlain' : 'key'}
         on={isGroup ? openGroup?.item === item : (k.sticky ? sticky[k.sticky] : !!ta?.on)}
         title={up ? '再点一次才真的发出去'
           : isGroup ? `${k.label}：点开一小片键（浮在下面，不占顶栏的地方）`
@@ -1384,6 +1388,8 @@ export default function App() {
             onCardMs={(v) => { setNoticeMs(v); pushPref(profile.id, 'noticeCardMs', String(v), toast) }}
             kbdFull={kbdFull}
             onKbdFull={(v) => { setKbdFull(v); pushPref(profile.id, 'kbdFull', v ? '1' : '0', toast) }}
+            keyStyle={keyStyleS}
+            onKeyStyle={(v) => { setKeyStyleS(v); pushPref(profile.id, 'keyStyle', v, toast) }}
             heals={heals}
             // 存完把整份配置回传过来：软键条那一条和顶栏上放的「我的按键」是同一份定义
             onSaved={applySoftkeys}

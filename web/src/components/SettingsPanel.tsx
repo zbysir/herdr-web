@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { X } from 'lucide-react'
 import { AArrowDown, AArrowUp, CircleHalf } from '@/icons'
 import type { ProfilesResponse, SoftkeysConfig, State } from '@/lib/api'
+import type { KeyStyle } from '@/lib/prefs'
 import { enableNotify, notifyState, testNotify, type NotifyState } from '@/lib/notify'
 import { Panel } from './ui/panel'
 import { Button } from './ui/button'
@@ -51,7 +52,7 @@ const TABS: { id: SettingsTab; label: string }[] = [
 
 export function SettingsPanel({
   tab, onTab, onClose, opts, setOpt, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs,
-  kbdFull, onKbdFull, heals, onSaved, onTopbar, toast, state,
+  kbdFull, onKbdFull, keyStyle, onKeyStyle, heals, onSaved, onTopbar, toast, state,
   fontSize, onFont, scheme, onScheme, profile, onProfiles,
 }: {
   tab: SettingsTab
@@ -74,6 +75,9 @@ export function SettingsPanel({
   /** 呼出键盘就自动全屏（收起键盘不退出） */
   kbdFull: boolean
   onKbdFull: (v: boolean) => void
+  /** 软键条的按键样式：有底色 / 无底色。跟着排布那一套走，见 lib/prefs.ts */
+  keyStyle: KeyStyle
+  onKeyStyle: (v: KeyStyle) => void
   heals: number
   onSaved: (c: SoftkeysConfig) => void
   /** 顶栏存好了：把新的那一串 id 交回去，顶栏立刻跟着变（不用刷新页面） */
@@ -143,6 +147,7 @@ export function SettingsPanel({
         <TermSection
           opts={opts} setOpt={setOpt} dot={dot} onDot={onDot} os={os} onOS={onOS}
           kbdFull={kbdFull} onKbdFull={onKbdFull}
+          keyStyle={keyStyle} onKeyStyle={onKeyStyle}
           osFg={osFg} onOSFg={onOSFg} cardMs={cardMs} onCardMs={onCardMs}
           heals={heals} state={state} toast={toast}
           fontSize={fontSize} onFont={onFont} scheme={scheme} onScheme={onScheme}
@@ -157,6 +162,7 @@ export function SettingsPanel({
 
 function TermSection({
   opts, setOpt, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs, kbdFull, onKbdFull,
+  keyStyle, onKeyStyle,
   heals, state, fontSize, onFont, scheme, onScheme, toast,
 }: {
   opts: TermOpts
@@ -171,6 +177,8 @@ function TermSection({
   onCardMs: (v: number) => void
   kbdFull: boolean
   onKbdFull: (v: boolean) => void
+  keyStyle: KeyStyle
+  onKeyStyle: (v: KeyStyle) => void
   toast: (m: string) => void
   heals: number
   state?: State | null
@@ -240,6 +248,30 @@ function TermSection({
           {kbdErr && <span className="mt-0.5 block text-xs text-bad">上次没成功：{kbdErr}</span>}
         </span>
       </label>
+
+      {/* 软键条长什么样。**无底色那一档只去掉静息态的底和边** —— 亮着（粘滞 Ctrl、面板
+          开着）和二次确认举起来那一下照旧有填充，那是「按下去了必须一眼看见」的状态。
+          全都不给底的话，一条无底色的键上分不出哪个是亮着的。 */}
+      <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-line pt-3 text-[13px]">
+        软键条按键
+        <div className="flex overflow-hidden rounded-md border border-line">
+          <Button
+            size="tiny" on={keyStyle !== 'plain'} title="有底色、有边框（默认）"
+            className="rounded-none border-0 border-r border-line"
+            onClick={() => onKeyStyle('solid')}
+          >
+            有底色
+          </Button>
+          <Button
+            size="tiny" on={keyStyle === 'plain'} title="只有字和图标，没有底也没有边 —— 让终端多露出来一点"
+            className="rounded-none border-0"
+            onClick={() => onKeyStyle('plain')}
+          >
+            无底色
+          </Button>
+        </div>
+        <span className="text-xs text-faint">无底色更轻；亮着的键照旧涂满（不然分不出）</span>
+      </div>
 
       {/* 「点 switch 开面板一览」和上面那串终端行为不是一类：它改的是「点 herdr 那个按钮会
           发生什么」。和下面那个角标一样是「这类设备上顺手不顺手」的偏好（跟着排布那一套走，

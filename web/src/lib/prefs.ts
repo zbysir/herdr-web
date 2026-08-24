@@ -29,6 +29,7 @@ export const PREF_KEYS = [
   'kitty', 'meta', 'copyOnSelect', 'sync2026', 'switchPanel',
   'kbdFull',
   'noticeDot', 'noticeOS', 'noticeOSFg', 'noticeCardMs',
+  'keyStyle',
 ] as const
 export type PrefKey = (typeof PREF_KEYS)[number]
 
@@ -57,3 +58,13 @@ export function pushPref(profile: string, k: PrefKey, v: string, fail?: (m: stri
   void api.put(`/profiles/${encodeURIComponent(profile)}/prefs`, { prefs: { [k]: v } })
     .catch((e: Error) => fail?.(`这台设备上改好了，但没同步到「排布」里：${e.message}`))
 }
+
+/** 按键样式：`solid` = 有底色有边（默认），`plain` = 只有字/图标，没底色没边 */
+export type KeyStyle = 'solid' | 'plain'
+
+/**
+ * 这台设备该用哪种按键样式。**同步读镜像**（见上面那段）—— 软键条每渲染一个键都要它，
+ * 等一个请求或者绕一圈 React state 都不值当。
+ */
+export const keyStyle = (): KeyStyle =>
+  (localStorage.getItem('keyStyle') === 'plain' ? 'plain' : 'solid')

@@ -838,9 +838,10 @@ export function SoftkeysPanel({
         <ul className="mb-3 ml-3.5 list-disc space-y-0.5">
           <li>库里的键<strong>点一下改它</strong>，<strong>按住拖到上面</strong>就上条。
             条上的 ✕ 只是拿下来，定义还在库里 —— 同一个键两行各放一个也行。</li>
-          <li><strong>图标</strong>：挑一个内置的，条上就画它不画字（<code>⌨</code> 这种字形
-            在很多字体里缺、难看、基线还对不齐）。<strong>名字还留着</strong> —— 编辑器里认它，
+          <li><strong>图标</strong>：挑一个内置的（四十多个：修饰键 / 编辑键 / 方向 / 面板 /
+            文件 / 传图 …），条上就画它不画字。<strong>名字还留着</strong> —— 编辑器里认它，
             指上去也显示它。选「文字」就是不用图标。</li>
+          <li>整条的<strong>按键样式</strong>（有底色 / 无底色）在设置 →「终端」页，跟着这一套走。</li>
           <li>改一处定义，条上（和顶栏上）所有引用一起变。</li>
           <li>两行<strong>各自横滑</strong>，放不下就滑，不换行。</li>
           <li><strong>宽</strong> = 占几格（1 / 2 / 3），一格就是一个键位那么宽。</li>

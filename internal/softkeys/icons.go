@@ -24,6 +24,8 @@ var KeyIcons = []string{
 	"copy", "paste", "search", "refresh", "undo", "redo",
 	"plus", "minus", "zoom-in", "zoom-out", "max", "min",
 	"split", "menu",
+	// 界面里那几件事 —— 软键 `act:` 那一档最常用的就是这几个，得有对应的图标可挑
+	"panes", "files", "image", "compose", "settings", "theme",
 }
 
 // IconOK 这个图标 id 认不认。空串 = 不挑图标（画文字标签），也算认。
