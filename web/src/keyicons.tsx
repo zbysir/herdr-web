@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react'
 import {
   ArrowBigUp, ArrowDown, ArrowLeft, ArrowRight, ArrowRightToLine, ArrowUp,
-  Check, ChevronsDown, ChevronsUp, ChevronUp, CircleStop, CircleX, ClipboardPaste, Contrast,
-  Command, Compass, Copy, CornerDownLeft, Delete, Eraser, FolderOpen, Image, LayoutGrid,
-  LogOut, Maximize2, Menu, Minimize2, Minus, Option, Pencil, Plus, RefreshCw,
+  Check, ChevronsDown, ChevronsUp, ChevronUp, CircleStop, CircleX, ClipboardPaste,
+  Command, Contrast, Copy, CornerDownLeft, Delete, Eraser, FolderOpen, Image,
+  Joystick, LayoutGrid, LogOut, Maximize2, Menu, Minimize2, Minus, Pencil, Plus, RefreshCw,
   Redo2, Search, Settings, Space, Split, Terminal, Trash2, Undo2, X, ZoomIn, ZoomOut,
 } from 'lucide-react'
 
@@ -79,29 +79,54 @@ const KeyboardGlyph = ({ className }: { className?: string }) => (
 )
 
 /**
- * 方向（一组方向键）：**一个圆 + 一根指针**（罗盘）。
+ * Alt / Option（`⌥`）：形状照 lucide 的 `Option`，但**只占框的一半高**。
  *
- * 这个字形改了五版。前四版全在犯同一个错 —— **想在 16px 里画四个东西**：
+ * lucide 那条路径是 `M3 3h6l6 18h6` —— 从 y=3 一直画到 y=21，把 24 的画布填满了。于是
+ * 16px 的图标就是 16px 高，而旁边文字的字高只有 ~9px：那个键看着比整条都高一截
+ * （用户：「option icon 太高了」）。
  *
- *   1. lucide `Move`（四条带箭杆的箭头铺满画布）：细、碎，比旁边 13px 的字重；
- *   2. 四个小三角、离中心 3–5 单位：像一撮不相干的装饰点（散）；
- *   3. 四个三角在中心汇合：连成一块了，但那形状就是 `✦`，读成「闪光」（还和满地的 AI
- *      图标撞脸）；
- *   4. 四个 V 形箭头：round cap 一糊，四个尖端连成一个 `◇` 菱形轮廓。
+ * 这儿压到 y 6.5–17.5（11/24），横向铺开到 3.5–20.5 —— `⌥` 本来就是个**宽而扁**的符号，
+ * 压扁之后反而更像它。别再拉高：这排键的高度是文字定的，图标越界就是它自己显眼。
+ */
+const OptionGlyph = ({ className }: { className?: string }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={SW}
+       strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
+    <path d="M3.5 6.5h5l5 11h7" />
+  </svg>
+)
+
+/**
+ * 方向（一组方向键）：**游戏机那个方向键**（圆角方块 + 实心十字）。摇杆是另一个（见下面）。
  *
- * 24 的画布上放四个带方向的标记，两两之间只剩一个描边的间距 —— 缩到 16px 必然粘在一起。
- * 所以换成**一个**形状：圆 + 斜指针，本身就是「方向 / 导航」，而且只有两笔，缩到多小都不糊。
+ * 这个字形换到第六版。前五版的教训归成两条，都记下来免得有人再绕：
  *
- * 不满意的话别再调这个字形了 —— 那个键的图标是可配的，换成 `up`、或者干脆不用图标
- * （画「方向」两个字）都行。
+ *   1. **别想在 16px 里画四个带方向的标记**（lucide `Move` / 分开的三角 / 汇合的三角 /
+ *      四个 V）—— 两两之间只剩一个描边的间距，缩下去必然粘：分别粘成一团、`✦`、`◇`。
+ *   2. **别用抽象隐喻**。第五版用罗盘（圆 + 指针），一个形状是够干净了，但罗盘的意思是
+ *      「导航 / 方位」不是「方向键」（用户：「罗盘当做方向也太离谱了」）。
+ *
+ * 所以这版不隐喻，直接画那个东西本身。外框给它身份（因此和细线的 `plus` 分得开），里面的
+ * 十字是**填充**的（缩小还是实的）。和上面 KeyboardGlyph 同一个家族：外框 + 实心标记。
+ *
+ * 两个数是试出来的：圆角 `rx=3.5`（原来 5，圆得像个圆，整体读成 `⊕`「加」）、十字只到
+ * 8–16（原来 7–17 撑满外框，也是往 `⊕` 上靠）。要的是「一个**方**按钮，中间一个小十字」。
+ *
+ * 还不满意就别在这儿继续调 —— 那个键的图标是可配的，换成 `up` 或者干脆不用图标
+ * （条上画「方向」两个字）都行。
  */
 const DpadGlyph = ({ className }: { className?: string }) => (
-  <Compass className={className} strokeWidth={SW} />
+  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden>
+    <rect x="3" y="3" width="18" height="18" rx="3.5" stroke="currentColor" strokeWidth={SW} />
+    <g fill="currentColor">
+      <rect x="10.8" y="8" width="2.4" height="8" rx="1.2" />
+      <rect x="8" y="10.8" width="8" height="2.4" rx="1.2" />
+    </g>
+  </svg>
 )
 
 export const KEY_ICONS = [
   { id: 'ctrl', hint: 'Ctrl（^）', icon: <ChevronUp className={C} strokeWidth={SW} /> },
-  { id: 'alt', hint: 'Alt / Option（⌥）', icon: <Option className={C} strokeWidth={SW} /> },
+  { id: 'alt', hint: 'Alt / Option（⌥）', icon: <OptionGlyph className={C} /> },
   { id: 'shift', hint: 'Shift（⇧）', icon: <ArrowBigUp className={C} strokeWidth={SW} /> },
   { id: 'cmd', hint: 'Cmd（⌘）', icon: <Command className={C} strokeWidth={SW} /> },
   { id: 'esc', hint: 'Esc / 取消', icon: <CircleX className={C} strokeWidth={SW} /> },
@@ -114,7 +139,8 @@ export const KEY_ICONS = [
   { id: 'down', hint: '下', icon: <ArrowDown className={C} strokeWidth={SW} /> },
   { id: 'left', hint: '左', icon: <ArrowLeft className={C} strokeWidth={SW} /> },
   { id: 'right', hint: '右', icon: <ArrowRight className={C} strokeWidth={SW} /> },
-  { id: 'dpad', hint: '方向（四个方向那一组）', icon: <DpadGlyph className={C} /> },
+  { id: 'dpad', hint: '方向（游戏机那个方向键）', icon: <DpadGlyph className={C} /> },
+  { id: 'joystick', hint: '方向（游戏摇杆）', icon: <Joystick className={C} strokeWidth={SW} /> },
   { id: 'pgup', hint: '上一页', icon: <ChevronsUp className={C} strokeWidth={SW} /> },
   { id: 'pgdn', hint: '下一页', icon: <ChevronsDown className={C} strokeWidth={SW} /> },
   { id: 'keyboard', hint: '键盘', icon: <KeyboardGlyph className={C} /> },
@@ -162,8 +188,9 @@ const BY_ID = new Map<string, KeyIcon>(KEY_ICONS.map((k) => [k.id, k]))
  * `pre` / `post` 是为 `^B 前缀` 这类键留的：名字里那个 `B` **是有意义的**（换个字母就是
  * 另一个键），而 `^` 那个字形恰恰是丑的那半 —— 只能二选一的话这类键只能忍字形。
  *
- * 间距用 `gap-1` 自己包一层，不吃 Button 的 `gap-1.5`：软键上 6px 太宽，两格宽的键会被
- * 撑到三格。认不出的 icon id 退回只画名字。
+ * **不留 gap**：图标那个字形只占它 16px 框的一半宽，两边各自带着约 4px 空白 —— 再加
+ * `gap` 就是 8px 视觉间距，那个键看着松散（用户：「前缀 icon 应该更紧凑一些」）。
+ * 让字形自带的空白当间距，正好。认不出的 icon id 退回只画名字。
  */
 export function keyFace(k: { icon?: string; iconAt?: string; label?: string }, fallback = ''): ReactNode {
   const glyph = k.icon ? BY_ID.get(k.icon)?.icon : undefined
@@ -172,7 +199,7 @@ export function keyFace(k: { icon?: string; iconAt?: string; label?: string }, f
   if (k.iconAt !== 'pre' && k.iconAt !== 'post') return glyph
   if (!text) return glyph
   return (
-    <span className="inline-flex items-center gap-1">
+    <span className="inline-flex items-center">
       {k.iconAt === 'pre' ? <>{glyph}{text}</> : <>{text}{glyph}</>}
     </span>
   )

@@ -18,7 +18,7 @@ var KeyIcons = []string{
 	// 编辑键
 	"esc", "enter", "tab", "space", "bs", "del",
 	// 方向 / 翻页
-	"up", "down", "left", "right", "dpad", "pgup", "pgdn",
+	"up", "down", "left", "right", "dpad", "joystick", "pgup", "pgdn",
 	// 常用动作
 	"keyboard", "terminal", "close", "stop", "check", "trash",
 	"copy", "paste", "search", "refresh", "undo", "redo",
