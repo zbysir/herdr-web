@@ -96,10 +96,13 @@ func serve(webDir string) error {
 
 	// 这个口后面是一个登录 shell。**能从公网碰到又没有 TLS** 的组合直接拒绝启动 ——
 	// 以前这里只打一行警告，警告没人看。
-	if (cfg.Exposed || !cfg.Loopback) && !cfg.BrowserHTTPS() && !cfg.Insecure {
+	if (cfg.PublicReachable() || !cfg.Loopback) && !cfg.BrowserHTTPS() && !cfg.Insecure {
 		why := "监听的是 " + cfg.Host + "，不是本机地址"
 		if cfg.Exposed {
 			why = "声明了 HERDR_WEB_EXPOSED=1（这个口能从公网碰到）"
+		}
+		if cfg.PublicPort > 0 {
+			why = fmt.Sprintf("开了公网口 HERDR_WEB_PUBLIC_PORT=%d", cfg.PublicPort)
 		}
 		return fmt.Errorf("拒绝启动：%s，但没有配 TLS。\n\n"+
 			"  这个口后面是一个登录 shell，明文传输等于把它挂在网上（抓包就能拿到 cookie 和整个终端画面）。\n"+
@@ -141,10 +144,10 @@ func serve(webDir string) error {
 
 	// 「本机永不封」这个豁免只有在**拿到的 IP 确实是客户端的**时候才成立：
 	//   - 信任前置（XFF 给的是真实 IP）→ loopback 只会出现在真本机，豁免安全；
-	//   - 暴露但没有可信前置 → 可能是 frp 这类穿透，所有请求的源 IP 都是 127.0.0.1
-	//     且不可信，留着豁免等于整层限速空转；
-	//   - 没暴露 → 本机 / 局域网，照常豁免。
-	gate.ExemptLoopback = cfg.TrustProxy || !cfg.Exposed
+	//   - 有公网入口但没有可信前置 → 可能是 frp 这类穿透，所有请求的源 IP 都是
+	//     127.0.0.1 且不可信，留着豁免等于整层限速空转；
+	//   - 纯本地部署 → 本机 / 局域网，照常豁免。
+	gate.ExemptLoopback = cfg.TrustProxy || !cfg.PublicReachable()
 
 	// ACME 要在 tlsgen 之前：签完把路径交给它，后面就当成「用户指定的证书」走。
 	var acmeMgr *acme.Manager
@@ -294,6 +297,34 @@ func serve(webDir string) error {
 		}
 	}
 
+	// 公网口：隧道 / 端口转发 / 反代该指的那个口。和主口同一个 handler，区别在认证上
+	// 按「公网」对待（本机免配对之类的豁免一律不生效，见 server.PublicListener）。
+	//
+	// 听 0.0.0.0 是必须的：隧道从本机连过来只需要 127.0.0.1，但路由器端口转发那条路
+	// 要的是通配地址，两者只能取宽的那个。
+	//
+	// **起不来就拒绝启动**（局域网口和管理口是软失败）：这个口是远程访问的唯一入口，
+	// 软失败的表现是「服务好像起来了，就是外面连不上」，而人在外面，看不到日志。
+	if cfg.PublicPort > 0 {
+		pubAddr := fmt.Sprintf("0.0.0.0:%d", cfg.PublicPort)
+		pubLn, err := net.Listen("tcp", pubAddr)
+		if err != nil {
+			return fmt.Errorf("公网口 %s 起不来: %w", pubAddr, err)
+		}
+		defer pubLn.Close()
+		if mainTLS != nil {
+			// 和主口同一张证书就复用同一份 tls.Config：在一个 Result 上调两次
+			// TLSConfig() 会不上锁地改它的内部状态，和另一个监听的握手抢。
+			pubLn = tls.NewListener(pubLn, mainTLS)
+		}
+		h := server.PublicListener(srv.Handler())
+		go func() {
+			if err := http.Serve(pubLn, h); err != nil {
+				log.Printf("公网口挂了: %v", err)
+			}
+		}()
+	}
+
 	// 管理口：只绑 127.0.0.1。为什么单独一个口而不是在主服务上加个认证页面，
 	// 见 internal/admin 的包注释（一句话：不能靠源 IP 判断「本机」，而且管理页
 	// 不能依赖它自己要管的那个证书）。
@@ -322,7 +353,13 @@ func serve(webDir string) error {
 
 	banner(cfg, store, passkeys, cert, web == nil, adminAddr, updates)
 	defer store.Flush() // 把攒着的 LastSeen 落盘
-	return http.Serve(ln, srv.Handler())
+	// 主口默认**只服务本地网络**（见 server.PrivateListener）。声明了 EXPOSED=1 才让开
+	// 那道门 —— 那是「主口就是公网口」的老写法，新配置该用 HERDR_WEB_PUBLIC_PORT。
+	mainHandler := srv.Handler()
+	if cfg.MainIsPrivate() {
+		mainHandler = server.PrivateListener(mainHandler)
+	}
+	return http.Serve(ln, mainHandler)
 }
 
 /* ------------------------------------------------------------------ 子命令 */
@@ -611,6 +648,16 @@ func banner(cfg *config.Config, store *auth.Store, passkeys *auth.Passkeys, cert
 	}
 
 	fmt.Println()
+	if cfg.PublicPort > 0 {
+		fmt.Printf("  公网口：%d ← 隧道 / 端口转发 / 反代指这个口。\n", cfg.PublicPort)
+		fmt.Printf("    主口 %d 只服务本地网络（公网连过来会被拒），它上面的本机免配对在公网口不生效。\n", cfg.Port)
+	} else if cfg.Exposed {
+		fmt.Printf("  主口 %d 被声明成公网口了（HERDR_WEB_EXPOSED=1，老写法）。\n", cfg.Port)
+		fmt.Printf("    建议改成 HERDR_WEB_PUBLIC_PORT=<另一个端口> 并让隧道指过去：\n")
+		fmt.Printf("    那样漏配的后果是「外面连不上」，而不是「本地那些宽松默认全暴露在公网」。\n")
+	} else {
+		fmt.Printf("  主口 %d 只服务本地网络（公网要另开 HERDR_WEB_PUBLIC_PORT）。\n", cfg.Port)
+	}
 	fmt.Printf("  管理页（只本机能开）：http://%s/\n", adminAddr)
 	fmt.Printf("  shell：%s   数据目录：%s\n", cfg.Shell, cfg.Dir)
 	fmt.Printf("  herdr socket：%s\n", cfg.Socket)
@@ -680,9 +727,17 @@ func banner(cfg *config.Config, store *auth.Store, passkeys *auth.Passkeys, cert
 	} else if !cfg.Loopback {
 		fmt.Println("  ⚠️  正在监听 " + cfg.Host + "：局域网里的人能碰到这个口。")
 	}
+	if cfg.PublicPort > 0 && cfg.PublicURL == "" {
+		fmt.Println("  ⚠️  开了公网口但没给 HERDR_WEB_PUBLIC_URL：上面那个配对链接和二维码指的是本机地址，")
+		fmt.Println("     从公网扫它进不来（公网端口和本地端口通常不是一个，本进程猜不出来）。")
+	}
 	if cfg.TrustLoopback {
 		fmt.Println("  ⚠️  本机免配对是开着的（HERDR_WEB_TRUST_LOOPBACK=1）。")
-		fmt.Println("     套 frp / 反代的话务必关掉 —— 那时候公网请求的源地址就是 127.0.0.1。")
+		if cfg.PublicPort > 0 {
+			fmt.Printf("     它只在主口 %d 上生效，公网口 %d 不认这个豁免。\n", cfg.Port, cfg.PublicPort)
+		} else {
+			fmt.Println("     主口只服务本地网络，所以这个豁免够不到公网 —— 但别把隧道指到主口上。")
+		}
 	}
 	if cfg.Token != "" && cfg.LegacyToken == "on" {
 		fmt.Println("  ⚠️  " + cfg.TokenFile() + " 还在，旧链接仍然能进来换凭据。")

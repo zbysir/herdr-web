@@ -289,7 +289,7 @@ Changes take effect on restart — configuration is read once at startup. To con
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `HERDR_WEB_PORT` | `7788` | Port |
+| `HERDR_WEB_PORT` | `7788` | The main port. **It only serves the local network**: a connection whose peer is not loopback / private / link-local / CGNAT gets 403 and nothing else. Public access is a separate, explicit port — see `HERDR_WEB_PUBLIC_PORT` |
 | `HERDR_WEB_HOST` | `127.0.0.1` | Listen address; `0.0.0.0` opens it to the LAN |
 | `HERDR_WEB_TOKEN` | reads `~/.herdr-web/token` | **Legacy**; only good for bootstrapping once (exchanged for a device credential). Not generated on new installs |
 | `HERDR_WEB_SHELL` | `$SHELL` | The shell run inside the PTY |
@@ -315,7 +315,8 @@ Details in [SECURITY.md](docs/dev/SECURITY.md) (Chinese).
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `HERDR_WEB_EXPOSED` | off | `=1` **declares that this port is reachable from the internet** (frp / port forwarding / tunnels). Behind frp the process usually listens on 127.0.0.1 and every request also comes from 127.0.0.1, so "is the listen address local" tells you nothing; it cannot be detected, only declared. Once declared: TLS is mandatory and loopback-without-pairing is turned off |
+| `HERDR_WEB_PUBLIC_PORT` | off | **The port to expose.** Opens a second listener on `0.0.0.0:<port>` sharing the same handler, and that is where a tunnel / port forward / reverse proxy should point — never at the main port, which serves the local network only. Requests arriving here are treated as public: loopback-without-pairing and the legacy token's `loopback` tier do not apply (the source address of a tunnelled request is 127.0.0.1 too, so the only trustworthy signal is *which listener it landed on*), the rate limiter's "never block localhost" exemption is off, and TLS becomes mandatory. Why a separate port instead of a switch on the main port: a switch is a *declaration*, and declarations get forgotten — the person (or agent) writing code on this machine sees `127.0.0.1:7788` and has no way to know a tunnel is forwarding it, so every decision made under "only my machine can reach this" becomes a hole. With a separate port, forgetting to configure it means the tunnel gets connection refused |
+| `HERDR_WEB_EXPOSED` | off | **Legacy; prefer `HERDR_WEB_PUBLIC_PORT`.** `=1` declares that *the main port itself* is reachable from the internet (frp / port forwarding / tunnels) — it cannot be detected, only declared. Once declared: TLS is mandatory, loopback-without-pairing is turned off, and the main port's "local network only" gate is lifted (you said it is public). Kept for machines already configured this way |
 | `HERDR_WEB_TLS_CERT` / `_KEY` | empty | Use the certificate you supply. If you own a domain and got a real certificate via DNS-01, take this route — zero browser warnings, no profiles to install, least friction |
 | `HERDR_WEB_ACME_DNS` | empty | Let herdr-web **get its own certificate**; the value is the DNS provider: `cloudflare` / `alidns` / `tencentcloud` / `route53` / `digitalocean` / `huaweicloud`. It uses DNS-01, so nothing has to reach you from outside — behind NAT, or with the domain pointed at a LAN address, it still works. **Where to get each provider's token and what scope it needs: [DNS.md](DNS.md)** (Chinese) |
 | `HERDR_WEB_ACME_EMAIL` | empty | ACME account email. Can be empty, but then you get no expiry reminders either |
@@ -355,10 +356,11 @@ Details in [SECURITY.md](docs/dev/SECURITY.md) (Chinese).
 # 2. Phone / tablet on the LAN: self-signed TLS, pair by scanning the banner QR
 HERDR_WEB_HOST=0.0.0.0 ./herdr-web
 
-# 3. Exposed through frp / a tunnel: EXPOSED must be declared (the process only
-#    listens on 127.0.0.1 and cannot tell whether anyone outside can reach it),
-#    PUBLIC_URL decides which address the QR code encodes
-HERDR_WEB_EXPOSED=1 HERDR_WEB_TLS=proxy \
+# 3. Exposed through frp / a tunnel: point the tunnel at PUBLIC_PORT, never at the
+#    main port — the main port only serves the local network, and every default on
+#    it assumes the internet cannot reach it. PUBLIC_URL decides which address the
+#    QR code encodes
+HERDR_WEB_PUBLIC_PORT=17788 HERDR_WEB_TLS=proxy \
 HERDR_WEB_PUBLIC_URL=https://herdr.example.com \
 HERDR_WEB_HOSTNAME=herdr.example.com ./herdr-web
 

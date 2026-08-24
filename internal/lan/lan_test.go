@@ -98,3 +98,31 @@ func TestPeerIsLocal(t *testing.T) {
 		}
 	}
 }
+
+// 主口的准入判据比直连口宽一档：多收 CGNAT（Tailscale / Headscale 那段）。
+// 收错的表现是「走 VPN 的人页面打不开」—— 而 VPN 是文档里推荐的第一档形态。
+func TestPeerIsPrivateOrVPN(t *testing.T) {
+	allow := []string{
+		"127.0.0.1:5000", "[::1]:5000",
+		"192.168.1.42:5000", "10.1.2.3:1", "172.16.0.9:80",
+		"[fd00::1]:5000", "[fd7a:115c:a1e0::1]:5000", // ULA，Tailscale 的 IPv6 也在这儿
+		"[fe80::1cff:fe00:1]:5000",
+		"100.64.0.1:5000", "100.101.102.103:5000", "100.127.255.254:5000", // CGNAT
+	}
+	for _, a := range allow {
+		if !PeerIsPrivateOrVPN(a) {
+			t.Errorf("%s 应当放行", a)
+		}
+	}
+	deny := []string{
+		"1.2.3.4:5000", "8.8.8.8:53",
+		"[240e:39d:5a:6d20::9fd]:5000", "[2001:db8::1]:443",
+		"100.63.255.255:5000", "100.128.0.1:5000", // CGNAT 段的两侧边界，都是公网
+		"", "不是地址:80", "example.com:443",
+	}
+	for _, a := range deny {
+		if PeerIsPrivateOrVPN(a) {
+			t.Errorf("%s 不该放行", a)
+		}
+	}
+}

@@ -167,3 +167,38 @@ func PeerIsLocal(remoteAddr string) bool {
 	// 双栈套接字上的 IPv4 客户端就是这个形状）也能命中，因为它 To4() 得出来。
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
 }
+
+// PeerIsPrivateOrVPN 是**主口**的准入判据：私网 / 本机 / 链路本地 / CGNAT。
+//
+// 和 PeerIsLocal 的差别只有 CGNAT（100.64/10）那一段，但两者的**用途不同**，所以
+// 故意分开两个函数而不是加参数：
+//
+//   - PeerIsLocal 要证明的是「对端和我在同一个局域网里」，交接令牌的兑换压在它上面，
+//     宁可误拒；
+//   - 这一个要证明的是「这个连接不是从公网直接来的」。Tailscale / Headscale 给的地址
+//     就在 100.64/10 里，而 VPN 是文档里推荐的第一档形态（DEPLOY.md），把它拒掉等于
+//     让最安全的那档部署打不开页面。收进来也没有放开边界：CGNAT 段的对端意味着流量
+//     来自运营商 NAT 内部，而 CGNAT 后面本来就没法做端口转发进来。
+//
+// 拒绝的典型来源是**公网 IP 直接连上主口**：路由器端口转发、UPnP、或者一台有全局
+// IPv6 的机器（Go 对 0.0.0.0 开的是双栈套接字，家宽 IPv6 通常没有 NAT）。那种连接
+// 说明这个口已经在公网上了，而主口的整套默认（本机免配对、不强制 TLS）都建立在
+// 「碰不到」上面 —— 所以宁可当场拒掉，让人去配 HERDR_WEB_PUBLIC_PORT。
+func PeerIsPrivateOrVPN(remoteAddr string) bool {
+	if PeerIsLocal(remoteAddr) {
+		return true
+	}
+	host := remoteAddr
+	if h, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		host = h
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil {
+		return false
+	}
+	// 100.64.0.0/10（RFC 6598）。Tailscale / Headscale 的地址就在这儿。
+	if v4 := ip.To4(); v4 != nil {
+		return v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127
+	}
+	return false
+}

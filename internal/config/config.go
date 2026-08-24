@@ -21,7 +21,24 @@ import (
 
 type Config struct {
 	Host string
+	// Port 是**主口**（默认 7788）：只服务本地网络。没声明 Exposed 时，对端不是私网 /
+	// 本机 / 链路本地 / CGNAT 的连接一个字节都不服务（见 server.PrivateListener）。
+	//
+	// 「默认那个口只是本地的」必须是代码强制的，不能是习惯：在这台机器上开发的人
+	// （尤其是 agent）看到的是 `127.0.0.1:7788`，不会知道机器上还有一条隧道正把这个口
+	// 转到公网上 —— 于是「反正只有本机能连」这个前提下做的每个决定（本机免配对、
+	// 不配 TLS）都变成一个公网上的洞。要暴露就显式配 PublicPort，见那一条。
 	Port int
+	// PublicPort 是**公网口**（默认 0 = 不开）：隧道 / 端口转发 / 反代该指的那个口。
+	// 听 0.0.0.0，和主口同一个 handler，但认证上按「公网」对待：本机免配对和旧 token
+	// 的 loopback 档在它上面一律不生效（见 auth.FromPublicPort），限速的「本机永不封」
+	// 豁免也跟着关掉。
+	//
+	// 为什么不是「给主口加一个 EXPOSED=1 开关」（那个还留着，兼容老配置）：开关是
+	// **声明**，声明会漏 —— 漏了的表现是一个公网上的免鉴权 shell，而本地看起来一切正常。
+	// 换成「公网要另开一个口」之后，漏配的表现变成隧道那头连不上（connection refused），
+	// 一个可用性问题换掉一个送 shell 的问题。
+	PublicPort int
 	// LanPort：局域网直连口（自签 TLS，听 0.0.0.0）。0 = 不开。
 	//
 	// 为什么要单独一个口：走隧道 / 反代那档，主口收的是明文（`TLS=proxy`），而
@@ -90,13 +107,18 @@ type Config struct {
 	// Insecure=true 才允许「暴露出去 + 没有 TLS」这种裸奔配置。
 	Insecure bool
 
-	// Exposed：**声明这个口能从公网碰到**（frp / 端口转发 / 隧道）。
+	// Exposed：**声明主口能从公网碰到**（frp / 端口转发 / 隧道）。
 	//
 	// 为什么必须手动声明：走 frp 的时候 herdr-web 往往只监听 127.0.0.1（frpc 从本机连
 	// 过来），于是「监听地址是不是 loopback」这个判据完全失效 —— 看起来最安全的配置
 	// 实际上暴露在整个互联网上。没有任何办法自动测出来，只能让人自己说。
 	//
-	// 声明之后：强制要求 TLS、关掉本机免配对、限速封锁默认打开。
+	// 声明之后：强制要求 TLS、关掉本机免配对、限速封锁默认打开，主口那道「只服务本地
+	// 网络」的检查也跟着让开（既然你说了它是公网口）。
+	//
+	// **新部署别用它，用 PublicPort。** 留着只为兼容已经这么配的机器：它是一个「说了才
+	// 生效」的声明，而漏声明的代价是一个公网上的免鉴权 shell。公网走独立端口之后，
+	// 漏配就只是隧道那头连不上。
 	Exposed bool
 
 	// TrustProxy：信任 X-Forwarded-For。**只有确实有个自己的可信前置时才能开** ——
@@ -245,6 +267,7 @@ func Load() (*Config, error) {
 	c := &Config{
 		Host:        v.GetString("host"),
 		Port:        intOf(v, "port", 7788, 1),
+		PublicPort:  intOf(v, "public_port", 0, 0),
 		LanPort:     intOf(v, "lan_port", 0, 0),
 		Dir:         v.GetString("dir"),
 		Shell:       v.GetString("shell"),
@@ -310,9 +333,9 @@ func Load() (*Config, error) {
 	}
 	c.Hostnames = dedupe(c.Hostnames) // 两个变量指同一个域名时别往证书里塞两遍
 	if c.TLSMode == "" {
-		// 没说的话：暴露出去或者听着局域网就自签，纯本机就明文（loopback 上 http
-		// 本来就是 secure context，没必要给自己找证书麻烦）
-		if c.Exposed || !c.Loopback {
+		// 没说的话：开了公网口、暴露出去、或者听着局域网就自签，纯本机就明文
+		// （loopback 上 http 本来就是 secure context，没必要给自己找证书麻烦）
+		if c.PublicPort > 0 || c.Exposed || !c.Loopback {
 			c.TLSMode = "auto"
 		} else {
 			c.TLSMode = "off"
@@ -337,6 +360,15 @@ func Load() (*Config, error) {
 	// 所以在这儿直接拒绝启动。Port+1 是管理口（见 serve）。
 	if c.LanPort > 0 && (c.LanPort == c.Port || c.LanPort == c.Port+1) {
 		return nil, fmt.Errorf("HERDR_WEB_LAN_PORT=%d 和主口 %d（或管理口 %d）撞了，换一个", c.LanPort, c.Port, c.Port+1)
+	}
+	// 公网口撞上主口那更严重：那等于把「公网」这套规则盖到主口上，或者反过来 ——
+	// 谁先监听成功谁说话，而两个口的认证宽严不一样。宁可不让它起。
+	if c.PublicPort > 0 {
+		switch c.PublicPort {
+		case c.Port, c.Port + 1, c.LanPort:
+			return nil, fmt.Errorf("HERDR_WEB_PUBLIC_PORT=%d 和主口 %d / 管理口 %d / 局域网直连口 %d 里的某一个撞了，换一个"+
+				"（公网口存在的意义就是和本地那几个口分开）", c.PublicPort, c.Port, c.Port+1, c.LanPort)
+		}
 	}
 
 	if c.LegacyToken != "off" {
@@ -387,9 +419,25 @@ func (c *Config) PasskeyOrigins() []string {
 	} else {
 		add("https://" + rpid)
 		add(fmt.Sprintf("https://%s:%d", rpid, c.Port))
+		// 公网口的端口号和主口不是一个，而 Origin 必须**完全一致**才算数。
+		// 少了这一条的表现是「公网上 passkey 登录按钮点了报错」，本机测不出来。
+		if c.PublicPort > 0 {
+			add(fmt.Sprintf("https://%s:%d", rpid, c.PublicPort))
+		}
 	}
 	return out
 }
+
+// MainIsPrivate 主口要不要那道「只服务本地网络」的门（server.PrivateListener）。
+//
+// 只有一种情况让开：明确声明了主口就是公网口（Exposed，老写法）。开着公网口不影响
+// 主口 —— 那正是这套端口分工要的效果：本地那个口继续按「本地」的宽松规则跑，公网那条
+// 路走另一个口、另一套规则。
+func (c *Config) MainIsPrivate() bool { return !c.Exposed }
+
+// PublicReachable：这个部署有没有一条公网进来的路（用来决定限速的「本机永不封」豁免
+// 该不该关、启动时要不要强制 TLS）。
+func (c *Config) PublicReachable() bool { return c.Exposed || c.PublicPort > 0 }
 
 // ServesTLS：本进程自己终止 TLS 吗。
 func (c *Config) ServesTLS() bool {

@@ -468,22 +468,26 @@ func (s *Store) legacyOK(r *http.Request) bool {
 	case "off":
 		return false
 	case "loopback":
-		// 只在本机有效：泄露给「已经能在你机器上跑代码的东西」不算泄露，它早就有 shell 了
-		return remoteIsLoopback(r) && !behindProxy(r)
+		// 只在本机有效：泄露给「已经能在你机器上跑代码的东西」不算泄露，它早就有 shell 了。
+		// 公网口上那个「本机」是假的（frpc 从本机连过来），见 FromPublicPort。
+		return remoteIsLoopback(r) && !behindProxy(r) && !FromPublicPort(r)
 	default:
 		return true
 	}
 }
 
-// trustLoopback 三个条件全中才算「这是本机上的浏览器」：
+// trustLoopback 四个条件全中才算「这是本机上的浏览器」：
 //
 //   - 明确打开了这个豁免（默认关）；
+//   - **请求不是从公网口进来的**。这条是结构性的那一道：公网口（HERDR_WEB_PUBLIC_PORT）
+//     上的请求源地址一样是 127.0.0.1，靠地址判断不出来，只能靠「落在哪个监听上」。
+//     开发时随手打开这个豁免、而机器上又有隧道，靠的就是这条不变成一个公网免鉴权的口。
 //   - 源地址是 loopback；
-//   - **Host 头也是 loopback 字面量**。这条是给 frp / 反代兜底的：穿透进来的请求源地址
+//   - **Host 头也是 loopback 字面量**。这条是给前置反代兜底的：穿透进来的请求源地址
 //     也是 127.0.0.1，但浏览器地址栏里是域名，所以 Host 会是那个域名。
 //   - 没有 XFF（有前置的痕迹就一律不信）。
 func (s *Store) trustLoopback(r *http.Request) bool {
-	if !s.cfg.TrustLoopback || !remoteIsLoopback(r) || behindProxy(r) {
+	if !s.cfg.TrustLoopback || FromPublicPort(r) || !remoteIsLoopback(r) || behindProxy(r) {
 		return false
 	}
 	host := r.Host

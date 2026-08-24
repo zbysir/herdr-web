@@ -21,6 +21,38 @@
 | 触屏 / 移动端的面板、顶栏、提示（`web/src/term/`、`components/`） | [MOBILE.md](docs/dev/MOBILE.md) |
 | 认证、配对、暴露形态、文件浏览那条路 | [SECURITY.md](docs/dev/SECURITY.md) |
 
+## ⚠️ 起服务之前：本机的端口不一定只有本机能连
+
+**这台开发机上跑着一条 frp 隧道**（`~/frp-docker/client/frpc.toml`，frpc 在容器里，frps 在
+公网 VPS 上）。它把本机的某个端口转到公网 —— 也就是说，你在终端里看到的
+`http://127.0.0.1:<端口>/` 有可能**整个互联网都连得到**，而且：
+
+- **本地一点症状都没有。** 监听地址是 `127.0.0.1`、每个请求的源地址也是 `127.0.0.1`
+  （frpc 从本机连过来），从进程里看不出任何区别。
+- **`lsof` 也看不出来。** 转发关系在 frpc 的配置里，不在这个进程里。
+
+所以下面这几条是硬规矩，不是建议：
+
+1. **不要为了省事关掉鉴权。** 一个「反正只有本机能连，先把鉴权关了调一下」的临时状态，
+   在这台机器上等于把一个登录 shell 挂在公网上，只要那段时间有人扫到就完了。
+   要免配对就 `HERDR_WEB_TRUST_LOOPBACK=1`（它只在主口生效，公网口不认），
+   **别改代码去绕认证**，也别把这个变量写进要提交的 `.env`。
+2. **起本地实例要给自己一套独立的端口和目录**，别抢默认口：
+   ```bash
+   HERDR_WEB_PORT=7811 HERDR_WEB_DIR=/tmp/herdr-web-dev HERDR_WEB_UPDATE_CHECK=false \
+   HERDR_WEB_TRUST_LOOPBACK=1 go run ./cmd/herdr-web
+   ```
+   （`HERDR_WEB_DIR` 另给一个的理由：设备凭据和锁文件不要和常驻服务那份打架。）
+3. **公网只走公网口。** 主口（`HERDR_WEB_PORT`，默认 7788）在代码里就只服务本地网络：
+   对端不是本机 / 私网 / 链路本地 / CGNAT 一律 403（`server.PrivateListener`）。要暴露就
+   配 `HERDR_WEB_PUBLIC_PORT`，隧道的 `localPort` 指那个口。**不要把隧道改回指主口**，
+   也不要为了「让外面能连上」去掉主口那道检查。
+4. **动认证 / 端口 / 暴露形态之前先读**
+   [DEPLOY.md](DEPLOY.md) 的「四个口，规则不一样」和
+   [SECURITY.md](docs/dev/SECURITY.md) §8「「暴露」从声明改成端口分工」。
+   那里写着为什么判据只能是「请求落在哪个监听上」，而不能是源 IP 或 `Host` 头 ——
+   那两个在隧道后面都是伪造得出来的。
+
 这几条最容易再踩一遍：
 
 - `ctrl+u` 清空是 **2N−1 次**（N 行输入），固定次数只够两行；清不空就别投。

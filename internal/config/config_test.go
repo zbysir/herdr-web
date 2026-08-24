@@ -174,3 +174,73 @@ func TestLanPortConflict(t *testing.T) {
 		t.Error("显式配了就该另起一个监听")
 	}
 }
+
+// 公网口撞上本地那几个口比局域网口撞更严重：谁先监听成功谁说话，而两个口的认证宽严
+// 不一样 —— 撞了就等于把「公网」那套规则盖到主口上（或者反过来），所以直接拒绝启动。
+func TestPublicPortConflict(t *testing.T) {
+	t.Setenv("HERDR_WEB_DIR", t.TempDir())
+	t.Setenv("HERDR_WEB_PORT", "7788")
+	t.Setenv("HERDR_WEB_TLS", "off")
+	t.Setenv("HERDR_WEB_LAN_PORT", "7790")
+
+	for _, p := range []string{"7788", "7789", "7790"} {
+		t.Setenv("HERDR_WEB_PUBLIC_PORT", p)
+		if _, err := Load(); err == nil {
+			t.Errorf("PUBLIC_PORT=%s 和本地端口撞了，应当报错", p)
+		}
+	}
+	t.Setenv("HERDR_WEB_PUBLIC_PORT", "17788")
+	c, err := Load()
+	if err != nil || c.PublicPort != 17788 {
+		t.Fatalf("PublicPort = %d (%v)", c.PublicPort, err)
+	}
+	if c.MainIsPrivate() != true {
+		t.Error("开了公网口不影响主口 —— 主口照旧只服务本地网络")
+	}
+	if !c.PublicReachable() {
+		t.Error("开了公网口就算有公网入口（限速的本机豁免要跟着关）")
+	}
+}
+
+// 默认（什么都不配）必须是「主口只服务本地网络、没有任何公网入口」。
+// 这条是整套端口分工的地基：agent 在本机开发时看到的就是这个默认值。
+func TestDefaultIsPrivateOnly(t *testing.T) {
+	t.Setenv("HERDR_WEB_DIR", t.TempDir())
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Port != 7788 || c.PublicPort != 0 {
+		t.Errorf("默认应当是主口 7788 + 不开公网口，得到 %d / %d", c.Port, c.PublicPort)
+	}
+	if !c.MainIsPrivate() || c.PublicReachable() {
+		t.Error("默认必须是「只服务本地网络、没有公网入口」")
+	}
+}
+
+// 开了公网口就等于「这个口后面的 shell 能从公网碰到」，TLS 的默认档位必须跟着变成自签
+// （而不是纯本机那档明文）。漏了这条的表现是明文挂在公网上，而本地看起来一切正常。
+func TestPublicPortImpliesTLS(t *testing.T) {
+	t.Setenv("HERDR_WEB_DIR", t.TempDir())
+	t.Setenv("HERDR_WEB_PUBLIC_PORT", "17788")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.TLSMode != "auto" || !c.BrowserHTTPS() {
+		t.Errorf("TLSMode = %q，想要 auto", c.TLSMode)
+	}
+}
+
+// 公网口的端口号和主口不是一个，而 WebAuthn 的 Origin 必须**完全一致**。
+// 少了这条的表现是「公网上 passkey 登录点了报错」，本机怎么测都测不出来。
+func TestPasskeyOriginsIncludePublicPort(t *testing.T) {
+	c := Config{Hostnames: []string{"h.example.com"}, Port: 7788, PublicPort: 17788}
+	want := "https://h.example.com:17788"
+	for _, o := range c.PasskeyOrigins() {
+		if o == want {
+			return
+		}
+	}
+	t.Errorf("origins 里得有 %s，得到 %v", want, c.PasskeyOrigins())
+}

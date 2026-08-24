@@ -276,7 +276,7 @@ export HERDR_WEB_TLS=auto
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `HERDR_WEB_PORT` | `7788` | 端口 |
+| `HERDR_WEB_PORT` | `7788` | 主口。**只服务本地网络**：对端不是本机 / 私网 / 链路本地 / CGNAT 的连接一律 403。要从公网访问就另开一个显式端口，见 `HERDR_WEB_PUBLIC_PORT` |
 | `HERDR_WEB_HOST` | `127.0.0.1` | 监听地址，`0.0.0.0` 开局域网 |
 | `HERDR_WEB_TOKEN` | 读 `~/.herdr-web/token` | **旧机制**，只够引导一次（换成设备凭据）。新装不再自动生成 |
 | `HERDR_WEB_SHELL` | `$SHELL` | PTY 里跑的 shell |
@@ -302,7 +302,8 @@ export HERDR_WEB_TLS=auto
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `HERDR_WEB_EXPOSED` | 关 | `=1` **声明这个口能从公网碰到**（frp / 端口转发 / 隧道）。走 frp 时本进程往往只监听 127.0.0.1，「监听地址是不是本机」这个判据完全失效，没法自动测，只能你自己说。声明之后：强制要求 TLS、关掉本机免配对 |
+| `HERDR_WEB_PUBLIC_PORT` | 关 | **要暴露就暴露这个口。** 在 `0.0.0.0:<端口>` 上另起一个监听（和主口同一个 handler），隧道 / 端口转发 / 反代指它，**别指主口**（主口只服务本地网络）。落在这个口上的请求按公网对待：本机免配对、旧 token 的 `loopback` 档都不生效（穿透进来的源地址也是 127.0.0.1，唯一靠得住的判据是「落在哪个监听上」）、限速的「本机永不封」豁免关掉、TLS 变成强制。为什么是多一个口而不是主口上加个开关：开关是**声明**，而声明会漏 —— 在这台机器上写代码的人（尤其是 agent）看到的是 `127.0.0.1:7788`，它没法知道机器上还有一条隧道正把这个口转出去，于是「反正只有本机能连」这个前提下做的每个决定都变成公网上的洞。换成独立端口之后，漏配的表现是隧道那头 connection refused |
+| `HERDR_WEB_EXPOSED` | 关 | **老写法，新配置用 `HERDR_WEB_PUBLIC_PORT`。** `=1` 声明**主口本身**能从公网碰到（frp / 端口转发 / 隧道）—— 这件事没法自动测，只能你自己说。声明之后：强制要求 TLS、关掉本机免配对，主口那道「只服务本地网络」的门也跟着让开（既然你说了它是公网口）。留着只为兼容已经这么配的机器 |
 | `HERDR_WEB_TLS_CERT` / `_KEY` | 空 | 用指定的证书。自己有域名、DNS-01 签了张真证书就走这条 —— 浏览器零警告、不用装描述文件，最省事 |
 | `HERDR_WEB_ACME_DNS` | 空 | 让 herdr-web **自己去签证书**，值是 DNS 服务商：`cloudflare` / `alidns` / `tencentcloud` / `route53` / `digitalocean` / `huaweicloud`。走 DNS-01，所以不需要外网能连进来 —— NAT 后面、甚至域名指到内网地址都能签。**各家 token 怎么拿、要给什么权限：[DNS.md](DNS.md)** |
 | `HERDR_WEB_ACME_EMAIL` | 空 | ACME 账号邮箱。可以空着，但那样到期提醒也收不到 |
@@ -342,9 +343,9 @@ export HERDR_WEB_TLS=auto
 # 2. 局域网里的手机 / 平板：自签 TLS，扫横幅上的二维码配对
 HERDR_WEB_HOST=0.0.0.0 ./herdr-web
 
-# 3. 走 frp / 隧道暴露到公网：EXPOSED 必须自己声明（进程只监听 127.0.0.1，
-#    它自己看不出来外面有没有人能碰到），PUBLIC_URL 决定二维码编的是哪个地址
-HERDR_WEB_EXPOSED=1 HERDR_WEB_TLS=proxy \
+# 3. 走 frp / 隧道暴露到公网：**隧道指公网口，别指主口**（主口只服务本地网络，
+#    它上面那些宽松默认都建立在「公网碰不到」上面），PUBLIC_URL 决定二维码编哪个地址
+HERDR_WEB_PUBLIC_PORT=17788 HERDR_WEB_TLS=proxy \
 HERDR_WEB_PUBLIC_URL=https://herdr.example.com \
 HERDR_WEB_HOSTNAME=herdr.example.com ./herdr-web
 

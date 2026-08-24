@@ -330,3 +330,43 @@ func TestMigrateDoesNotClobber(t *testing.T) {
 		t.Error("新位置的数据被老文件覆盖了")
 	}
 }
+
+// 这是整套端口分工要钉住的那一条：**开着本机免配对，公网口上照样进不来**。
+//
+// 场景就是这台机器上真实发生过的事：有人（或者一个 agent）在本机开发，随手
+// `HERDR_WEB_TRUST_LOOPBACK=1` 图个省事，而机器上还跑着一条隧道。穿透进来的请求源地址
+// 是 127.0.0.1，Host 也能自己写成 localhost —— 两个判据全被伪造得出来，唯一靠得住的
+// 是「这个请求落在哪个监听上」。
+func TestPublicPortIgnoresLoopbackTrust(t *testing.T) {
+	s := newStore(t, Config{TrustLoopback: true})
+
+	local := req("127.0.0.1", "")
+	if id := s.Authenticate(local); id == nil || id.Kind != "loopback" {
+		t.Fatalf("主口上本机免配对应当生效，得到 %+v", id)
+	}
+
+	pub := MarkPublicPort(req("127.0.0.1", ""))
+	if id := s.Authenticate(pub); id != nil {
+		t.Errorf("公网口上本机免配对必须不生效，得到 %+v —— 这就是一个公网免鉴权的 shell", id)
+	}
+}
+
+// 旧 token 的 loopback 档同理：它的理由是「泄露给已经能在你机器上跑代码的东西不算泄露」，
+// 而公网口上那个「本机」是 frpc，不是人。
+func TestPublicPortIgnoresLegacyLoopbackToken(t *testing.T) {
+	s := newStore(t, Config{LegacyToken: "loopback", Token: "tok123"})
+
+	r := httptest.NewRequest("GET", "/api/state?token=tok123", nil)
+	r.Host = "127.0.0.1:7788"
+	r.RemoteAddr = "127.0.0.1:54321"
+	if id := s.Authenticate(r); id == nil || id.Kind != "legacy" {
+		t.Fatalf("主口上旧 token 的 loopback 档应当生效，得到 %+v", id)
+	}
+
+	r2 := httptest.NewRequest("GET", "/api/state?token=tok123", nil)
+	r2.Host = "127.0.0.1:7788"
+	r2.RemoteAddr = "127.0.0.1:54321"
+	if id := s.Authenticate(MarkPublicPort(r2)); id != nil {
+		t.Errorf("公网口上不该认这把 token，得到 %+v", id)
+	}
+}

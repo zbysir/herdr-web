@@ -137,6 +137,7 @@ func (d Deps) state(w http.ResponseWriter, r *http.Request) {
 			"publicURL":   d.Cfg.PublicURL,
 			"tlsMode":     d.Cfg.TLSMode,
 			"exposed":     d.Cfg.Exposed,
+			"publicPort":  d.Cfg.PublicPort, // 0 = 没开公网口，主口只服务本地网络
 			"acmeDNS":     d.Cfg.ACMEDNS,
 			"acmeStaging": d.Cfg.ACMEStaging,
 			"rpid":        d.Cfg.PasskeyRPID(),
