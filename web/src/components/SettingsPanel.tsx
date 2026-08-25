@@ -281,7 +281,8 @@ function TermSection({
       </div>
 
       {/* 弹出组那片浮窗透多少。和上面那一行讲的是同一块东西（软键条长什么样），所以并在
-          一起、不再拉一条线。**存的是透明度**（0 = 不透明），CSS 那边取的是 100 减它 */}
+          一起、不再拉一条线。**存的是透明度**（0 = 不透明），CSS 那边取的是 100 减它，
+          而且加在整片浮窗上（键也一起透，只透底色的话挡掉的面积没少多少） */}
       <div className="mt-2 flex flex-wrap items-center gap-2 text-[13px]">
         弹窗透明度
         <div className="flex overflow-hidden rounded-md border border-line">
@@ -289,7 +290,7 @@ function TermSection({
             <Button
               key={v}
               size="tiny" on={popupClear === v}
-              title={v === 0 ? '不透明' : `透 ${v}%，底下的终端看得见`}
+              title={v === 0 ? '不透明' : `整片透 ${v}%（键也一起），底下的终端看得见`}
               className="rounded-none border-0 border-r border-line last:border-r-0"
               onClick={() => onPopupClear(v)}
             >
@@ -297,7 +298,7 @@ function TermSection({
             </Button>
           ))}
         </div>
-        <span className="text-xs text-faint">方向键那种浮窗，透一点能看见底下</span>
+        <span className="text-xs text-faint">方向键那种浮窗，整片透（键也一起）</span>
       </div>
 
       {/* 「点 switch 开面板一览」和上面那串终端行为不是一类：它改的是「点 herdr 那个按钮会

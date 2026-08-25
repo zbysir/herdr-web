@@ -24,9 +24,13 @@ import { cn } from '@/lib/utils'
  * 判「点到外面了」只认 `pointerdown`：`click` 在触屏上会因为浮层被卸掉而丢（浮层在
  * pointerup 里消失，touch 事件的 target 钉在已脱离文档的元素上，**不冒泡到 document**）。
  *
- * 底色**默认透 60%**（设置 →「终端」里能调，见 lib/prefs.ts 的 popupClear）：浮窗是盖在
+ * **整片默认透 60%**（设置 →「终端」里能调，见 lib/prefs.ts 的 popupClear）：浮窗是盖在
  * 终端上的，不透明时那一片就是个洞 —— 而它常常正好压在 agent 正在写的那几行上。
- * 透的只是**底色**这一层，键自己的底和字照旧不透，该看清的看得清。
+ *
+ * 透明度加在**浮窗这一层**（`opacity`），不是只调底色：底色、边、阴影、键、键上的字
+ * 一起透，底下那几行才真的看得见 —— 只透底色的话键还是一块块实的，挡掉的面积没少多少。
+ * 代价是键上的字也跟着淡，所以给了「不透明」那一档，而且默认那档下键本身还有自己的底色
+ * 垫着（`solid`）。`opacity` 不影响点击判定，手指照旧点得中。
  */
 export function KeyGroupPopup({
   cols, members, anchor, onClose, renderKey,
@@ -81,7 +85,7 @@ export function KeyGroupPopup({
     }
   }, [anchor, onClose])
 
-  // 底色透到什么程度。**同步读镜像**（见 lib/prefs.ts）—— 浮窗是点开那一刻才挂上来的，
+  // 透到什么程度。**同步读镜像**（见 lib/prefs.ts）—— 浮窗是点开那一刻才挂上来的，
   // 所以每次开都是新读的，在设置里改完下次点开就变了
   const alpha = 100 - popupClear()
 
@@ -108,10 +112,8 @@ export function KeyGroupPopup({
         gridTemplateColumns: `repeat(${cols}, minmax(var(--sk-w), auto))`,
         left: pos?.left ?? 0,
         top: pos?.top ?? 0,
-        // 透一点（见上面）。**盖在 `bg-bar` 上而不是替掉它** —— 「不透明」那一档算出来
-        // 就是同一个 token，而不认识 color-mix 的浏览器退回那个 class：两头都是不透明，
-        // 不会变成一片全透明
-        background: `color-mix(in srgb, var(--color-bar) ${alpha}%, transparent)`,
+        // 整片一起透（见上面）。1 的时候不生成新的层叠上下文，所以这么写没有代价
+        opacity: alpha / 100,
       }}
       // 这一下不能把焦点从终端上摘走，也不能让浏览器顺手弹输入法
       onMouseDown={(e) => e.preventDefault()}
