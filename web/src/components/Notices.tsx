@@ -152,7 +152,7 @@ function Card({
       <button
         type="button"
         aria-label="收起这条"
-        title="收起这条（不算看过，面板图标上的未读数不变）"
+        title="收起这条（不算看过，面板图标上的红点不灭）"
         className="absolute top-1.5 right-1.5 cursor-pointer rounded p-1 text-faint hover:bg-ctl hover:text-fg"
         onClick={() => onDismiss(n.seq)}
       >

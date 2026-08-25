@@ -39,7 +39,7 @@ export function Softkeys({
   onSend: (bytes: string) => void
   onSticky: (which: 'ctrl' | 'alt') => void
   /**
-   * `act:` 那一档的键**点了干什么 / 亮不亮 / 挂几条角标 / 这个部署有没有这项** ——
+   * `act:` 那一档的键**点了干什么 / 亮不亮 / 挂不挂红点 / 这个部署有没有这项** ——
    * 直接把顶栏那张动作表（App 的 `topbarAct`）递进来。
    *
    * 以前这儿是六个 prop（onKeyboard / onImage / onPanes / onFiles / onClip / onPaste）加一个
@@ -47,14 +47,14 @@ export function Softkeys({
    * 白拿到三件原来没有的：
    *
    *   - `act:panes` / `act:files` 的键会跟着面板亮起来（原来只有 `act:kbd` 会）；
-   *   - 角标不再只挂在 panes 上，谁有就挂谁（原来是一个专门的 `notice` prop）；
+   *   - 红点不再只挂在 panes 上，谁有就挂谁（原来是一个专门的 `notice` prop）；
    *   - 服务端关掉文件浏览时（`HERDR_WEB_FILES=0`）`act:files` 的键**直接不画** ——
    *     原来是画出来点了没反应。
    *
    * 顺带一个行为变化：`panes` / `files` 现在**点第二下收起面板**（原来只开不关）——
    * 那就是顶栏那两个按钮的语义，两处不一样才是怪事。
    */
-  act: (id: KeyAct) => { run: () => void; on?: boolean; badge?: number; hide?: boolean } | undefined
+  act: (id: KeyAct) => { run: () => void; on?: boolean; dot?: boolean; hide?: boolean } | undefined
 }) {
   const phone = usePhone()
   // 按键样式跟着 profile 走（设置 →「终端」）。**同步读镜像** —— 每个键都要它，
@@ -137,14 +137,12 @@ export function Softkeys({
         }}
       >
         {keyFace(k)}
-        {/* ring 用面板底色，让角标看着像贴在键上的徽标而不是浮在半空。
+        {/* ring 用面板底色，让这一点看着像贴在键上的而不是浮在半空。
             顶栏那个 ▦ 上已经有一个了，这儿还要一个是因为**手机上键盘一弹起来顶栏整条就收掉**
-            （见 App 里的 barHidden）——而那正是你在跟 agent 说话、最该知道「另一个在等你」的时候 */}
-        {!!a?.badge && (
-          <span className="absolute -top-1 -right-1 grid h-4 min-w-4 place-items-center rounded-full bg-bad px-1
-                           font-mono text-[10px]/none font-medium text-white ring-2 ring-bar tabular-nums">
-            {a.badge > 9 ? '9+' : a.badge}
-          </span>
+            （见 App 里的 barHidden）——而那正是你在跟 agent 说话、最该知道「另一个在等你」的时候。
+            不报数，为什么见 App 里的 dotEl */}
+        {!!a?.dot && (
+          <span className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-bad ring-2 ring-bar" />
         )}
       </Button>
     )

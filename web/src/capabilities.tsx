@@ -40,7 +40,7 @@ export interface Cap {
 }
 
 export const CAPS = [
-  { id: 'panes', key: true, panel: true, label: '面板一览', hint: '跳到某个 pane（顺带全屏）；有 agent 等你时挂角标', icon: <Panes className="size-4" /> },
+  { id: 'panes', key: true, panel: true, label: '面板一览', hint: '跳到某个 pane（顺带全屏）；有 agent 等你时挂红点', icon: <Panes className="size-4" /> },
   { id: 'files', key: true, panel: true, label: '文件', hint: '看 agent 生成的图 / 翻目录', icon: <Files className="size-4" /> },
   { id: 'compose', label: '发件箱', hint: '语音投稿（说话打字 → 投进 agent pane）', icon: <Pencil className="size-4" /> },
   { id: 'keys', label: '软键条', hint: '显示 / 收起软键条（Ctrl / Esc / 方向键）', icon: <Keyboard className="size-4" /> },

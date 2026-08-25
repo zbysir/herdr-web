@@ -171,7 +171,7 @@ export default function App() {
   )
   const [live, setLive] = useState(() => lsBool('composeLive', false))
   /**
-   * 面板图标上那个角标（还有几条没看）画不画。**只管角标，不管弹窗** —— 有人嫌它一直挂着扎眼，
+   * 面板图标上那个红点（有还没看的）画不画。**只管红点，不管弹窗** —— 有人嫌它一直挂着扎眼，
    * 而提示卡是自己会走的，两件事分开。整套提示要关在服务端（`HERDR_WEB_NOTICE_MS=0`）。
    *
    * 跟着**这套排布**走（见 lib/prefs.ts）：这是「这类设备上看着舒服不舒服」的偏好，不是部署
@@ -274,7 +274,7 @@ export default function App() {
   const compose = useCompose(cfg, showCompose && gate === 'ok', live, toast)
 
   /**
-   * 提示：哪个 agent 等你回答了 / 跑完了（右上角弹一下 + ▦ 上挂个未读数）。
+   * 提示：哪个 agent 等你回答了 / 跑完了（右上角弹一下 + ▦ 上挂个红点）。
    *
    * 间隔是服务端下发的（`HERDR_WEB_NOTICE_MS`，0 = 这个部署关了提示）。state 还没拉回来
    * 之前是 0，也就是不轮询 —— 差的那一两拍无所谓，而默认值写在前端就成了第二个真相源。
@@ -1014,7 +1014,7 @@ export default function App() {
     blurInput()
     setPanel('panes')
     void compose.loadPanes(true)
-    // 面板一览就是「看这些变化」的地方，开了就算**全部**看过：角标清零、右上角那几张收掉。
+    // 面板一览就是「看这些变化」的地方，开了就算**全部**看过：红点灭掉、右上角那几张收掉。
     // 点单张卡片只清那个 pane 的（见 Notices 的 onGoto）；关掉一张卡不算看过（那只是嫌它挡着）。
     notices.markSeen()
   }
@@ -1052,7 +1052,7 @@ export default function App() {
   }
 
   /**
-   * 顶栏每个按钮**点了干什么**（`on` 是亮不亮、`badge` 是角标、`hide` 是这个部署没有这项）。
+   * 顶栏每个按钮**点了干什么**（`on` 是亮不亮、`dot` 是红点、`hide` 是这个部署没有这项）。
    *
    * 和「按钮长什么样」分开放：图标和名字在 `components/topbarItems.tsx`（编辑器要用同一份），
    * 而这些动作要用 App 的状态和 Session，搬不出去。两边靠 id 对上，服务端那份白名单也是
@@ -1075,19 +1075,18 @@ export default function App() {
     title?: string
     /** 覆盖图标（全屏那个进 / 出两个样） */
     icon?: React.ReactNode
-    badge?: number
+    /** 右上角挂不挂那个红点（有还没看的）。**不带数字**，为什么见 dotEl */
+    dot?: boolean
     /** 这个部署没有这项（文件浏览可以在服务端关掉），画出来点开是一片 404 */
     hide?: boolean
   }>> = {
     panes: {
       on: panesOpen,
       run: () => (panesOpen ? setPanel(null) : openPanes()),
-      // 说「条」不说「几个 agent」：同一个 agent 连着变几次就是几条，实测挂一会儿就能
-      // 攒十几条，写成「10 个 agent」是假的
       title: notices.unread.length
-        ? `面板一览：${notices.unread.length} 条还没看（等你回答 / 跑完了）`
+        ? '面板一览：有还没看的（等你回答 / 跑完了）'
         : undefined,
-      badge: noticeDot ? notices.unread.length : 0,
+      dot: noticeDot && notices.unread.length > 0,
     },
     // 文件浏览能在服务端关掉（HERDR_WEB_FILES=0）。那时候连按钮都不画 ——
     // 点开一片 404 比没有这个入口更糟。主入口其实是终端里那行路径可点。
@@ -1112,28 +1111,27 @@ export default function App() {
   }
 
   /**
-   * badge：右上角挂一个**数字**角标（还有几条没看过）。0 / 省略 = 不挂。
+   * 红点：右上角一个点，**不报数**（假 / 省略 = 不挂）。
    *
-   * 数字而不是一个点：点只说「有东西」，而这儿的「有几条」是有用的 —— 两个 agent 在等你
-   * 和五个在等你，要不要放下手里的事去看是两回事。超过 9 就写 9+（再多那格就撑破了，
-   * 而且到那份上具体几条也不重要了）。
+   * 原来这儿是「还有几条没看」的数字。去掉是因为那个数**对不上眼睛看到的**：一条提示是
+   * 「某个 pane 变成了等你回答 / 跑完了」这么一个瞬间，而这个判断是读屏抽出来的、会抖，
+   * 同一件事在人眼里是一件、在环里可能是好几条；点进去看过一个 pane 又只销它名下那几条。
+   * 于是屏幕上常挂着一个跟「有几个 agent 在等我」对不上的数字 —— 而「有没有还没看的」
+   * 这一位是稳的。说不准的数字比不说更坏：它逼人去核对，核对完发现它是错的。
    *
-   * ring 用顶栏底色，让它像贴在图标上的徽标而不是浮在半空的一块红。
+   * ring 用顶栏底色，让它像贴在图标上的一点而不是浮在半空的一块红。
    */
-  const badgeEl = (badge?: number) => !!badge && (
+  const dotEl = (dot?: boolean) => !!dot && (
     <span
-      data-testid="notice-badge"
-      className="absolute -top-1 -right-1 grid h-4 min-w-4 place-items-center rounded-full bg-bad px-1
-                 font-mono text-[10px]/none font-medium text-white ring-2 ring-bar tabular-nums"
-    >
-      {badge > 9 ? '9+' : badge}
-    </span>
+      data-testid="notice-dot"
+      className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-bad ring-2 ring-bar"
+    />
   )
 
-  const iconBtn = (title: string, on: boolean, onClick: () => void, child: React.ReactNode, cls?: string, badge?: number) => (
+  const iconBtn = (title: string, on: boolean, onClick: () => void, child: React.ReactNode, cls?: string, dot?: boolean) => (
     <Button variant="default" size="icon" on={on} title={title} className={cn('relative', cls)} onClick={onClick} onMouseDown={(e) => e.preventDefault()}>
       {child}
-      {badgeEl(badge)}
+      {dotEl(dot)}
     </Button>
   )
 
@@ -1146,7 +1144,7 @@ export default function App() {
    * 矮一号（h-7），混在一排图标里就歪了。
    *
    * act 那一档直接走 `topbarAct`：softkeys 的 act 白名单（kbd / img / panes / files /
-   * clip / paste）正好是 CapId 的子集，**同一个 id 就是同一件事** —— 亮不亮、角标、
+   * clip / paste）正好是 CapId 的子集，**同一个 id 就是同一件事** —— 亮不亮、红点、
    * 「这个部署有没有这项」全都跟着内置那份走，不写第二份映射。这也是「动作库只有一份」
    * 这件事在代码里的样子。
    */
@@ -1179,7 +1177,7 @@ export default function App() {
         }}
       >
         {keyFace(k)}
-        {badgeEl(ta?.badge)}
+        {dotEl(ta?.dot)}
       </Button>
     )
   }
@@ -1326,7 +1324,7 @@ export default function App() {
             if (!it || !act || act.hide) return null
             return (
               <span key={item} className="shrink-0">
-                {iconBtn(act.title ?? `${it.label}：${it.hint}`, !!act.on, act.run, act.icon ?? it.icon, undefined, act.badge)}
+                {iconBtn(act.title ?? `${it.label}：${it.hint}`, !!act.on, act.run, act.icon ?? it.icon, undefined, act.dot)}
               </span>
             )
           })}
@@ -1460,7 +1458,7 @@ export default function App() {
           items={notices.items}
           autoMs={noticeMs}
           hidden={!!panel || !!viewing}
-          // 点卡片 = 我去看这个 agent 了：它名下的未读全消掉（角标跟着减），别的一条不动
+          // 点卡片 = 我去看这个 agent 了：它名下的未读全消掉（别人还有没看的，红点就还亮着），别的一条不动
           onGoto={(id) => { notices.seePane(id); void gotoPane(id, paneZoomPref()) }}
           onDismiss={notices.dismiss}
           onMore={openPanes}
@@ -1481,7 +1479,7 @@ export default function App() {
               onSticky={(w) => sess.current?.toggleSticky(w)}
               // act 那一档直接走顶栏那张动作表：softkeys 的 act 白名单是 CapId 的**子集**
               // （internal/capability 那张表里 Key 那一列），同一个 id 就是同一件事 ——
-              // 亮不亮、角标、「这个部署有没有这项」全都跟着走，不写第二份映射
+              // 亮不亮、红点、「这个部署有没有这项」全都跟着走，不写第二份映射
               act={(a) => topbarAct[a]}
             />
           ) : null}

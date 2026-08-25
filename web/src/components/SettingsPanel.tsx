@@ -61,7 +61,7 @@ export function SettingsPanel({
   onClose: () => void
   opts: TermOpts
   setOpt: (k: keyof TermOpts, v: boolean) => void
-  /** 面板图标上那个未读数角标画不画（有人不喜欢）。跟着这套排布走，见 lib/prefs.ts */
+  /** 面板图标上那个红点画不画（有人不喜欢）。跟着这套排布走，见 lib/prefs.ts */
   dot: boolean
   onDot: (v: boolean) => void
   /** 系统通知开没开（浏览器权限另算，面板里当场问） */
@@ -301,7 +301,7 @@ function TermSection({
       </div>
 
       {/* 「点 switch 开面板一览」和上面那串终端行为不是一类：它改的是「点 herdr 那个按钮会
-          发生什么」。和下面那个角标一样是「这类设备上顺手不顺手」的偏好（跟着排布那一套走，
+          发生什么」。和下面那个红点一样是「这类设备上顺手不顺手」的偏好（跟着排布那一套走，
           见 lib/prefs.ts），所以并在同一条线下面。 */}
       <label className="mt-2 flex cursor-pointer items-start gap-2.5 rounded-md border-t border-line pt-3 transition-colors hover:text-fg">
         <span className="pt-px">
@@ -323,9 +323,9 @@ function TermSection({
       <label className="mt-1 flex cursor-pointer items-start gap-2.5 rounded-md py-1 transition-colors hover:text-fg">
         <span className="pt-px"><Checkbox checked={dot} onCheckedChange={(v) => onDot(!!v)} /></span>
         <span className="text-[13px]/relaxed">
-          面板图标上的角标（还有几条没看：等你回答 / 刚跑完）
+          面板图标上的红点（有还没看的：等你回答 / 刚跑完）
           <span className="mt-0.5 block text-xs text-faint">
-            点进去看过一条就少一个；关掉只是不画这个角标，右上角的提示卡照常出。整套提示要关是服务端那侧的
+            看过的 pane 不再算数，都看过了就灭；关掉只是不画这个点，右上角的提示卡照常出。整套提示要关是服务端那侧的
             <code className="mx-1 rounded border border-line bg-ctl px-1 py-px font-mono text-[11px]">HERDR_WEB_NOTICE_MS=0</code>
           </span>
         </span>
