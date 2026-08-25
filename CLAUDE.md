@@ -105,7 +105,9 @@
   `HERDR_WEB_TLS=proxy` 时证书是前面那一层的事，前面那层证书不对的话域名 / RP ID / secure
   context 全对也按不动 —— 那时能进的路是配对码。详见 [SECURITY.md](docs/dev/SECURITY.md) §L2(c)。
 - 软键上的图标（`internal/softkeys/icons.go` ↔ `web/src/keyicons.tsx`，两边一字不差有测试）
-  和**按键样式**（`keyStyle` pref，`solid` / `plain`）。三条是真机反馈换来的：
+  和**按键样式**（`keyStyle` pref，`solid` / `plain`）、**弹窗透明度**（`popupClear` pref，
+  存的是**透明度**、0 = 不透明、出厂 60；CSS 那边取 `100 - clear`，反过来就和界面上写的
+  正好相反）。三条是真机反馈换来的：
   ① **尺寸 16px + 描边 1.75**：15px 糊（lucide `Keyboard` 内部八九个小点粘成一团）、18px
   又比旁边 13px 的字明显大一号（「方向按键也太大了吧」）；② **键盘和方向自己画**，不用
   lucide 那两个 —— 内部标记用**填充**不用细描边（填充缩到 16px 还是实的，1px 描边缩下去就

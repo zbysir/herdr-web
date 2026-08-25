@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Maximize, Minimize } from './icons'
 import { api, deviceKind, filesApi, libMap, resolveRows, SESSION, topbarKeyRef, UNAUTHED, type ClipResult, type FileStat, type Notice, type ProfilesResponse, type RowSegments, type SoftKey, type SoftkeysConfig, type SoftkeysResponse, type State, type TopbarResponse, type UnauthedDetail, type WhoAmI } from '@/lib/api'
-import { applyPrefs, keyStyle, pushPref, type KeyStyle } from '@/lib/prefs'
+import { applyPrefs, keyStyle, popupClear, pushPref, type KeyStyle, type PopupClear } from '@/lib/prefs'
 import { cacheLayout, readLayoutCache } from '@/lib/layoutcache'
 import { readClipboard, writeClipboard } from '@/lib/clipboard'
 import { Session } from '@/term/session'
@@ -202,6 +202,7 @@ export default function App() {
   // 软键条按键样式（有底色 / 无底色）。跟着排布那一套走 —— state 只为了改完立刻重渲染，
   // **读的地方一律读镜像**（keyStyle()），见 lib/prefs.ts
   const [keyStyleS, setKeyStyleS] = useState<KeyStyle>(keyStyle)
+  const [popupClearS, setPopupClearS] = useState<PopupClear>(popupClear)
   /** 「跑完了」那种卡片挂多久（ms）；0 = 一直挂着。「等你回答」的永远挂着，不受这个管 */
   const [noticeMs, setNoticeMs] = useState(
     () => Number(localStorage.getItem('noticeCardMs') ?? AUTO_MS_DEFAULT) || 0,
@@ -637,6 +638,7 @@ export default function App() {
     })
     setKbdFull(lsBool('kbdFull', true))
     setKeyStyleS(keyStyle())
+    setPopupClearS(popupClear())
     setNoticeDot(lsBool('noticeDot', true))
     setNoticeOS(lsBool('noticeOS', false))
     setNoticeOSFg(lsBool('noticeOSFg', false))
@@ -1416,6 +1418,8 @@ export default function App() {
             onKbdFull={(v) => { setKbdFull(v); pushPref(profile.id, 'kbdFull', v ? '1' : '0', toast) }}
             keyStyle={keyStyleS}
             onKeyStyle={(v) => { setKeyStyleS(v); pushPref(profile.id, 'keyStyle', v, toast) }}
+            popupClear={popupClearS}
+            onPopupClear={(v) => { setPopupClearS(v); pushPref(profile.id, 'popupClear', String(v), toast) }}
             heals={heals}
             // 存完把整份配置回传过来：软键条那一条和顶栏上放的「我的按键」是同一份定义
             onSaved={applySoftkeys}

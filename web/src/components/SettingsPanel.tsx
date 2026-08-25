@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { X } from 'lucide-react'
 import { AArrowDown, AArrowUp, CircleHalf } from '@/icons'
 import type { ProfilesResponse, SoftkeysConfig, State } from '@/lib/api'
-import type { KeyStyle } from '@/lib/prefs'
+import { POPUP_CLEARS, type KeyStyle, type PopupClear } from '@/lib/prefs'
 import { enableNotify, notifyState, testNotify, type NotifyState } from '@/lib/notify'
 import { Panel } from './ui/panel'
 import { Button } from './ui/button'
@@ -52,7 +52,8 @@ const TABS: { id: SettingsTab; label: string }[] = [
 
 export function SettingsPanel({
   tab, onTab, onClose, opts, setOpt, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs,
-  kbdFull, onKbdFull, keyStyle, onKeyStyle, heals, onSaved, onTopbar, toast, state,
+  kbdFull, onKbdFull, keyStyle, onKeyStyle, popupClear, onPopupClear,
+  heals, onSaved, onTopbar, toast, state,
   fontSize, onFont, scheme, onScheme, profile, onProfiles,
 }: {
   tab: SettingsTab
@@ -78,6 +79,9 @@ export function SettingsPanel({
   /** 软键条的按键样式：有底色 / 无底色。跟着排布那一套走，见 lib/prefs.ts */
   keyStyle: KeyStyle
   onKeyStyle: (v: KeyStyle) => void
+  /** 弹出组浮窗的底色透明度（%，0 = 不透明）。同上 */
+  popupClear: PopupClear
+  onPopupClear: (v: PopupClear) => void
   heals: number
   onSaved: (c: SoftkeysConfig) => void
   /** 顶栏存好了：把新的那一串 id 交回去，顶栏立刻跟着变（不用刷新页面） */
@@ -148,6 +152,7 @@ export function SettingsPanel({
           opts={opts} setOpt={setOpt} dot={dot} onDot={onDot} os={os} onOS={onOS}
           kbdFull={kbdFull} onKbdFull={onKbdFull}
           keyStyle={keyStyle} onKeyStyle={onKeyStyle}
+          popupClear={popupClear} onPopupClear={onPopupClear}
           osFg={osFg} onOSFg={onOSFg} cardMs={cardMs} onCardMs={onCardMs}
           heals={heals} state={state} toast={toast}
           fontSize={fontSize} onFont={onFont} scheme={scheme} onScheme={onScheme}
@@ -162,7 +167,7 @@ export function SettingsPanel({
 
 function TermSection({
   opts, setOpt, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs, kbdFull, onKbdFull,
-  keyStyle, onKeyStyle,
+  keyStyle, onKeyStyle, popupClear, onPopupClear,
   heals, state, fontSize, onFont, scheme, onScheme, toast,
 }: {
   opts: TermOpts
@@ -179,6 +184,8 @@ function TermSection({
   onKbdFull: (v: boolean) => void
   keyStyle: KeyStyle
   onKeyStyle: (v: KeyStyle) => void
+  popupClear: PopupClear
+  onPopupClear: (v: PopupClear) => void
   toast: (m: string) => void
   heals: number
   state?: State | null
@@ -271,6 +278,26 @@ function TermSection({
           </Button>
         </div>
         <span className="text-xs text-faint">无底色更轻；亮着的键照旧涂满（不然分不出）</span>
+      </div>
+
+      {/* 弹出组那片浮窗透多少。和上面那一行讲的是同一块东西（软键条长什么样），所以并在
+          一起、不再拉一条线。**存的是透明度**（0 = 不透明），CSS 那边取的是 100 减它 */}
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-[13px]">
+        弹窗透明度
+        <div className="flex overflow-hidden rounded-md border border-line">
+          {POPUP_CLEARS.map((v) => (
+            <Button
+              key={v}
+              size="tiny" on={popupClear === v}
+              title={v === 0 ? '不透明' : `透 ${v}%，底下的终端看得见`}
+              className="rounded-none border-0 border-r border-line last:border-r-0"
+              onClick={() => onPopupClear(v)}
+            >
+              {v === 0 ? '不透明' : `${v}%`}
+            </Button>
+          ))}
+        </div>
+        <span className="text-xs text-faint">方向键那种浮窗，透一点能看见底下</span>
       </div>
 
       {/* 「点 switch 开面板一览」和上面那串终端行为不是一类：它改的是「点 herdr 那个按钮会

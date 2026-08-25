@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import type { SoftKey } from '@/lib/api'
+import { popupClear } from '@/lib/prefs'
 import { cn } from '@/lib/utils'
 
 /**
@@ -22,6 +23,10 @@ import { cn } from '@/lib/utils'
  *
  * 判「点到外面了」只认 `pointerdown`：`click` 在触屏上会因为浮层被卸掉而丢（浮层在
  * pointerup 里消失，touch 事件的 target 钉在已脱离文档的元素上，**不冒泡到 document**）。
+ *
+ * 底色**默认透 60%**（设置 →「终端」里能调，见 lib/prefs.ts 的 popupClear）：浮窗是盖在
+ * 终端上的，不透明时那一片就是个洞 —— 而它常常正好压在 agent 正在写的那几行上。
+ * 透的只是**底色**这一层，键自己的底和字照旧不透，该看清的看得清。
  */
 export function KeyGroupPopup({
   cols, members, anchor, onClose, renderKey,
@@ -76,6 +81,10 @@ export function KeyGroupPopup({
     }
   }, [anchor, onClose])
 
+  // 底色透到什么程度。**同步读镜像**（见 lib/prefs.ts）—— 浮窗是点开那一刻才挂上来的，
+  // 所以每次开都是新读的，在设置里改完下次点开就变了
+  const alpha = 100 - popupClear()
+
   // 尾部整行是空的就不画：3×2 的方向键盘不该拖着一条空的第三行
   const rows: (SoftKey | null)[][] = []
   for (let i = 0; i < members.length; i += cols) rows.push(members.slice(i, i + cols))
@@ -99,6 +108,10 @@ export function KeyGroupPopup({
         gridTemplateColumns: `repeat(${cols}, minmax(var(--sk-w), auto))`,
         left: pos?.left ?? 0,
         top: pos?.top ?? 0,
+        // 透一点（见上面）。**盖在 `bg-bar` 上而不是替掉它** —— 「不透明」那一档算出来
+        // 就是同一个 token，而不认识 color-mix 的浏览器退回那个 class：两头都是不透明，
+        // 不会变成一片全透明
+        background: `color-mix(in srgb, var(--color-bar) ${alpha}%, transparent)`,
       }}
       // 这一下不能把焦点从终端上摘走，也不能让浏览器顺手弹输入法
       onMouseDown={(e) => e.preventDefault()}

@@ -29,7 +29,7 @@ export const PREF_KEYS = [
   'kitty', 'meta', 'copyOnSelect', 'sync2026', 'switchPanel',
   'kbdFull',
   'noticeDot', 'noticeOS', 'noticeOSFg', 'noticeCardMs',
-  'keyStyle',
+  'keyStyle', 'popupClear',
 ] as const
 export type PrefKey = (typeof PREF_KEYS)[number]
 
@@ -68,3 +68,25 @@ export type KeyStyle = 'solid' | 'plain'
  */
 export const keyStyle = (): KeyStyle =>
   (localStorage.getItem('keyStyle') === 'plain' ? 'plain' : 'solid')
+
+/**
+ * 弹出组浮窗的底色**透明度**（%，0 = 不透明）。默认 60 —— 浮窗盖在终端上，不透明时那一片
+ * 就是个洞，而它常常正好压在 agent 正在写的那几行上；透一点还看得见底下。
+ *
+ * 存的是**透明度**（界面上写的也是这个词），CSS 那边要的是不透明度，所以那儿是 `100 - clear`。
+ * 别把这两个反过来：60 那一档反过来就是「几乎不透」，和界面上写的正好相反。
+ *
+ * 只给这几档而不是一个滑块：这是「顺手不顺手」的偏好，不是要精调的参数，滑块在手机上
+ * 拖不准（还得给它一个数值显示），几个按钮一眼就挑完了。
+ */
+export const POPUP_CLEARS = [0, 20, 40, 60] as const
+export type PopupClear = (typeof POPUP_CLEARS)[number]
+
+/**
+ * 这台设备上浮窗透到什么程度。**同步读镜像**（见上面那段）—— 和 `keyStyle` 一样，
+ * 浮窗每次渲染都要它。认不出来的值退回 60（老文件、或者别的设备上更新的版本写进去的）。
+ */
+export const popupClear = (): PopupClear => {
+  const n = Number(localStorage.getItem('popupClear'))
+  return (POPUP_CLEARS as readonly number[]).includes(n) ? (n as PopupClear) : 60
+}

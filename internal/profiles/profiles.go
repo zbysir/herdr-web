@@ -83,7 +83,7 @@ var Prefs = []string{
 	"kitty", "meta", "copyOnSelect", "sync2026", "switchPanel",
 	"kbdFull",
 	"noticeDot", "noticeOS", "noticeOSFg", "noticeCardMs",
-	"keyStyle",
+	"keyStyle", "popupClear",
 }
 
 // Profile 是一套排布的身份 + 它自己那几个小开关。
