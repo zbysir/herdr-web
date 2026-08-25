@@ -14,6 +14,7 @@
 | `internal/outbox`、`web/src/hooks/useCompose.ts` | [OUTBOX.md](OUTBOX.md) —— 发件箱的设计取舍 |
 | `web/src/term/`、触屏那一层、移动端的面板 / 顶栏 / 提示 | [MOBILE.md](MOBILE.md) —— 每一条是拿什么 bug 换来的 |
 | 认证、配对、暴露形态、文件浏览 / 看 diff 那条路 | [SECURITY.md](SECURITY.md) —— 分层设计 + 哪些禁令不能绕 |
+| **要不要新做一块界面**（还是该扩 herdr 的 TUI） | [TUI-VS-GUI.md](TUI-VS-GUI.md) —— 六条触发条件 + 反向判据 + 动手前的成本清单 |
 
 还有两份在根上，因为它们同时是使用说明：
 

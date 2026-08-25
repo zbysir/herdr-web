@@ -20,6 +20,7 @@
 | 发件箱（`internal/outbox`、`web/src/hooks/useCompose.ts`） | [OUTBOX.md](docs/dev/OUTBOX.md) |
 | 触屏 / 移动端的面板、顶栏、提示（`web/src/term/`、`components/`） | [MOBILE.md](docs/dev/MOBILE.md) |
 | 认证、配对、暴露形态、文件浏览 / 看 diff 那条路 | [SECURITY.md](docs/dev/SECURITY.md) |
+| **要不要在网页这边新做一块界面**（还是留在 TUI / 去扩 herdr） | [TUI-VS-GUI.md](docs/dev/TUI-VS-GUI.md) |
 
 ## ⚠️ 起服务之前：本机的端口不一定只有本机能连
 
