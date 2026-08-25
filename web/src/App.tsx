@@ -17,6 +17,7 @@ import { useArm } from '@/hooks/useArm'
 import { keyFace } from '@/keyicons'
 import { Button } from '@/components/ui/button'
 import { Toast } from '@/components/ui/toast'
+import { NoticeDot } from '@/components/ui/dot'
 import { Dock } from '@/components/Dock'
 import { Softkeys } from '@/components/Softkeys'
 import { Compose } from '@/components/Compose'
@@ -1075,8 +1076,10 @@ export default function App() {
     title?: string
     /** 覆盖图标（全屏那个进 / 出两个样） */
     icon?: React.ReactNode
-    /** 右上角挂不挂那个红点（有还没看的）。**不带数字**，为什么见 dotEl */
+    /** 右上角挂不挂那个点（有还没看的）。**不带数字**，为什么见 dotEl */
     dot?: boolean
+    /** 点的颜色：红 = 有 agent 在等你，绿 = 有还没看过的改动。见 ui/dot.tsx */
+    tone?: 'bad' | 'brand' 
     /** 这个部署没有这项（文件浏览可以在服务端关掉），画出来点开是一片 404 */
     hide?: boolean
   }>> = {
@@ -1119,19 +1122,15 @@ export default function App() {
    * 于是屏幕上常挂着一个跟「有几个 agent 在等我」对不上的数字 —— 而「有没有还没看的」
    * 这一位是稳的。说不准的数字比不说更坏：它逼人去核对，核对完发现它是错的。
    *
-   * ring 用顶栏底色，让它像贴在图标上的一点而不是浮在半空的一块红。
+   * 长什么样（以及它为什么**不能探出按钮框**：顶栏这排是横滑容器，会连着上下一起裁）
+   * 在 `components/ui/dot.tsx`。
    */
-  const dotEl = (dot?: boolean) => !!dot && (
-    <span
-      data-testid="notice-dot"
-      className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-bad ring-2 ring-bar"
-    />
-  )
+  const dotEl = (dot?: boolean, tone?: 'bad' | 'brand') => !!dot && <NoticeDot testId="notice-dot" tone={tone} />
 
-  const iconBtn = (title: string, on: boolean, onClick: () => void, child: React.ReactNode, cls?: string, dot?: boolean) => (
+  const iconBtn = (title: string, on: boolean, onClick: () => void, child: React.ReactNode, cls?: string, dot?: boolean, tone?: 'bad' | 'brand') => (
     <Button variant="default" size="icon" on={on} title={title} className={cn('relative', cls)} onClick={onClick} onMouseDown={(e) => e.preventDefault()}>
       {child}
-      {dotEl(dot)}
+      {dotEl(dot, tone)}
     </Button>
   )
 
@@ -1177,7 +1176,7 @@ export default function App() {
         }}
       >
         {keyFace(k)}
-        {dotEl(ta?.dot)}
+        {dotEl(ta?.dot, ta?.tone)}
       </Button>
     )
   }

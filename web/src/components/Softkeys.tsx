@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Button } from './ui/button'
+import { NoticeDot } from './ui/dot'
 import { KeyGroupPopup } from './KeyGroupPopup'
 import type { RowSegments, SoftKey } from '@/lib/api'
 import type { KeyAct } from '@/capabilities'
@@ -137,13 +138,10 @@ export function Softkeys({
         }}
       >
         {keyFace(k)}
-        {/* ring 用面板底色，让这一点看着像贴在键上的而不是浮在半空。
-            顶栏那个 ▦ 上已经有一个了，这儿还要一个是因为**手机上键盘一弹起来顶栏整条就收掉**
+        {/* 顶栏那个 ▦ 上已经有一个了，这儿还要一个是因为**手机上键盘一弹起来顶栏整条就收掉**
             （见 App 里的 barHidden）——而那正是你在跟 agent 说话、最该知道「另一个在等你」的时候。
-            不报数，为什么见 App 里的 dotEl */}
-        {!!a?.dot && (
-          <span className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-bad ring-2 ring-bar" />
-        )}
+            长什么样在 ui/dot.tsx（那儿写着它为什么不能探出键的框：这一行也是横滑的） */}
+        {!!a?.dot && <NoticeDot />}
       </Button>
     )
   }
