@@ -13,7 +13,7 @@
 | `internal/composer` | [COMPOSER.md](COMPOSER.md) —— 读屏抽输入框，错了**不报错** |
 | `internal/outbox`、`web/src/hooks/useCompose.ts` | [OUTBOX.md](OUTBOX.md) —— 发件箱的设计取舍 |
 | `web/src/term/`、触屏那一层、移动端的面板 / 顶栏 / 提示 | [MOBILE.md](MOBILE.md) —— 每一条是拿什么 bug 换来的 |
-| 认证、配对、暴露形态、文件浏览那条路 | [SECURITY.md](SECURITY.md) —— 分层设计 + 哪些禁令不能绕 |
+| 认证、配对、暴露形态、文件浏览 / 看 diff 那条路 | [SECURITY.md](SECURITY.md) —— 分层设计 + 哪些禁令不能绕 |
 
 还有两份在根上，因为它们同时是使用说明：
 

@@ -25,6 +25,7 @@ import (
 	"github.com/zbysir/herdr-web/internal/clip"
 	"github.com/zbysir/herdr-web/internal/config"
 	"github.com/zbysir/herdr-web/internal/files"
+	"github.com/zbysir/herdr-web/internal/gitdiff"
 	"github.com/zbysir/herdr-web/internal/herdr"
 	"github.com/zbysir/herdr-web/internal/outbox"
 	"github.com/zbysir/herdr-web/internal/profiles"
@@ -51,6 +52,9 @@ type Server struct {
 	// <img src> 设不了 CSRF 头，所以图片这条路必须换一种凭据，见 internal/files/sign.go。
 	Files *files.Browser
 	Sign  *files.Signer
+	// Git 看 diff 那条路（内部也用 Files 当唯一的鉴权点，见 internal/gitdiff）。
+	// nil / 没启用 = 这台机器上没有 git，或者被 HERDR_WEB_GIT=0 关掉了。
+	Git *gitdiff.Runner
 
 	Passkeys *auth.Passkeys
 	// ReauthAfter：注册过 passkey 之后，一份会话在「上次生物验证」之后还能用多久。
@@ -140,6 +144,15 @@ func New(cfg *config.Config, web fs.FS, a *auth.Store, g *auth.Gate, opt Options
 	// 那个定义还在不在，而 topbar 那个包**故意不 import softkeys**（两个文件两个口），
 	// 所以在这儿把线接上。
 	s.Topbar.Keys = s.Softkeys.LibIDs
+	// 看 diff 复用同一个 Files：那是唯一的鉴权点（HERDR_WEB_FILES=0 / FILE_ROOTS 一起生效，
+	// 见 internal/gitdiff 的包注释）。关掉这项就干脆不建 Runner —— Enabled() 为假，
+	// 前端不画那个按钮，三个口一律 404。
+	if cfg.Git {
+		s.Git = gitdiff.New(s.Files)
+		if !s.Git.Enabled() {
+			log.Printf("看 diff：PATH 上没有 git，这个面板关掉了")
+		}
+	}
 	// 签名密钥在这儿生成：一个进程一把、只在内存里，重启就把所有旧链接作废。
 	// 生成不出来（拿不到系统熵）就让 Sign 留 nil —— 那时候 /_f/ 直接 404，
 	// 文件浏览退化成「列得出来但打不开」，而不是拿一把可预测的密钥继续跑。
@@ -267,6 +280,8 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 		s.apiHerdr(w, r, seg)
 	case "files":
 		s.apiFiles(w, r, seg)
+	case "git":
+		s.apiGit(w, r, seg)
 	case "handoff":
 		s.apiHandoff(w, r)
 	default:
@@ -293,7 +308,9 @@ func (s *Server) apiState(w http.ResponseWriter, r *http.Request) {
 		// 提示的轮询间隔。0 = 这个部署把提示关了，前端那边就别轮询、也别画红点。
 		"notice": map[string]int{"pollMs": s.Cfg.NoticeMS},
 		// 文件浏览关掉时（HERDR_WEB_FILES=0）前端得知道，不然顶栏那个按钮点开就是一片 404
-		"files":       s.Files != nil && s.Files.Enabled && s.Sign != nil,
+		"files": s.Files != nil && s.Files.Enabled && s.Sign != nil,
+		// 看 diff 也一样：这台机器上没有 git（或者被关掉了）就别画那个按钮
+		"git":         s.Git.Enabled(),
 		"session":     name, // 空 = 默认 session
 		"herdrSocket": s.Cfg.SessionSocket(name),
 		"version":     s.versionInfo(),

@@ -44,6 +44,7 @@ type Cap struct {
 var All = []Cap{
 	{ID: "panes", Topbar: true, Key: true, Panel: true},
 	{ID: "files", Topbar: true, Key: true, Panel: true},
+	{ID: "diff", Topbar: true, Key: true, Panel: true},
 	{ID: "compose", Topbar: true},
 	{ID: "keys", Topbar: true},
 	{ID: "kbd", Topbar: true, Key: true},

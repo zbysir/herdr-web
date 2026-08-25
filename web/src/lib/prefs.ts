@@ -30,6 +30,7 @@ export const PREF_KEYS = [
   'kbdFull',
   'noticeDot', 'noticeOS', 'noticeOSFg', 'noticeCardMs',
   'keyStyle', 'popupClear',
+  'diffWrap',
 ] as const
 export type PrefKey = (typeof PREF_KEYS)[number]
 
@@ -93,3 +94,14 @@ export const popupClear = (): PopupClear => {
   const n = Number(localStorage.getItem('popupClear'))
   return (POPUP_CLEARS as readonly number[]).includes(n) ? (n as PopupClear) : 60
 }
+
+/**
+ * 看 diff 时长行折不折。**默认折**（这个面板本来就是为手机做的：不折的话每行都要横滑，
+ * 而那正是终端里那份读不下去的原因）。
+ *
+ * 桌面和平板横屏上关掉它更好读 —— 那时候屏够宽，不折行才对得齐缩进，一眼看得出层级。
+ * 所以它跟着**这一套排布**走（手机一套、电脑一套），不是全局一个值。
+ *
+ * 和 keyStyle / popupClear 一样**同步读镜像**：查看器每渲染一行都要它。
+ */
+export const diffWrap = () => localStorage.getItem('diffWrap') !== '0'

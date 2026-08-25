@@ -9,6 +9,7 @@ import { initialScheme, type Scheme } from '@/term/themes'
 import { useViewportHeight } from '@/hooks/useViewportHeight'
 import { useCompose } from '@/hooks/useCompose'
 import { useNotices } from '@/hooks/useNotices'
+import { useGitDirty } from '@/hooks/useGitDirty'
 import { useLanDirect } from '@/hooks/useLanDirect'
 import { away, onNotifyClick, showNotify } from '@/lib/notify'
 import { usePhone } from '@/hooks/usePhone'
@@ -26,6 +27,7 @@ import { PaneSwitcher, paneZoomPref } from '@/components/PaneSwitcher'
 import { CAP_BY_ID, TOPBAR_DEFAULT, type CapId, type PanelId } from '@/capabilities'
 import { AUTO_MS_DEFAULT, Notices } from '@/components/Notices'
 import { FilesPanel } from '@/components/FilesPanel'
+import { DiffPanel } from '@/components/DiffPanel'
 import { FileViewer } from '@/components/FileViewer'
 import { Pairing } from '@/components/Pairing'
 import { CopyPrompt } from '@/components/CopyPrompt'
@@ -150,6 +152,7 @@ export default function App() {
   const settings = panel === 'settings'
   const panesOpen = panel === 'panes'
   const filesOpen = panel === 'files'
+  const diffOpen = panel === 'diff'
   /**
    * 文件浏览的两块东西：
    *   panel === 'files'  兜底的目录浏览面板（filesAt 是「打开时定位到哪儿」）
@@ -162,6 +165,12 @@ export default function App() {
    * 开弹窗之前就知道（见 openPath），不然点一个目录会先摊一句「这是个目录」再让人
    * 多点一下 —— 点路径的人要的就是「打开它」。
    */
+  /**
+   * 顶栏「改动」那个角标盯着**哪个仓库**：上次在面板里看的那个（面板改仓库时会告诉我们），
+   * 没有就用焦点 pane 的 cwd。不是「所有仓库一起盯」—— 一台机器上开着几十个 pane 是常态，
+   * 一拍几十次 git 换一个小点不值当（见 hooks/useGitDirty）。
+   */
+  const [diffRepo, setDiffRepo] = useState<string | null>(() => localStorage.getItem('diffRepo'))
   const [filesAt, setFilesAt] = useState<string | undefined>(undefined)
   const [viewing, setViewing] = useState<FileStat | null>(null)
   // 记住上次看的那一页
@@ -318,6 +327,15 @@ export default function App() {
    * 会永远停在建立那一刻 —— 直接用 state 的话，点相对路径解出来的永远是第一次连上时
    * 那个 pane 的目录，而屏幕上一点异常都看不出来。
    */
+  /**
+   * 「改动」那个角标。**跟着红点那个开关一起关**：不想要点的人不该为它的轮询买单
+   * （那是在对面那台机器上跑 git，而那台机器正跑着 agent）。
+   */
+  const gitDirty = useGitDirty(
+    diffRepo || compose.panes.find((p) => p.focused)?.cwd || undefined,
+    gate === 'ok' && state?.git !== false && noticeDot,
+  )
+
   const cwdRef = useRef('')
   useEffect(() => {
     // 认**焦点** pane 而不是发件箱瞄准的那个：屏幕上那行字是焦点 pane 打出来的，
@@ -358,6 +376,20 @@ export default function App() {
     setPanel('files')
     void compose.loadPanes(true)
   }, [compose.loadPanes])
+
+  /**
+   * 开「改动」面板（git diff）。
+   *
+   * 和 openFiles 同一个套路，**每次都刷一遍 pane 列表**：在哪个仓库是从各个 pane 的 cwd
+   * 猜出来的（见 DiffPanel），而 agent 换目录、开新 pane 随时在发生。
+   */
+  const openDiff = useCallback(() => {
+    blurInput()
+    setPanel('diff')
+    void compose.loadPanes(true)
+    // 开了就算看过：这儿就是看这些改动的地方（和面板一览那个红点同一条规矩）
+    gitDirty.markSeen()
+  }, [compose.loadPanes, gitDirty.markSeen])
 
   /**
    * 打开一条路径 —— 终端里点的、面板里点的，都走这儿。
@@ -1094,6 +1126,20 @@ export default function App() {
     // 文件浏览能在服务端关掉（HERDR_WEB_FILES=0）。那时候连按钮都不画 ——
     // 点开一片 404 比没有这个入口更糟。主入口其实是终端里那行路径可点。
     files: { on: filesOpen, run: () => (filesOpen ? setPanel(null) : openFiles()), hide: state?.files === false },
+    // 看 diff 也能在服务端关掉（HERDR_WEB_GIT=0），而且这台机器上没装 git 时同样为假 ——
+    // 那时候连按钮都不画（点开一片报错比没有这个入口更糟，和文件浏览同一条）
+    diff: {
+      on: diffOpen,
+      run: () => (diffOpen ? setPanel(null) : openDiff()),
+      hide: state?.git === false,
+      // 绿点 = 有**你还没看过的**改动。不是「有改动」—— 那在一个正干活的仓库里永远为真，
+      // 点就等于焊在图标上（见 hooks/useGitDirty）。红留给「有 agent 在等你」。
+      dot: gitDirty.fresh,
+      tone: 'brand',
+      title: gitDirty.files
+        ? `改动：${gitDirty.files} 个文件${gitDirty.fresh ? '（有新的）' : ''}`
+        : undefined,
+    },
     compose: { on: showCompose, run: () => toggleCompose(!showCompose) },
     keys: { on: showKeys, run: () => toggleKeys(!showKeys) },
     // 这一下是用户手势，正好在这儿进全屏（键盘那条路见 kbdFull 的注释）
@@ -1323,7 +1369,7 @@ export default function App() {
             if (!it || !act || act.hide) return null
             return (
               <span key={item} className="shrink-0">
-                {iconBtn(act.title ?? `${it.label}：${it.hint}`, !!act.on, act.run, act.icon ?? it.icon, undefined, act.dot)}
+                {iconBtn(act.title ?? `${it.label}：${it.hint}`, !!act.on, act.run, act.icon ?? it.icon, undefined, act.dot, act.tone)}
               </span>
             )
           })}
@@ -1383,6 +1429,17 @@ export default function App() {
             start={filesAt}
             onClose={() => setPanel(null)}
             onOpen={(p) => void openPath(p)}
+          />
+        )}
+        {diffOpen && (
+          <DiffPanel
+            panes={compose.panes}
+            profile={profile.id}
+            onClose={() => setPanel(null)}
+            onBrowse={(d) => openFiles(d)}
+            onOpen={(p) => void openPath(p)}
+            onRepo={setDiffRepo}
+            toast={toast}
           />
         )}
         {/* 查看器盖在最上面（面板也盖住）：从面板里点开一张图之后，退出来还该回到

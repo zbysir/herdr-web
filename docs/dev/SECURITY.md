@@ -791,3 +791,44 @@ SVG 是**能跑脚本**的图片（`<script>`、`onload=`、`<foreignObject>`）
 认 SVG 的判据故意保守：BOM / 空白之后第一个字符必须是 `<`、采样里有 `<svg`、而且
 **不能有 `<html`**。「一份 HTML 里顺手嵌了个 svg」必须走附件 —— 认错的代价不对称，
 把 svg 认成文本只是看到源码，把 html 认成 svg 就是把一个能跑脚本的文档 inline 出去了。
+
+## 看 diff 这条路
+
+（`internal/gitdiff` + `internal/server/gitapi.go`。它就是文件浏览的一个变体 ——
+**吐出去的照样是 agent 写的文件内容**，只是换了个形状。）
+
+#### 边界只有一处，而且是借来的
+
+仓库根目录要过 `files.Browser.Check`，也就是说：
+
+- `HERDR_WEB_FILES=0` 时这条路**一起关掉**。一份 diff 就是文件内容，两个开关各管一半的话，
+  关掉文件浏览的人会以为内容出不去，而实际上换个入口照样看得到；
+- 配了 `HERDR_WEB_FILE_ROOTS` 时那个 jail 照旧生效（根在里面 ⇒ 里面所有文件都在里面，
+  jail 是按前缀算的）。
+
+另外有一个自己的开关 `HERDR_WEB_GIT`（默认开），以及一条「这台机器上有没有 git」——
+两者任一为假，`/api/git/*` 全 404 且前端不画按钮。
+
+#### 这条路上四条硬规矩
+
+1. **只读。** 三个口全是 GET，没有 add / commit / checkout，也不打算有。会改仓库的事在
+   终端里做（那儿有完整的 git，还看得见输出）—— 一个从公网点得到的「一键 checkout」，
+   值不了它带来的那些问题。
+2. **`--no-index` 那条路必须自己夹住路径。** 未跟踪的新文件不在 index 里，`git diff` 看不见
+   它，只能 `git diff --no-index -- /dev/null <文件>` —— 而这条命令的参数是**任意路径**、
+   不受仓库约束。不夹的话前端传一个 `../../../.ssh/id_rsa` 就把任意文件读出来了。所以先
+   `Clean` 再核「还在仓库根下面」（`gitdiff.Join`），然后照旧过一遍 `files.Check`。
+   `TestDiffUntrackedEscape` 盯着这条。
+3. **不开 shell、参数写死。** `exec.Command` 直接跑 git，路径一律排在 `--` 后面；「跟谁比」
+   是三个**固定档**（工作区 / 已暂存 / 上次提交），不是一段能从前端传进来的 revision ——
+   revision 语法里有 `--upload-pack=` 这种能拐去执行程序的东西。
+4. **输出要限量，读满就把进程杀掉。** agent 生成一个几百 MB 的文件是常事。不杀的话 git 会
+   一直阻塞在写管道上（我们已经不读了），那个进程和那条请求一起挂着。
+
+#### 一条不算安全、但会静默坏掉的
+
+`--no-optional-locks`（外加 `GIT_OPTIONAL_LOCKS=0`）：`git status` 默认会顺手刷新并**写**
+index，也就是要抢 `.git/index.lock`。而这个面板的对面正有一个 agent 在同一个仓库里跑 git ——
+我们只是看一眼，不该让**别人的**命令因此失败（而那个失败落在对方头上，这边一点症状都没有）。
+其余几条（`color.ui=false` / `core.quotepath=false` / `--no-ext-diff` / 清掉 `GIT_*`）
+在 `internal/gitdiff` 的包注释里，每一条都是静默的。

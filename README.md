@@ -210,6 +210,36 @@ allowlist would not stop them and would only get in the way daily. If you want o
 → The short-lived link route and the four hard rules on it (never `text/html`, why SVG is safe to
 render): [SECURITY.md](docs/dev/SECURITY.md)
 
+### Reading a diff
+
+`git diff` is close to unreadable in a phone terminal: long lines are either cut off or scroll
+sideways, a wall of red against a wall of green does not show you *which word* changed, and paging
+means driving a pager with arrow keys. The "改动" button in the top bar (or `act:diff`) opens a
+separate layer:
+
+- **a file list first**: what changed, `+n −m` per file, which parts are already `git add`ed;
+- tapping one opens a patch that **wraps long lines** (on by default; the button in its header
+  toggles it, and the choice is remembered in this layout profile), with **word-level highlighting**
+  on lines that pair up — only the part that actually changed gets the darker background;
+- **every file of the change is one continuous stream**: keep scrolling past a and you are in b, no
+  going back to the list. The header tracks where you are (`3 / 19 · filename`), and tapping the band
+  between two files folds one away. Files you have not reached yet hold their place and are fetched
+  as you approach them, one at a time — no fanning out a dozen `git diff`s on the machine your agents
+  are working on;
+- three views: **working tree vs the last commit** (including new files) / **staged** / **the last
+  commit itself**;
+- you never pick the repository: it is discovered from every pane's cwd, deduplicated by repo root,
+  with the focused pane first;
+- the top-bar button carries a **green dot** when there are changes **you have not looked at yet** —
+  not merely "there are changes", which is permanently true in a repo an agent is working in. Opening
+  the panel counts as looking; the dot comes back when the agent touches something again. It follows
+  the "panel dot" switch in settings — turned off, it does not even poll.
+
+**Read-only.** No add / commit / checkout here, and none planned — anything that changes the
+repository belongs in the terminal, where you have all of git and can see its output. The boundary
+is the same one as file browsing (`HERDR_WEB_FILES=0` turns this off too, and `HERDR_WEB_FILE_ROOTS`
+still jails the repo root); if this machine has no `git`, the button is not drawn.
+
 ### Phones and tablets
 
 When a program has mouse reporting on (herdr does), touch gestures are taken over entirely:
@@ -297,6 +327,7 @@ Changes take effect on restart — configuration is read once at startup. To con
 | `HERDR_WEB_ONCONNECT_MS` | `250` | How long to wait before typing that line. The wait starts **after the shell's first output** — an rc file touching `stty`, or a completion plugin initialising, **silently swallows** characters typed too early. If the auto-typed line does not land, raise it |
 | `HERDR_WEB_DIR` | `~/.herdr-web` | Data directory, in two layers: configuration and files (`softkeys.json` / `tls/` / `uploads/`) at the root, **internal data** (device credentials, passkey public keys) under `data/` — those two are not meant to be hand-edited, and tampering is reported in the terminal. **Keep the path short**: a unix socket (`ctl.sock`) is opened inside it, and beyond ~100 bytes it cannot bind, which breaks the subcommands |
 | `HERDR_WEB_FILES` | on | `=0` turns file browsing off: `/api/files/*` and `/_f/` all 404, and the 📁 in the top bar is not drawn (an entry point that opens onto a wall of 404s is worse than no entry point) |
+| `HERDR_WEB_GIT` | on | `=0` turns the diff panel off: `/api/git/*` all 404 and the top-bar button is not drawn. **It also sits under `HERDR_WEB_FILES`** — a diff *is* file content, so being able to read diffs while file browsing is off would make that switch a lie. Same when this machine has no `git` |
 | `HERDR_WEB_FILE_ROOTS` | empty | Comma-separated directories. Set, this is **a real allowlist** (a jail) and only those trees are visible. **Empty means no boundary** — the reasoning is in [File browsing](#file-browsing). `~` is expanded; non-absolute entries are discarded (relative to what? keeping them only makes the prefix check pass somewhere surprising) |
 
 ### Outbox / talking to herdr

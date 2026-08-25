@@ -8,3 +8,6 @@ export { FolderOpen as Files } from 'lucide-react'
 export { Settings as Gear } from 'lucide-react'
 export { Contrast as CircleHalf } from 'lucide-react'
 export { Smartphone as Devices } from 'lucide-react'
+// 看 diff。挑「文件上带 +/-」这个而不是 GitCompare 那两根箭头：16px 上箭头糊成一团，
+// 而 +/- 是 diff 这件事本身的记号
+export { FileDiff as Diff } from 'lucide-react'

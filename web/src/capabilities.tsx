@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { AArrowDown, AArrowUp, CircleHalf, ClipGet, ClipPut, Files, Gear, Ime, Image, Keyboard, Maximize, Panes, Pencil } from '@/icons'
+import { AArrowDown, AArrowUp, CircleHalf, ClipGet, ClipPut, Diff, Files, Gear, Ime, Image, Keyboard, Maximize, Panes, Pencil } from '@/icons'
 
 /**
  * 「这个版本能做哪几件事」—— 前端这一半的**唯一一份清单**（图标、名字、一句说明）。
@@ -42,6 +42,7 @@ export interface Cap {
 export const CAPS = [
   { id: 'panes', key: true, panel: true, label: '面板一览', hint: '跳到某个 pane（顺带全屏）；有 agent 等你时挂红点', icon: <Panes className="size-4" /> },
   { id: 'files', key: true, panel: true, label: '文件', hint: '看 agent 生成的图 / 翻目录', icon: <Files className="size-4" /> },
+  { id: 'diff', key: true, panel: true, label: '改动', hint: '看 git diff（折行、按词高亮 —— 终端里那份在手机上读不了）', icon: <Diff className="size-4" /> },
   { id: 'compose', label: '发件箱', hint: '语音投稿（说话打字 → 投进 agent pane）', icon: <Pencil className="size-4" /> },
   { id: 'keys', label: '软键条', hint: '显示 / 收起软键条（Ctrl / Esc / 方向键）', icon: <Keyboard className="size-4" /> },
   { id: 'kbd', key: true, label: '系统键盘', hint: '呼出 / 收起系统输入法（手机上呼键盘只有这条路和软键条上的 ⌨）', icon: <Ime className="size-4" /> },
@@ -80,5 +81,5 @@ export const isCapId = (s: string): s is CapId => CAP_BY_ID.has(s as CapId)
  * （后端还没答、或者这个部署的接口挂了），别让顶栏因此空掉。
  */
 export const TOPBAR_DEFAULT: CapId[] = [
-  'panes', 'files', 'compose', 'keys', 'font-', 'font+', 'theme', 'full', 'settings',
+  'panes', 'files', 'diff', 'compose', 'keys', 'font-', 'font+', 'theme', 'full', 'settings',
 ]

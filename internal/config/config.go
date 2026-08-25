@@ -82,6 +82,12 @@ type Config struct {
 	Files     bool
 	FileRoots []string
 
+	// Git：看 diff 那个面板（默认开）。关掉之后 /api/git/* 全部 404，顶栏那个按钮也不画。
+	//
+	// **它还压在 Files 底下**：仓库根目录要过文件浏览那道检查（见 internal/gitdiff 的
+	// 包注释）—— 一份 diff 就是文件内容，`HERDR_WEB_FILES=0` 却还能看，那个开关就是假的。
+	Git bool
+
 	// 连上就自动往 PTY 里敲的那一行（后面自带回车）。默认 `herdr` —— 这个项目本来
 	// 就是「浏览器里的 herdr」，开页面十有八九是要进 herdr，少敲一次是一次。
 	// 显式设成空串就不敲（`HERDR_WEB_ONCONNECT=`）。
@@ -208,6 +214,7 @@ func newViper() *viper.Viper {
 	v.SetDefault("onconnect", "herdr") // 连上就自动敲这一行，见 Config.OnConnect
 	v.SetDefault("update_check", true)
 	v.SetDefault("files", true) // 文件浏览默认开，见 Config.Files
+	v.SetDefault("git", true)   // 看 diff 默认开，见 Config.Git
 
 	// 这两项的兜底值不在 HERDR_WEB_* 里：shell 跟 $SHELL 走，socket 跟 herdr 自己的
 	// $HERDR_SOCKET_PATH 走。BindEnv 按给的顺序找，前一个没有才看后一个。
@@ -275,6 +282,7 @@ func Load() (*Config, error) {
 		DebugInput:  v.GetBool("debug_input"),
 		UpdateCheck: v.GetBool("update_check"),
 		Files:       v.GetBool("files"),
+		Git:         v.GetBool("git"),
 		// 500ms 是实测挑的：切 pane 到 textarea 更新的中位延迟约 500ms，
 		// 再往下调收益递减（地板是一次 sync 的 ~150-300ms）。
 		PollMS: intOf(v, "poll_ms", 500, 200),

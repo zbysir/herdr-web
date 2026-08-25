@@ -84,6 +84,7 @@ var Prefs = []string{
 	"kbdFull",
 	"noticeDot", "noticeOS", "noticeOSFg", "noticeCardMs",
 	"keyStyle", "popupClear",
+	"diffWrap",
 }
 
 // Profile 是一套排布的身份 + 它自己那几个小开关。

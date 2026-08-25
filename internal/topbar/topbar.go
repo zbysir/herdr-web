@@ -66,7 +66,7 @@ var Pinned = capability.TopbarPinned()
 // 顶栏改成一行横滑（放不下就滑，见 App 里那排的 overflow-x-auto），而「放哪几个」本来就
 // 该由人定 —— 藏起来的按钮最难解释，用户只会觉得「我明明拖上去了」。
 func Defaults() []string {
-	return []string{"panes", "files", "compose", "keys", "font-", "font+", "theme", "full", "settings"}
+	return []string{"panes", "files", "diff", "compose", "keys", "font-", "font+", "theme", "full", "settings"}
 }
 
 // KeyPrefix 是「这一项是引用，不是内置按钮」的记号：`key:k3` 指向软键条那份「我的按键」

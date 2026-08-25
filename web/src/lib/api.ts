@@ -203,6 +203,8 @@ export interface State {
   herdrSocket: string
   /** 服务端开着文件浏览没有（HERDR_WEB_FILES=0 时为 false）。关着就别画那个按钮 */
   files?: boolean
+  /** 看 diff 那条路开着没有（这台机器上没有 git / HERDR_WEB_GIT=0 时为 false）。同上 */
+  git?: boolean
   /**
    * 局域网直连的候选（缺失 = 这个部署没开这条路，见 HERDR_WEB_LAN_PORT）。
    * origins 是**服务端每次现报**的 —— 局域网 IP 会变，前端不能缓存它。
@@ -379,6 +381,114 @@ export const filesApi = {
     api.get<FileStat>(`/files/stat?path=${encodeURIComponent(path)}${base ? `&base=${encodeURIComponent(base)}` : ''}`),
   text: (path: string) => api.get<FileText>(`/files/text?path=${encodeURIComponent(path)}`),
   link: (path: string) => api.post<FileLink>('/files/link', { path }),
+}
+
+/* ------------------------------------------------------------------ 看 diff */
+
+/**
+ * 跟谁比。**默认是 all** —— agent 多半根本不 `git add`，人想看的就是「相对上次提交，
+ * 现在改成什么样了」。服务端那三档在 internal/gitdiff。
+ */
+export type DiffMode = 'all' | 'staged' | 'head'
+
+export type ChangeKind =
+  | 'add' | 'modify' | 'delete' | 'rename' | 'copy' | 'type' | 'conflict' | 'untracked'
+
+export interface GitRepo {
+  root: string
+  branch?: string
+  detached?: boolean
+  head?: string
+  upstream?: string
+  ahead?: number
+  behind?: number
+  /** 还没有任何提交（`git init` 完还没 commit）：没有「上次提交」那一档可看 */
+  unborn?: boolean
+}
+
+export interface GitChange {
+  path: string          // 仓库相对路径
+  old?: string          // 改名前（改名那条**两头都要**，不然点进去是「整个文件都新加的」）
+  kind: ChangeKind
+  staged?: boolean
+  unstaged?: boolean
+  add: number
+  del: number
+  binary?: boolean
+  /** 未跟踪的**目录**（git 把一整个新目录折成一条）：点它是去文件面板翻，不是看 diff */
+  dir?: boolean
+}
+
+export interface GitCommit { hash: string; short: string; author: string; date: string; subject: string; merge?: boolean }
+
+export interface GitStatus {
+  repo: GitRepo
+  mode: DiffMode
+  commit?: GitCommit
+  changes: GitChange[]
+  /** 被砍掉多少条。不为 0 时**必须显示** —— 不说的话「就改了这几个」是句假话 */
+  truncated?: number
+}
+
+/**
+ * 一行里的一截：`eq` 为真是两边一样的部分，假是真正变了的那截。
+ *
+ * 服务端发的是**字符串**不是偏移量，故意的：偏移在 Go 那边是 rune、在 JS 里是 UTF-16
+ * 码元，一个 emoji 就能让两边错位，而错位的样子是高亮框歪在半个字上。
+ */
+export interface DiffSeg { eq?: true; s: string }
+
+/** `t` 就是 diff 里那个前缀字符；`\\` 是「文件末尾没有换行」那条注记 */
+export interface DiffLine { t: ' ' | '+' | '-' | '\\'; o?: number; n?: number; s?: string; segs?: DiffSeg[] }
+
+export interface DiffHunk { head?: string; os: number; ol: number; ns: number; nl: number; lines: DiffLine[] }
+
+export interface DiffFile {
+  path: string
+  old?: string
+  kind: ChangeKind
+  binary?: boolean
+  mode?: string
+  add: number
+  del: number
+  hunks: DiffHunk[]
+  /** 还有多少行没给（撞上行数上限）。**必须显示** */
+  cut?: number
+}
+
+export interface GitPatch { files: DiffFile[]; over?: boolean; limit: number }
+
+/**
+ * 顶栏那个角标要的东西。
+ *
+ * `sig` 是这份改动的指纹：角标问的是**「有你还没看过的改动吗」**，不是「有改动吗」——
+ * 后者在一个正干活的仓库里永远为真，那个点就等于一直亮着，没有信息量。
+ */
+export interface GitDirty { root: string; files: number; sig: string }
+
+/** 一行的完整文本：高亮过的行只发 segs（不再重复发一份整行） */
+export const lineText = (l: DiffLine) => (l.segs ? l.segs.map((x) => x.s).join('') : (l.s ?? ''))
+
+/**
+ * 看 diff 的三个口，**全都是只读的**：这一层不给 add / commit / checkout 留任何入口 ——
+ * 会改仓库的事在终端里做，那儿有完整的 git，还看得见输出。
+ */
+export const gitApi = {
+  /** 这批目录里哪些是 git 仓库（拿各个 pane 的 cwd 来问）。认不出来的**不报错**，只是不出现 */
+  repos: (dirs: string[]) =>
+    api.get<{ repos: GitRepo[] }>('/git/repos?' + dirs.map((d) => `dir=${encodeURIComponent(d)}`).join('&')),
+  /** 角标（几个文件改了 + 指纹）。服务端那边有 2 秒缓存，可以按秒问 */
+  dirty: (dir: string) => api.get<GitDirty>(`/git/dirty?dir=${encodeURIComponent(dir)}`),
+  status: (dir: string, mode: DiffMode) =>
+    api.get<GitStatus>(`/git/status?dir=${encodeURIComponent(dir)}&mode=${mode}`),
+  diff: (q: { dir: string; mode: DiffMode; path: string; old?: string; untracked?: boolean; context?: number; limit?: number }) =>
+    api.get<GitPatch>(
+      `/git/diff?dir=${encodeURIComponent(q.dir)}&mode=${q.mode}&path=${encodeURIComponent(q.path)}`
+      + (q.old ? `&old=${encodeURIComponent(q.old)}` : '')
+      + (q.untracked ? '&untracked=1' : '')
+      + (q.context ? `&context=${q.context}` : '')
+      + (q.limit ? `&limit=${q.limit}` : ''),
+    ),
 }
 
 export interface SoftKey {
