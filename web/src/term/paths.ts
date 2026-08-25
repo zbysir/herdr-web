@@ -174,6 +174,25 @@ function blankAt(ch: string): boolean {
   return !ch || ch === ' '
 }
 
+/**
+ * 这一格是**真的空格**，不是宽字符的第二格。
+ *
+ * 和 `blankAt` 的区别就在宽字符那一格上，而这个区别是**必须的**：下面量「被切开的那个
+ * 词有多宽」时，词的边界只能是空格 —— wrap-ansi 切词就是 `split(' ')`，而**中文里一个
+ * 空格都没有**，所以 `这一批全上线了,预览无报错。https://…` 整条是**一个词**（六十多格，
+ * 超过行宽，这才是它被 `hard` 切开的原因）。
+ *
+ * 把宽字符的第二格当成空格的话，往左走会停在中文和 URL 的接缝上，量出来的词只剩
+ * `https://p54f` 那一小截，于是「两截拼起来还不到一行宽」成立、判成正常断句 ——
+ * 表现是**中文后面紧跟的那条 URL 永远只认出前半截**（用户报的），而屏幕上它看着完全正常。
+ */
+function spaceAt(term: Terminal, y: number, x: number): boolean {
+  const cell = term.buffer.active.getLine(y)?.getCell(x)
+  if (!cell) return true
+  if (cell.getWidth() === 0) return false // 宽字符的第二格：是那个字的一部分，不是空格
+  return blankAt(cell.getChars())
+}
+
 /** [from, to) 这一段是不是全空 */
 function blank(term: Terminal, y: number, from: number, to: number): boolean {
   for (let x = from; x < to; x++) {
@@ -268,11 +287,16 @@ function tuiWrap(term: Terminal, y: number): { to: number; next: number } | null
   //
   // 宽度按「这一行实际填到哪儿」算：顶满时就是 `tail.end - lb`，框线里那种末尾让了一格
   // padding，左边也对称地让一格，所以再减一。
+  //
+  // 「词」的边界**只能是空格**，见 `spaceAt` —— 中文紧跟着的那条链接全指着它。代价是
+  // 「中文和 ASCII 粘在一起、又正好停在边界上」和真被切开的分不开了（几何上本来就分不
+  // 开，见上面 slack 那条）：那种会多拼一次，但它要一个巧合，比「每条中文后面的链接都
+  // 断掉」少见得多。
   const width = tail.end - lb - (tail.end < edge ? 1 : 0)
   let ws = tail.end
-  while (ws > lb && !blankAt(chAt(term, y, ws - 1))) ws--
+  while (ws > lb && !spaceAt(term, y, ws - 1)) ws--
   let we = next
-  while (we < edge && !blankAt(chAt(term, y + 1, we))) we++
+  while (we < edge && !spaceAt(term, y + 1, we)) we++
   if (tail.end - ws + (we - next) < width) return null
 
   // **第四道：靠 slack 才算「顶到边界」的那些，结尾那个词不能看着已经是个完整文件名。**

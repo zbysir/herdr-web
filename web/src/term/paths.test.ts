@@ -21,8 +21,12 @@ import { linkAtCell, pathLinkProvider } from './paths.ts'
  */
 const COLS = 42
 
-/** 宽字符（中文）占两格，第二格没有自己的内容 —— 和真 buffer 一样 */
-const WIDE = /[ᄀ-ᅟ⺀-䶿一-鿿豈-﫿︰-﹏＀-｠￠-￦]/
+/**
+ * 宽字符（中文）占两格，第二格没有自己的内容 —— 和真 buffer 一样。
+ * 末尾那一段是**全角标点**（`。、《》「」`），它们也占两格 —— 下面 URL 那个案子的关键
+ * 就在 `。` 的第二格上：它正好落在中文和 URL 中间。
+ */
+const WIDE = /[ᄀ-ᅟ⺀-䶿一-鿿豈-﫿︰-﹏＀-｠￠-￦　-〿]/
 
 function mk(lines: string[], cols = COLS): Terminal {
   const grid = lines.map((s) => {
@@ -105,6 +109,28 @@ check('续行是中文：只认前半截', links(mk([
   '❯ /Users/bysir/.herdr-web/uploads/202608',
   '  中文接着说',
 ]), 0), ['/Users/bysir/.herdr-web/uploads/202608'])
+
+/* 7. **中文后面紧跟一条 URL，被折成两行。**（真机截图 20260824-200248：手机上点不动）
+   断点两侧那个「词」要按**空格**算：wrap-ansi 切词是 `split(' ')`，中文里一个空格都没有，
+   所以 `这一批全上线了,预览无报错。https://…` 整条是一个六十多格的词 —— 超过行宽，这才是
+   它被 hard 切开的原因。把宽字符的第二格当成空格的话，量出来的词只剩 `https://p54f` 那
+   一截，「两截拼起来还不到一行宽」成立，于是判成正常断句、URL 只认出前半截。 */
+const SITE = 'https://p54fi1e2ddoy.preview.creght.cn/'
+const site = mk([
+  '⏺ 这一批全上线了,预览无报错。https://p54f',  // 顶到第 41 列（42 列的 pane，Ink 让出一格）
+  '  i1e2ddoy.preview.creght.cn/',
+])
+check('中文后面那条 URL：首行 tap', linkAtCell(site, 30, 1)?.text, SITE)
+check('中文后面那条 URL：断点上 tap', linkAtCell(site, 41, 1)?.text, SITE)
+check('中文后面那条 URL：续行 tap', linkAtCell(site, 3, 2)?.text, SITE)
+
+/* 8. 同一条路上的另一个出口：中文后面紧跟的**路径**（走 findPaths，不是那个 URL 正则）。
+   两个出口一起钉住 —— 断的是共用的那套折行判据 */
+const zh = mk([
+  '⏺ 图存好了,在这儿。/Users/bysir/.herdr-w',
+  '  eb/uploads/20260824-173712-e33266.jpg',
+])
+check('中文后面那条路径：拼回来', linkAtCell(zh, 3, 2)?.text, JPG)
 
 if (fails) {
   console.error(`\n${fails} 处不对`)
