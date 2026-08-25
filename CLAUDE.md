@@ -96,6 +96,14 @@
   （不认识的 id 报错）、**读盘丢掉**（当没挑，退回画文字 —— 从新版本降级回来的文件里会有
   不认识的 id，整份退回出厂太贵而 Label 一直在）；③ 出厂那份给 `⌨` / `↵` 配了图标，但
   **Label 一个字没动** —— `sigOf` 认它（「恢复默认」的去重）、快照测试也比它。
+- passkey 那条路上有一条**静默**的：**`NotAllowedError` 不等于「用户取消了」**。WebAuthn
+  规范故意让几乎所有失败都报同一个错（不让网页试探「这台设备上有没有某把 passkey」），
+  所以「人划掉了」和「浏览器因为这个页面证书被跳过过而不肯做」在错误对象上一模一样 ——
+  「取消不弹红字」写成「凡是 NotAllowedError 都吞」的表现就是**点了什么都不发生、一个字
+  都不报**（用户报的）。唯一分得开的是**时间**：弹了面板再让人划掉最少大半秒，被策略挡掉
+  是当场就回，所以 700ms 内回来的不当取消（`web/src/lib/passkey.ts` 的 `ask()`）。另外
+  `HERDR_WEB_TLS=proxy` 时证书是前面那一层的事，前面那层证书不对的话域名 / RP ID / secure
+  context 全对也按不动 —— 那时能进的路是配对码。详见 [SECURITY.md](docs/dev/SECURITY.md) §L2(c)。
 - 软键上的图标（`internal/softkeys/icons.go` ↔ `web/src/keyicons.tsx`，两边一字不差有测试）
   和**按键样式**（`keyStyle` pref，`solid` / `plain`）。三条是真机反馈换来的：
   ① **尺寸 16px + 描边 1.75**：15px 糊（lucide `Keyboard` 内部八九个小点粘成一团）、18px

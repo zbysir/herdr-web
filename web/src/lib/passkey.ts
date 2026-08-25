@@ -24,10 +24,50 @@ function toB64u(b: ArrayBuffer): string {
 export const passkeySupported = () =>
   typeof PublicKeyCredential !== 'undefined' && !!navigator.credentials
 
-/** 用户取消（Face ID 划掉、点了取消）不是错误，别弹红字。 */
+/**
+ * 用户取消（Face ID 划掉、点了取消）不是错误，别弹红字。
+ *
+ * **但「取消」和「浏览器压根不让做」在错误对象上是分不开的**：WebAuthn 几乎所有失败都报
+ * 同一个 `NotAllowedError`，规范故意的 —— 不让网页试探出「这台设备上有没有某把 passkey」。
+ * 于是「证书被跳过过所以不给用」也报 NotAllowedError，被这儿当成取消吞掉，表现就是
+ * **点一下什么都不发生、一个字都不报**（用户报的）。所以真正的判据在 `ask()` 里，
+ * 这个函数只认它标出来的那一档。
+ */
 export function isCancel(e: unknown) {
   const n = (e as { name?: string } | null)?.name
-  return n === 'NotAllowedError' || n === 'AbortError'
+  if (n === 'AbortError') return true
+  return n === 'NotAllowedError' && (e as { herdrBlocked?: boolean }).herdrBlocked !== true
+}
+
+/**
+ * 「人划掉的」和「浏览器不让做的」唯一分得开的信号是**时间**：真的弹出系统面板、人再
+ * 划掉，最少也要大半秒；被策略挡掉是**当场**就回来。所以快回来的 `NotAllowedError`
+ * 不当成取消 —— 打上 `herdrBlocked` 标记，让上面那层照旧报出来。
+ *
+ * 判错了的代价是不对称的，所以宁可这样偏：把一次「手速极快的取消」报成一行字，代价是
+ * 多看一行；把「浏览器不让做」吞成静默，代价是**点了没反应而且查不出原因**。
+ */
+const CANCEL_MS = 700
+
+/** 浏览器不肯说原因时，把已知的两个原因摊出来 —— 用户至少知道下一步往哪儿走。 */
+const BLOCKED =
+  '浏览器没让做这次验证，而且不说原因。最常见的两个：这个页面的证书被跳过过'
+  + '（地址栏显示「不安全」时不给用 passkey），或者这台设备上没有这个站点的 passkey。'
+  + '下面的配对码也能进。'
+
+async function ask<T>(run: () => Promise<T>): Promise<T> {
+  const t0 = performance.now()
+  try {
+    return await run()
+  } catch (e) {
+    if ((e as { name?: string }).name === 'NotAllowedError' && performance.now() - t0 < CANCEL_MS) {
+      const err = new Error(BLOCKED) as Error & { name: string; herdrBlocked: boolean }
+      err.name = 'NotAllowedError'
+      err.herdrBlocked = true
+      throw err
+    }
+    throw e
+  }
 }
 
 // 服务端下发的是 JSON 形态（字节串都是 base64url 字符串），和浏览器 API 要的结构
@@ -60,7 +100,9 @@ export async function registerPasskey(): Promise<string> {
     excludeCredentials: (pk.excludeCredentials ?? []).map((c) => ({ ...c, id: fromB64u(c.id) })),
   } as unknown as PublicKeyCredentialCreationOptions
 
-  const cred = (await navigator.credentials.create({ publicKey: req })) as PublicKeyCredential | null
+  const cred = (await ask(
+    () => navigator.credentials.create({ publicKey: req }),
+  )) as PublicKeyCredential | null
   if (!cred) throw new Error('浏览器没有返回凭据')
   const att = cred.response as AuthenticatorAttestationResponse
 
@@ -96,7 +138,9 @@ export async function loginPasskey(): Promise<string> {
     allowCredentials: (pk.allowCredentials ?? []).map((c) => ({ ...c, id: fromB64u(c.id) })),
   } as unknown as PublicKeyCredentialRequestOptions
 
-  const cred = (await navigator.credentials.get({ publicKey: req })) as PublicKeyCredential | null
+  const cred = (await ask(
+    () => navigator.credentials.get({ publicKey: req }),
+  )) as PublicKeyCredential | null
   if (!cred) throw new Error('浏览器没有返回凭据')
   const asr = cred.response as AuthenticatorAssertionResponse
 
