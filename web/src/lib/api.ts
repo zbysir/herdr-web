@@ -179,6 +179,11 @@ export interface WhoAmI {
   legacy: boolean // 服务端还留着旧 token 文件
   passkeys: number // 注册过几把
   passkeyAvailable: boolean // **当前这个 origin** 能不能用（裸 IP 访问时为 false，见 auth.UsableOn）
+  /**
+   * 用不了的时候「换哪个地址就有」。**空 = 服务端说不出确切地址**，那时只能泛泛地讲
+   * 「换用域名那条路」—— 隧道那头是什么地址本进程猜不出来，见 server.passkeyURL。
+   */
+  passkeyURL?: string
 }
 
 export interface Device {

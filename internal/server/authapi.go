@@ -150,6 +150,8 @@ func (s *Server) apiAuth(w http.ResponseWriter, r *http.Request, seg []string) {
 			// 裸 IP 上那个按钮按下去只会抛 SecurityError，见 Server.passkeyOK
 			"passkeys":         s.Passkeys.Count(),
 			"passkeyAvailable": s.passkeyOK(r),
+			// 用不了的时候「该换哪个地址」：空 = 说不出确切地址（见 passkeyURL）
+			"passkeyURL": s.passkeyURL(),
 		}
 		if id != nil {
 			out["kind"], out["label"] = id.Kind, id.Label

@@ -47,6 +47,8 @@ export function DevicesPanel({
   const [err, setErr] = useState('')
   const [keys, setKeys] = useState<PasskeyInfo[]>([])
   const [pkAvail, setPkAvail] = useState(false)
+  /** 用不了的时候「换哪个地址就有」。空 = 服务端说不出确切地址（见 server.passkeyURL） */
+  const [pkURL, setPkURL] = useState('')
   /** 「哪台设备用哪一套排布」那一节 */
   const [profs, setProfs] = useState<Profile[]>([])
   const [insts, setInsts] = useState<ProfileInstall[]>([])
@@ -63,9 +65,10 @@ export function DevicesPanel({
       setErr((e as Error).message)
     }
     try {
-      const r = await api.get<{ passkeys: PasskeyInfo[]; available: boolean }>('/auth/passkeys')
+      const r = await api.get<{ passkeys: PasskeyInfo[]; available: boolean; url?: string }>('/auth/passkeys')
       setKeys(r.passkeys ?? [])
       setPkAvail(r.available)
+      setPkURL(r.url ?? '')
     } catch { /* 老版本服务端没这个口，当没有就行 */ }
     try {
       const r = await api.get<ProfilesResponse>('/profiles')
@@ -240,7 +243,17 @@ export function DevicesPanel({
         {!pkAvail && (
           <p className="text-xs/relaxed text-muted">
             这个地址上用不了：WebAuthn 要求标识是域名，用 IP 访问不行 —— 装不装证书都一样，
-            门槛是「标识必须是域名」。换用域名那条路访问就能加（域名指到内网地址也算）。
+            门槛是「标识必须是域名」。
+            {/* 知道确切地址就别让人猜「域名那条路」是哪条（和配对页同一条道理） */}
+            {pkURL ? (
+              <>
+                换{' '}
+                <a className="text-brand underline underline-offset-2" href={pkURL}>{pkURL}</a>{' '}
+                访问就能加。
+              </>
+            ) : (
+              <>换用域名那条路访问就能加（域名指到内网地址也算）。</>
+            )}
           </p>
         )}
         {pkAvail && keys.length === 0 && (

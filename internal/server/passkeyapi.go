@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/zbysir/herdr-web/internal/auth"
@@ -24,12 +25,38 @@ func (s *Server) passkeyOK(r *http.Request) bool {
 	return s.Passkeys.Available() && auth.UsableOn(s.RPID, r.Host)
 }
 
+// passkeyURL 是「换这个地址访问就有 passkey」里那个**确切地址**；空 = 说不出来，
+// 那时只能泛泛地讲「换用域名那条路」。
+//
+// 只认**人显式给的**那个公网地址（HERDR_WEB_PUBLIC_URL），绝不拿 RPID 拼一个：隧道那头
+// 是什么域名、什么端口，本进程一点信息都没有（横幅上「远程」那一行是同一条理由）。而这句
+// 话正是**人已经进不去了**才会看到的 —— 给一个打不开的地址比不给地址更糟：人会以为域名
+// 那条路也坏了，转头去改配置。
+func (s *Server) passkeyURL() string {
+	if s.Cfg.PublicURL == "" {
+		return ""
+	}
+	u, err := url.Parse(s.Cfg.PublicURL)
+	// 配了公网地址不等于它就能做 passkey（见过把 PUBLIC_URL 写成裸 IP 的）——
+	// 判据和请求那一侧同一条，别指一条同样走不通的路。
+	if err != nil || !auth.UsableOn(s.RPID, u.Host) {
+		return ""
+	}
+	return s.Cfg.PublicURL
+}
+
 // 裸 IP 上直接把这几个口拒掉，而不是让 WebAuthn 库在后面报一个看不懂的 origin 错。
 func (s *Server) passkeyGate(w http.ResponseWriter, r *http.Request) bool {
 	if s.passkeyOK(r) {
 		return true
 	}
-	fail(w, http.StatusConflict, errf("这个地址上用不了 passkey：WebAuthn 的标识只能是域名，裸 IP 不行。用域名那条路访问"))
+	// 「用域名那条路访问」这句话对着屏幕的人常常答不上来（域名是部署时配的），
+	// 所以知道确切地址就把它说出来。
+	where := "用域名那条路访问"
+	if u := s.passkeyURL(); u != "" {
+		where = "换 " + u + " 访问"
+	}
+	fail(w, http.StatusConflict, errf("这个地址上用不了 passkey：WebAuthn 的标识只能是域名，裸 IP 不行。"+where))
 	return false
 }
 
@@ -129,6 +156,8 @@ func (s *Server) apiPasskeyList(w http.ResponseWriter, r *http.Request, seg []st
 			"passkeys":  s.Passkeys.List(),
 			"available": s.passkeyOK(r),
 			"rpid":      s.RPID,
+			// 用不了的时候「该换哪个地址」：空 = 说不出确切地址（见 passkeyURL）
+			"url": s.passkeyURL(),
 		})
 	case http.MethodDelete:
 		if len(seg) < 3 || seg[2] == "" {

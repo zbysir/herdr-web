@@ -69,7 +69,14 @@ export function Pairing({
     }
   }, [onDone])
 
-  const canPasskey = !!who?.passkeys && passkeySupported()
+  /**
+   * 要不要画那个 passkey 按钮。**三个条件缺一不可**，最后那个是漏掉过的：
+   * `passkeyAvailable` 是**按当前 origin 算**的（裸 IP 上为 false，见 auth.UsableOn）——
+   * 少了它，从局域网直连那条 IP 路进来的人会看到一个按下去必然报错的按钮（服务端在
+   * passkeyGate 那儿一律 409）。一个必然失败的按钮比没有按钮糟得多：人会以为是自己
+   * 指纹没录好，反复试。下面页脚那句会告诉他该换哪个地址。
+   */
+  const canPasskey = !!who?.passkeys && who.passkeyAvailable && passkeySupported()
   const reauth = mode === 'reauth'
 
   return (
@@ -85,13 +92,10 @@ export function Pairing({
                       [&_code]:rounded [&_code]:border [&_code]:border-line [&_code]:bg-ctl
                       [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-xs [&_code]:text-fg">
           {reauth ? (
-            <>
-              这台设备配过对，只是太久没做过生物验证了。
-              <br />
-              <span className="text-xs">
-                这道关卡的作用：就算凭据被偷走，能用的窗口也只有这么长。
-              </span>
-            </>
+            /* 只留「怎么进去」。这道关卡为什么存在（把凭据被偷的窗口压到一天）是设计理由，
+               不是站在门口的人此刻要读的东西 —— 写在这儿只是把那一行按钮往下推。
+               要讲的地方是 SECURITY.md 和设置里 passkey 那一段。 */
+            <>这台设备配过对，只是太久没做过生物验证了。</>
           ) : (
             <>
               在跑 herdr-web 的那台机器上执行{' '}
@@ -168,14 +172,30 @@ export function Pairing({
 
         {err && <p className="mt-3 text-[13px] text-bad">{err}</p>}
 
+        {/* 页脚只放「站在门口的人用得上」的话。
+            「只有坐在机器前的人能出码」原来也在这儿 —— 那是这套设计**对谁的承诺**（写在
+            SECURITY.md 里），可对着这一页的人来说是一句他做不了什么的话：想进去的人手上
+            要么有码要么没有，读完这句还是那样。 */}
         <p className="mt-5 border-t border-line pt-4 text-xs leading-relaxed text-faint">
           配对码 5 分钟过期、用一次就废，所以截图和二维码被拍走都没有长期风险。
-          <br />
-          <strong>只有坐在机器前的人能出码</strong> —— 网页上（包括已经配过对的设备）都不行。
           {who && !who.passkeyAvailable && (
             <>
               <br />
-              这个地址上用不了 passkey（裸 IP 不能当 WebAuthn 的标识）—— 换用域名那条路访问就有。
+              这个地址上用不了 passkey（裸 IP 不能当 WebAuthn 的标识）——{' '}
+              {/* 知道确切地址就把地址给出来：「换用域名那条路访问」这句话，站在手机前的人
+                  常常答不上来那条路是什么（域名是部署时配的）。空的时候才退回泛泛地讲，
+                  见 lib/api.ts 上 passkeyURL 那条注释。 */}
+              {who.passkeyURL ? (
+                <>
+                  换{' '}
+                  <a className="text-brand underline underline-offset-2" href={who.passkeyURL}>
+                    {who.passkeyURL}
+                  </a>{' '}
+                  访问就有。
+                </>
+              ) : (
+                <>换用域名那条路访问就有。</>
+              )}
             </>
           )}
         </p>
