@@ -203,17 +203,21 @@ export default function App() {
   /** 系统通知：**人正看着这一页时也弹**。默认关（那时候右上角那张卡已经在说了） */
   const [noticeOSFg, setNoticeOSFg] = useState(() => lsBool('noticeOSFg', false))
   /**
-   * 呼出键盘就自动全屏（**收起键盘不退出**）。**默认开。**
+   * 呼出键盘就自动全屏（**收起键盘不退出**）。**默认关。**
    *
-   * 手机上打字那一下最缺高度：键盘吃掉半屏，地址栏和工具条又占一截，剩下的终端只有
-   * 三五行。全屏能把后者要回来。**收键盘不退出**是刻意的 —— 每打一次字闪进闪出一次
-   * 全屏，比不全屏还难受；退出全屏用顶栏那个按钮，一次的事。
+   * 它解决的是真问题：手机上打字那一下最缺高度 —— 键盘吃掉半屏，地址栏和工具条又占一截，
+   * 剩下的终端只有三五行，全屏能把后者要回来。**收键盘不退出**也是刻意的 —— 每打一次字
+   * 闪进闪出一次全屏，比不全屏还难受；退出全屏用顶栏那个按钮，一次的事。
    *
-   * 默认开的代价是「浏览器不给全屏」的人会白挨一次提示，所以那条提示**一台设备只说一次**
-   * （见 fullWarned）：默认开的功能反复吐 toast 就成了噪音，而一次都不说又会变成
-   * 「这开关点了没反应」那种查不出来的毛病。桌面上没有软键盘，这个开关等于不存在。
+   * 但**默认开是错的**（用户报的）：只想打个字，页面却整个换了形态 —— 地址栏、返回手势、
+   * 别的标签页全没了，而按上面那条「收键盘不退出」，这一下还是**单向**的，人得自己去顶栏
+   * 找按钮退回来。「我什么都没按，它自己全屏了」比少几行终端糟得多。所以要的人自己
+   * 去设置里开，别替所有人决定。桌面上没有软键盘，这个开关等于不存在。
+   *
+   * 开了之后那条失败提示**一台设备只说一次**（见 fullWarned）：这条路每弹一次键盘走一遍，
+   * 反复吐 toast 就成了噪音，而一次都不说又会变成「这开关点了没反应」那种查不出来的毛病。
    */
-  const [kbdFull, setKbdFull] = useState(() => lsBool('kbdFull', true))
+  const [kbdFull, setKbdFull] = useState(() => lsBool('kbdFull', false))
   // 快捷键条按键样式（有底色 / 无底色）。跟着排布那一套走 —— state 只为了改完立刻重渲染，
   // **读的地方一律读镜像**（keyStyle()），见 lib/prefs.ts
   const [keyStyleS, setKeyStyleS] = useState<KeyStyle>(keyStyle)
@@ -459,7 +463,7 @@ export default function App() {
            * 读 localStorage 而不是闭包里的 kbdFull：这个回调是建 Session 时传进去的，
            * 只在 gate 变化时重建，闭包里那份很快就是旧的。
            */
-          if (up && lsBool('kbdFull', true)) enterFull(true)
+          if (up && lsBool('kbdFull', false)) enterFull(true)
         },
         onCopyBlocked: setPendingCopy,
         onPath: (raw) => void openPath(raw),
@@ -682,7 +686,7 @@ export default function App() {
       kitty: lsBool('kitty', true), meta: lsBool('meta', true), copyOnSelect: lsBool('copyOnSelect', false),
       sync2026: lsBool('sync2026', true), switchPanel: lsBool('switchPanel', true),
     })
-    setKbdFull(lsBool('kbdFull', true))
+    setKbdFull(lsBool('kbdFull', false))
     setKeyStyleS(keyStyle())
     setPopupClearS(popupClear())
     setNoticeDot(lsBool('noticeDot', true))
@@ -790,8 +794,8 @@ export default function App() {
   // 都没有就直说 —— 按钮点了没反应比没有这个按钮更糟。
   const [full, setFull] = useState(false)
   /**
-   * 全屏失败说过没有。**记在 localStorage 而不是内存**：这个开关默认开，而手机上页面
-   * 重开是家常便饭 —— 只记在内存的话，浏览器不给全屏的人每开一次页面就挨一条 toast。
+   * 全屏失败说过没有。**记在 localStorage 而不是内存**：手机上页面重开是家常便饭 ——
+   * 只记在内存的话，开了这个开关而浏览器又不给全屏的人，每开一次页面就挨一条 toast。
    * 一台设备说明白一次就够了。
    *
    * 存的是**失败原因本身**（不只是「说过了」）：手机上没有控制台，「为什么没全屏」只能
