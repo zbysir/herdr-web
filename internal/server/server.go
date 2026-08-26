@@ -42,7 +42,7 @@ type Server struct {
 	Outbox   *outbox.Outbox
 	Softkeys *softkeys.Store
 	Topbar   *topbar.Store
-	// Profiles 「这台设备用哪一套排布」的名册 + 绑定。软键条 / 顶栏的每个请求都要先过它
+	// Profiles 「这台设备用哪一套排布」的名册 + 绑定。快捷键条 / 顶栏的每个请求都要先过它
 	// 算出 profile（见 profileOf）。
 	Profiles *profiles.Store
 	Uploads  *uploads.Store
@@ -369,7 +369,7 @@ func (s *Server) apiClip(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"text": text, "bytes": len(text)})
 }
 
-// apiSoftkeys 是软键条：rows / lib / bar。
+// apiSoftkeys 是快捷键条：rows / lib / bar。
 //
 // **哪一套**由 profileOf 决定（`?profile=` 显式指定，否则按这台设备的绑定算）。
 // 响应里回一句 profile，前端好在编辑器上写「正在改：平板」—— 存到别的地方去是这个功能
@@ -382,11 +382,11 @@ func (s *Server) apiSoftkeys(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"lib": c.Lib, "bar": c.Bar, "rows": c.Rows,
 			"pin": c.Pin, "max": softkeys.MaxKeys, "maxBar": softkeys.MaxBar, "profile": prof})
 	}
-	// 删掉一个定义之后，顶栏上指向它的 `key:` 引用也得清掉 —— 顶栏和软键条现在共用同一份
-	// 「我的按键」（见 internal/topbar 的包注释）。软键条自己那一侧（条上的引用）在
+	// 删掉一个定义之后，顶栏上指向它的 `key:` 引用也得清掉 —— 顶栏和快捷键条现在共用同一份
+	// 「我的按键」（见 internal/topbar 的包注释）。快捷键条自己那一侧（条上的引用）在
 	// Save 里已经 prune 过了，这儿补的是另一个界面。
 	//
-	// 失败**不改这次请求的结果**：软键条已经存好了，回一个 400 只会让人再点一次保存
+	// 失败**不改这次请求的结果**：快捷键条已经存好了，回一个 400 只会让人再点一次保存
 	// （而那一次一样会失败）。留下的顶栏幽灵项在编辑器里下一次保存时自然消失。
 	prune := func(c softkeys.Config) {
 		keep := make(map[string]bool, len(c.Lib))
@@ -430,7 +430,7 @@ func (s *Server) apiSoftkeys(w http.ResponseWriter, r *http.Request) {
 		}
 		// 「恢复默认」只管**这一套**的排布：出厂那一排回到条上，「我的按键」里缺的补上。
 		// 不整份恢复出厂 —— 定义是全局的，那样会把别的 profile 条上引用的定义一起抹掉
-		// （在手机上点一下，平板上的软键条少一半）。见 softkeys.Store.Reset。
+		// （在手机上点一下，平板上的快捷键条少一半）。见 softkeys.Store.Reset。
 		c, err := s.Softkeys.Reset(prof)
 		if err != nil {
 			fail(w, 400, err)
@@ -454,7 +454,7 @@ func (s *Server) mustProfile(id string) error {
 
 // apiTopbar 是顶栏那排图标按钮「放哪几个、什么顺序」。
 //
-// 和软键条**分成两个口**：各自一个 PUT 收自己那一整份。混在一个口里的话两个编辑器都在
+// 和快捷键条**分成两个口**：各自一个 PUT 收自己那一整份。混在一个口里的话两个编辑器都在
 // PUT「一整份配置」，谁后存谁把对方那一半清掉（见 internal/topbar 的包注释）。
 //
 // GET 顺带把白名单和上限也给出去：编辑器要拿它和自己那份按钮目录对一遍，服务端不认的

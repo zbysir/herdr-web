@@ -82,7 +82,7 @@ The ⚙ at the right end of the top bar is the **settings panel**; its "Devices"
 
 The old never-expiring `~/.herdr-web/token` is demoted to **bootstrap only**: an old bookmark exchanges it for a device credential on first open and scrubs the token out of the URL, after which you should `rm ~/.herdr-web/token`. Details and reasoning in [SECURITY.md](docs/dev/SECURITY.md) (Chinese).
 
-Once connected it **types `herdr` for you**. To type something else, or nothing: `HERDR_WEB_ONCONNECT` (set it to an empty string to stay in the shell). Adding a path segment to the URL (`/work`) gives you **a different herdr session** — see [First run](#first-run). The old "run herdr" button in the top bar is gone: with autotyping it earns its place less than once a day, and the soft key bar ships a preset for it if you want one.
+Once connected it **types `herdr` for you**. To type something else, or nothing: `HERDR_WEB_ONCONNECT` (set it to an empty string to stay in the shell). Adding a path segment to the URL (`/work`) gives you **a different herdr session** — see [First run](#first-run). The old "run herdr" button in the top bar is gone: with autotyping it earns its place less than once a day, and the shortcut bar ships a preset for it if you want one.
 
 **The admin page is at `http://127.0.0.1:<port+1>/`** (also in the startup banner): certificate status, one-click issue/renew, generated DNS `.env` snippets, pairing codes, device kicking. It is **bound to loopback and does not exist on the public internet**, so it needs no login — anything that can reach it already has your shell. Why not "an authenticated page on the main server": authentication is a control that can fail, unreachability is a property; and the admin page must not depend on the very certificate it exists to fix (a broken certificate would lock you out of the page that repairs it).
 
@@ -141,22 +141,22 @@ whole paragraph to one of herdr's panes.
 | **Pull back** | Grabs what is already in the remote input line into the textarea for editing (useful when the remote side has been Tab-completing) |
 | **Auto pull** | Every 500ms by default. Switching panes swaps in the new pane's content; **never overwrites a local draft**, it just says so in the status line |
 | **Two-way** | Local edits get pushed back into the remote input line (without Enter). Off by default — see the caveats below |
-| **Image** | Upload an image; the path is inserted **at the cursor**. On a phone it offers camera / library; on a desktop just `⌘V` a screenshot into the box, or drop a file. You do not need the outbox open for this — bind `act:img` on the soft key bar, or paste anywhere on the page |
+| **Image** | Upload an image; the path is inserted **at the cursor**. On a phone it offers camera / library; on a desktop just `⌘V` a screenshot into the box, or drop a file. You do not need the outbox open for this — bind `act:img` on the shortcut bar, or paste anywhere on the page |
 | `↑` | With an empty box, recalls the last thing you posted (30 kept locally) |
 | `Esc` | **Forwarded to the terminal.** Esc means nothing inside a plain textarea, while the agent needs it constantly (overlays like `/usage` close with it); focus does not move, so you can press it repeatedly |
 
-Uploading does not need the outbox open: bind `act:img` on the soft key bar, or **paste anywhere on
+Uploading does not need the outbox open: bind `act:img` on the shortcut bar, or **paste anywhere on
 the page** (an image in the clipboard is uploaded directly). Where the path lands depends on whether
 the outbox is open — appended to your draft, or typed straight into the terminal.
 
 → Why a separate box at all, how images actually work, the two-way caveats, measured polling
 latency: [OUTBOX.md](docs/dev/OUTBOX.md)
 
-### Soft key bar
+### Shortcut bar
 
 Phones have no Ctrl key, and herdr's `ctrl+b` prefix depends on one. The keys live **on the server**
 (`~/.herdr-web/softkeys.json`), so phone / tablet / desktop share one set of definitions, edited in
-Settings → Soft keys.
+Settings → Shortcut keys.
 
 - The "Keys" field takes a **key spec**; space-separated entries fire in sequence — `ctrl+b c` is the
   prefix plus c, one tap.
@@ -176,7 +176,7 @@ which key and where it stopped making sense — rather than shipped as a key tha
 
 ### Pane list · notices
 
-The ▦ in the top bar (or `act:panes` on the soft key bar; on a phone you can also tap herdr's own
+The ▦ in the top bar (or `act:panes` on the shortcut bar; on a phone you can also tap herdr's own
 `switch`) opens a list of panes, one per row — **tap one and you are there, zoomed full screen**.
 You can filter (tab / title / path / pane id) and show only panes running an agent. The list
 refreshes itself every 4 seconds.
@@ -252,9 +252,9 @@ When a program has mouse reporting on (herdr does), touch gestures are taken ove
 
 **There is no double tap.** It used to be the "show / hide the system keyboard" gesture, and it is gone — one gesture was costing the feel of every other tap. To tell "this is a tap" from "this is the first half of a double tap", every tap has to sit out the double-tap window (320ms) before it can be sent, so clicking panes and clicking things inside Claude all lag a beat; and without the wait, that first tap **leaks into the program in the pane** — Claude Code has its own clickable UI (expanding a block, **picking an option**), and a leaked tap picks the option for you. Paying "every click is imprecise and might answer for you" for one keyboard shortcut is not worth it.
 
-The keyboard now comes from **buttons** only: the ⌨ soft key (`act:kbd` — the first key in the factory set, and the soft key bar is on by default on phones) and the "system keyboard" button in the top bar (drag it on under Settings → Top bar). A button press means you want the keyboard — nothing to guess, and no delay.
+The keyboard now comes from **buttons** only: the ⌨ shortcut key (`act:kbd` — the first key in the factory set, and the shortcut bar is on by default on phones) and the "system keyboard" button in the top bar (drag it on under Settings → Top bar). A button press means you want the keyboard — nothing to guess, and no delay.
 
-**The outbox and the soft key bar are one dock**: drag either side edge to change its width (when an
+**The outbox and the shortcut bar are one dock**: drag either side edge to change its width (when an
 IME covers half the screen, shrink the whole dock into what is left), and the three handles on the
 top edge of the key area set the height and the boundaries; double-tap any handle to reset. A phone
 in portrait (< 440px) switches to another tier: no handles, full width, one horizontally-scrolling
@@ -270,7 +270,7 @@ details of the dock and the top bar: [MOBILE.md](docs/dev/MOBILE.md)
 
 The ⚙ at the right end of the top bar, in four pages: **Terminal** (font size / light-dark, kitty
 protocol / Option as Meta / copy on select / synchronized output, herdr's switch opening our pane
-list, the badge on the panel icon), **Top bar**, **Soft keys**, **Devices**. Above the tabs there is
+list, the badge on the panel icon), **Top bar**, **Shortcut keys**, **Devices**. Above the tabs there is
 one more row: which layout profile this device uses. The three overlays (pane list / files /
 settings) are mutually exclusive.
 

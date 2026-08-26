@@ -4,7 +4,7 @@ import { AArrowDown, AArrowUp, CircleHalf, ClipGet, ClipPut, Diff, Files, Gear, 
 /**
  * 「这个版本能做哪几件事」—— 前端这一半的**唯一一份清单**（图标、名字、一句说明）。
  *
- * 服务端那一半在 `internal/capability`：它管「能出现在哪些界面上」（顶栏 / 软键条的 act /
+ * 服务端那一半在 `internal/capability`：它管「能出现在哪些界面上」（顶栏 / 快捷键条的 act /
  * 是不是浮层 / 删不删得掉），因为那些要参与**存盘校验**。这边管「长什么样」，因为那是
  * React 节点，搬不到 Go 去。两边靠 id 对上，**顺序和 `key` 标记必须一字不差**，有测试盯着
  * （`internal/capability` 的 `TestMatchJS`）。
@@ -28,7 +28,7 @@ import { AArrowDown, AArrowUp, CircleHalf, ClipGet, ClipPut, Diff, Files, Gear, 
  */
 export interface Cap {
   id: string
-  /** 能当软键条按键的 `act`（不是所有事都能 —— 见 KeyAct） */
+  /** 能当快捷键条按键的 `act`（不是所有事都能 —— 见 KeyAct） */
   key?: true
   /** 点开是一块浮层（面板一览 / 文件 / 设置）—— App 的 panel 状态从这儿推 */
   panel?: true
@@ -44,8 +44,8 @@ export const CAPS = [
   { id: 'files', key: true, panel: true, label: '文件', hint: '看 agent 生成的图 / 翻目录', icon: <Files className="size-4" /> },
   { id: 'diff', key: true, panel: true, label: '改动', hint: '看 git diff（折行、按词高亮 —— 终端里那份在手机上读不了）', icon: <Diff className="size-4" /> },
   { id: 'compose', label: '发件箱', hint: '语音投稿（说话打字 → 投进 agent pane）', icon: <Pencil className="size-4" /> },
-  { id: 'keys', label: '软键条', hint: '显示 / 收起软键条（Ctrl / Esc / 方向键）', icon: <Keyboard className="size-4" /> },
-  { id: 'kbd', key: true, label: '系统键盘', hint: '呼出 / 收起系统输入法（手机上呼键盘只有这条路和软键条上的 ⌨）', icon: <Ime className="size-4" /> },
+  { id: 'keys', label: '快捷键条', hint: '显示 / 收起快捷键条（Ctrl / Esc / 方向键）', icon: <Keyboard className="size-4" /> },
+  { id: 'kbd', key: true, label: '系统键盘', hint: '呼出 / 收起系统输入法（手机上呼键盘只有这条路和快捷键条上的 ⌨）', icon: <Ime className="size-4" /> },
   { id: 'img', key: true, label: '传图', hint: '拍一张 / 从相册选（落盘到 herdr 那台机器，把路径给 agent）', icon: <Image className="size-4" /> },
   { id: 'clip', key: true, label: '取剪贴板', hint: '把 herdr 那台机器的剪贴板取到这台设备', icon: <ClipGet className="size-4" /> },
   { id: 'paste', key: true, label: '粘到终端', hint: '把这台设备的剪贴板粘进终端', icon: <ClipPut className="size-4" /> },
@@ -53,14 +53,14 @@ export const CAPS = [
   { id: 'font+', label: '放大字号', hint: '终端字号大一号', icon: <AArrowUp className="size-4" /> },
   { id: 'theme', label: '明暗', hint: '切换亮色 / 暗色', icon: <CircleHalf className="size-4" /> },
   { id: 'full', label: '全屏', hint: '去掉地址栏和工具条，终端多几行', icon: <Maximize className="size-4" /> },
-  { id: 'settings', panel: true, label: '设置', hint: '终端 / 顶栏 / 软键条 / 设备', icon: <Gear className="size-4" /> },
+  { id: 'settings', panel: true, label: '设置', hint: '终端 / 顶栏 / 快捷键条 / 设备', icon: <Gear className="size-4" /> },
 ] as const satisfies readonly Cap[]
 
 /** 全部 id。以前叫 `TopbarId` —— 现在顶栏只是它的一个界面 */
 export type CapId = (typeof CAPS)[number]['id']
 
 /**
- * 能当软键条 `act` 的那几个。**从表里推出来的**，不是手写的第二份 ——
+ * 能当快捷键条 `act` 的那几个。**从表里推出来的**，不是手写的第二份 ——
  * 只在一边加一个 act 就会在这儿编译不过，而原来那种漏法是完全静默的。
  */
 export type KeyAct = Extract<(typeof CAPS)[number], { key: true }>['id']

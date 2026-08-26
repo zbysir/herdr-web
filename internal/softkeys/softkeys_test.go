@@ -207,7 +207,7 @@ func TestPresetsParse(t *testing.T) {
 	}
 }
 
-// 送命键必须预先打上 confirm：软键条上键挨得近，平板误触一下 pane 就没了
+// 送命键必须预先打上 confirm：快捷键条上键挨得近，平板误触一下 pane 就没了
 func TestPresetsConfirm(t *testing.T) {
 	want := map[string]bool{"关 pane": true, "关标签": true, "关工作区": true, "断开": true, "/clear": true}
 	seen := map[string]bool{}

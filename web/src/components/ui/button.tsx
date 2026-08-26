@@ -27,7 +27,7 @@ const buttonVariants = cva(
         danger: 'border border-line bg-ctl text-bad hover:border-bad/45 hover:bg-bad/12',
         /** 二次确认举起来的那一下（「再点一次」）：红底红字，和常态的 danger 明显两回事 */
         destructive: 'border border-bad/55 bg-bad/18 text-bad hover:bg-bad/26',
-        /** 软键条上的大按键：手指点得中。手机竖屏上窄一号（见 size.key 那条注释） */
+        /** 快捷键条上的大按键：手指点得中。手机竖屏上窄一号（见 size.key 那条注释） */
         key:
           // 宽度**按内容走**（px-2 撑开）；min-w 只是「够手指点」的下限（--sk-w，手机上
           // 窄一档）。没有「占几格」那种设置 —— 条是横滑的，格子对不齐，理由见
@@ -37,7 +37,7 @@ const buttonVariants = cva(
           // 按下去那一瞬间给绿：触屏上没有 hover，这是唯一的「点到了」的反馈
           'active:translate-y-px active:border-brand/45 active:bg-brand/15 active:text-brand',
         /**
-         * 软键条的「无底色」样式（设置 →「终端」里选）：没有底、没有边，只剩字和图标。
+         * 快捷键条的「无底色」样式（设置 →「终端」里选）：没有底、没有边，只剩字和图标。
          *
          * 只有**静息态**没底色。`on`（粘滞 Ctrl 亮着、面板开着）和二次确认举起来那一下
          * 照旧要有填充 —— 那是「按下去了必须一眼看见」的状态，见 CLAUDE.md 配色那节。
@@ -51,8 +51,8 @@ const buttonVariants = cva(
       /*
         尺寸只有**一套**：高度写死 h-8（32px）、左右内边距 8px，图标按钮就是 32×32 的
         正方。以前是按 py 撑高的，文字和图标的行高不一样（19.5 vs 16），于是「连接」
-        33.5px、⚙ 30px、软键条的键 35px —— 一排里三种高度，看着就是没对齐。写死高度
-        之后，文字按钮、图标按钮、软键都在同一条基线上。
+        33.5px、⚙ 30px、快捷键条的键 35px —— 一排里三种高度，看着就是没对齐。写死高度
+        之后，文字按钮、图标按钮、条上的键都在同一条基线上。
 
         tiny 是面板里那些次要按钮（保存 / 载入预设 / 删掉），矮一档（28px）。
       */
@@ -61,7 +61,7 @@ const buttonVariants = cva(
         tiny: 'h-7 px-2 text-xs',
         icon: 'h-8 w-8 text-[13px]',
         /**
-         * 软键条的键：同样 32px 高、8px 边距，只是多一个 min-w（在 variant.key 里）
+         * 快捷键条的键：同样 32px 高、8px 边距，只是多一个 min-w（在 variant.key 里）
          * 给单字符的键垫出个能点准的宽度。手机竖屏（< 440px）矮一档、字号小一号 ——
          * 那一档是**一行横滑**的，键矮一点等于终端多一行。
          */

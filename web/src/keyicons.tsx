@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 
 /**
- * 软键上能挑的**内置图标** —— 前端这一半（画什么）。
+ * 键上能挑的**内置图标** —— 前端这一半（画什么）。
  *
  * 服务端那一半是白名单（`internal/softkeys/icons.go`），因为它要参与**存盘校验**。
  * 两边靠 id 对上，**顺序也必须一样**，有测试盯着（`softkeys.TestIconsMatchJS`）。
@@ -36,7 +36,7 @@ export interface KeyIcon {
 }
 
 /**
- * 软键上图标的尺寸和描边。
+ * 键上图标的尺寸和描边。
  *
  * **16px + 1.75 描边。** 三次真机反馈调出来的：
  *

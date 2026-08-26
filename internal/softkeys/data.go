@@ -95,7 +95,7 @@ func DefaultBar() []Key {
 // Presets 编辑器「常用」下拉。按键谱抄的是 `herdr --default-config` 的 [keys]
 // 默认值，改过 keybinding 的人得自己手输 —— 下拉只是省事，不是全部。
 //
-// 关 pane / 关标签 / 关工作区 / 断开 / /clear 预先打了 Confirm：软键条上的键挨得近，
+// 关 pane / 关标签 / 关工作区 / 断开 / /clear 预先打了 Confirm：快捷键条上的键挨得近，
 // 平板上误触一下就没了，而这几个都是不可撤销的。不想要两下的自己在编辑器里取消勾选。
 //
 // 注意 prefix+shift+x 这类要写成 "ctrl+b X"（大写字母就是 shift），
@@ -170,7 +170,7 @@ func Presets() []PresetGroup {
 		// 万一你的版本要按两下，自己在后面再加一个 enter。
 		//
 		// 只挑了平板上真会想一键点的：清上下文、看用量、换模型这种。全量命令太多，
-		// 打字更快的那些没必要占软键条。
+		// 打字更快的那些没必要占快捷键条。
 		{Group: "Claude 命令", Items: []Key{
 			{Label: "/new", Send: "text:/new enter"},
 			{Label: "/clear", Send: "text:/clear enter", Confirm: true},
@@ -185,8 +185,8 @@ func Presets() []PresetGroup {
 		// textarea 的焦点，终端那边都无从代劳。「面板一览」也一样：按键只能表达「下一个
 		// tab」这种相对导航，说不出「让 w5:p3 全屏」，那条路只有 socket 走得通。
 		//
-		// 「面板一览」放在软键条上是有讲究的：手机上键盘一弹起来顶栏整段就收掉了（那时候
-		// 那个入口点不到），而软键条正好在拇指底下。
+		// 「面板一览」放在快捷键条上是有讲究的：手机上键盘一弹起来顶栏整段就收掉了（那时候
+		// 那个入口点不到），而快捷键条正好在拇指底下。
 		{Group: "网页端动作", Items: []Key{
 			{Label: "🖼 传图", Act: "img"},
 			{Label: "⌨ 键盘", Act: "kbd"},

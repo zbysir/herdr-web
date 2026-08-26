@@ -5,7 +5,7 @@ import { useEffect } from 'react'
  *
  * 光重排终端不够：iOS 的键盘**从不**缩布局视口，Android 也要 viewport meta 里的
  * interactive-widget 才缩。html/body 写 height:100% 的话，100% 指的是没缩过的布局
- * 视口，于是键盘直接盖住底下的软键条和发件箱 —— 终端重排了也看不见。
+ * 视口，于是键盘直接盖住底下的快捷键条和发件箱 —— 终端重排了也看不见。
  */
 export function useViewportHeight(onResize?: () => void) {
   useEffect(() => {

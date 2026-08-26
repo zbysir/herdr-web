@@ -40,7 +40,7 @@ func TestTopbarAcceptsMyKeys(t *testing.T) {
 	// 出厂那份「我的按键」里的第一个定义
 	code, sk := call(t, s, "GET", "/api/softkeys", "")
 	if code != 200 {
-		t.Fatalf("读软键条失败：%d %+v", code, sk)
+		t.Fatalf("读快捷键条失败：%d %+v", code, sk)
 	}
 	lib, _ := sk["lib"].([]any)
 	if len(lib) == 0 {
@@ -71,7 +71,7 @@ func TestTopbarAcceptsMyKeys(t *testing.T) {
 
 // TestSoftkeysSaveClearsTopbarRefs 删掉一个定义，顶栏上指向它的那一项要跟着走。
 //
-// 这条是端到端才盯得住的：prune 挂在**软键条那个口**上（内部两个包互不 import），
+// 这条是端到端才盯得住的：prune 挂在**快捷键条那个口**上（内部两个包互不 import），
 // 漏了的表现是顶栏上留一个画不出来的幽灵项 —— 占着 MaxItems 的名额，下次打开编辑器
 // 又静悄悄消失，于是「我什么都没动，顶栏怎么少了一个」。
 func TestSoftkeysSaveClearsTopbarRefs(t *testing.T) {
@@ -81,7 +81,7 @@ func TestSoftkeysSaveClearsTopbarRefs(t *testing.T) {
 	code, out := call(t, s, "PUT", "/api/softkeys",
 		`{"rows":1,"lib":[{"id":"k1","label":"Esc","send":"esc"},{"id":"k2","label":"Tab","send":"tab"}],"bar":[["k1","k2"]]}`)
 	if code != 200 {
-		t.Fatalf("存软键条失败：%d %+v", code, out)
+		t.Fatalf("存快捷键条失败：%d %+v", code, out)
 	}
 	// 两个都放上顶栏
 	code, out = call(t, s, "PUT", "/api/topbar",
@@ -90,7 +90,7 @@ func TestSoftkeysSaveClearsTopbarRefs(t *testing.T) {
 		t.Fatalf("存顶栏失败：%d %+v", code, out)
 	}
 
-	// 把 k2 删掉（软键条那边存一份不含它的定义）
+	// 把 k2 删掉（快捷键条那边存一份不含它的定义）
 	code, out = call(t, s, "PUT", "/api/softkeys",
 		`{"rows":1,"lib":[{"id":"k1","label":"Esc","send":"esc"}],"bar":[["k1"]]}`)
 	if code != 200 {

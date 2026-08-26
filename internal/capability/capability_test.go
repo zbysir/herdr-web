@@ -46,14 +46,14 @@ func TestMatchJS(t *testing.T) {
 		want = append(want, id)
 	}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("清单和前端那份不一致（`+key` = 能当软键条的 act）\n go: %v\n js: %v", want, got)
+		t.Fatalf("清单和前端那份不一致（`+key` = 能当快捷键条的 act）\n go: %v\n js: %v", want, got)
 	}
 }
 
 // TestPanelAndPinnedAreSane 几条自洽性：删不掉的必须能放顶栏，act 也必须是顶栏 id 的子集。
 //
 // 后一条是前端那边 `topbarAct[k.act]` 能直接查的前提（同一个 id 就是同一件事）——
-// 破了的表现是软键条上那个键点下去什么都不发生，而且不报错。
+// 破了的表现是快捷键条上那个键点下去什么都不发生，而且不报错。
 func TestPanelAndPinnedAreSane(t *testing.T) {
 	for _, c := range All {
 		if c.Pinned && !c.Topbar {

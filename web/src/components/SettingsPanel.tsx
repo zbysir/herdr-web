@@ -18,16 +18,16 @@ import { cn } from '@/lib/utils'
 /**
  * 一个设置面板，装完所有设置。
  *
- * 之前是三个各自为政的小面板（终端能力 / 软键条 / 设备），顶栏为此挂了三个图标 ——
+ * 之前是三个各自为政的小面板（终端能力 / 快捷键条 / 设备），顶栏为此挂了三个图标 ——
  * 平板上顶栏本来就挤，而且「设置」这件事被切成三块，找起来全靠记哪个图标是哪个。
- * 现在**只有顶栏这一个 ⚙**，里面分页。软键条右下角原来还有一个直通「软键条」页的 ⚙，
+ * 现在**只有顶栏这一个 ⚙**，里面分页。快捷键条右下角原来还有一个直通「快捷键条」页的 ⚙，
  * 去掉了：它跟键抢地方（尤其竖屏），而设置这种一次调完的事不值得占一个常驻位置。
  *
  * 原来那个「程序请求的终端能力」列表（DEC 1049 / OSC 10 那一串）去掉了：那是当初补
  * 协议时的调试视图，日常没人看。能力本身还照样在 session 里记着（主题变更通知要用），
  * 只是不再摆到界面上。
  *
- * 分页条**上面**还有一行「这台设备用哪一套排布」（profile）：顶栏和软键条两页改的是那一套
+ * 分页条**上面**还有一行「这台设备用哪一套排布」（profile）：顶栏和快捷键条两页改的是那一套
  * 里的东西，所以它不能做成第五个分页 —— 得一直看得见。见 ProfilePicker。
  */
 /** 每种权限状态说一句人话 —— 「开不了」的原因差别很大，笼统一句「不支持」查不出所以然 */
@@ -46,7 +46,7 @@ export type SettingsTab = 'term' | 'topbar' | 'keys' | 'devices'
 const TABS: { id: SettingsTab; label: string }[] = [
   { id: 'term', label: '终端' },
   { id: 'topbar', label: '顶栏' },
-  { id: 'keys', label: '软键条' },
+  { id: 'keys', label: '快捷键条' },
   { id: 'devices', label: '设备' },
 ]
 
@@ -76,7 +76,7 @@ export function SettingsPanel({
   /** 呼出键盘就自动全屏（收起键盘不退出） */
   kbdFull: boolean
   onKbdFull: (v: boolean) => void
-  /** 软键条的按键样式：有底色 / 无底色。跟着排布那一套走，见 lib/prefs.ts */
+  /** 快捷键条的按键样式：有底色 / 无底色。跟着排布那一套走，见 lib/prefs.ts */
   keyStyle: KeyStyle
   onKeyStyle: (v: KeyStyle) => void
   /** 弹出组浮窗的底色透明度（%，0 = 不透明）。同上 */
@@ -95,16 +95,16 @@ export function SettingsPanel({
   onFont: (d: number) => void
   scheme: 'dark' | 'light'
   onScheme: () => void
-  /** 这台设备用哪一套排布（顶栏 / 软键条两页改的就是它），见 internal/profiles */
+  /** 这台设备用哪一套排布（顶栏 / 快捷键条两页改的就是它），见 internal/profiles */
   profile: { id: string; name: string }
   /** 名册 / 绑定 / 那一套的开关变了 —— App 据此重拉排布、把开关刷一遍 */
   onProfiles: (r: ProfilesResponse) => void
 }) {
   return (
-    // 不给 title：那一行「设置」+ × 占 44px，而这块面板本来就最缺高度（软键条那页要拖）。
+    // 不给 title：那一行「设置」+ × 占 44px，而这块面板本来就最缺高度（快捷键条那页要拖）。
     // × 并进分页条右边 —— 分页条是粘在顶上的，滚到哪儿关闭都在手边，比原来更好点。
     <Panel onClose={onClose} className="w-[560px]">
-      {/* 分页条粘在顶上：软键条那页很长，滚下去还得能换页。
+      {/* 分页条粘在顶上：快捷键条那页很长，滚下去还得能换页。
           下划线式，不是三个填充按钮 —— 三个色块并排时「当前是哪一页」只能靠颜色深浅
           去猜，而下划线是位置信息，扫一眼就知道自己在第几页。手指要点得中的那点高度
           靠 py-2.5 撑（约 38px），不靠按钮外壳。 */}
@@ -114,7 +114,7 @@ export function SettingsPanel({
           分页条上方那条缝里滚过去（截图实拍）。所以：-mt-2 把它抻到滚动区真正的顶边、
           -top-2 让 sticky 允许它停在那儿（只给 -mt-2 会被 sticky 又推回去，实测），
           再用自己的 pt-2 把分页条的视觉位置还原。改了 panel 的 pt 就得同步改这儿。 */}
-      {/* 「这台设备用哪一套」摆在分页条**上面**：下面「顶栏」「软键条」两页改的就是这一套，
+      {/* 「这台设备用哪一套」摆在分页条**上面**：下面「顶栏」「快捷键条」两页改的就是这一套，
           而「我在改哪一套」是看那两页时必须一直看得见的（见 ProfilePicker 的注释） */}
       <ProfilePicker onChanged={onProfiles} toast={toast} />
 
@@ -256,11 +256,11 @@ function TermSection({
         </span>
       </label>
 
-      {/* 软键条长什么样。**无底色那一档只去掉静息态的底和边** —— 亮着（粘滞 Ctrl、面板
+      {/* 快捷键条长什么样。**无底色那一档只去掉静息态的底和边** —— 亮着（粘滞 Ctrl、面板
           开着）和二次确认举起来那一下照旧有填充，那是「按下去了必须一眼看见」的状态。
           全都不给底的话，一条无底色的键上分不出哪个是亮着的。 */}
       <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-line pt-3 text-[13px]">
-        软键条按键
+        快捷键条按键
         <div className="flex overflow-hidden rounded-md border border-line">
           <Button
             size="tiny" on={keyStyle !== 'plain'} title="有底色、有边框（默认）"
@@ -280,7 +280,7 @@ function TermSection({
         <span className="text-xs text-faint">无底色更轻；亮着的键照旧涂满（不然分不出）</span>
       </div>
 
-      {/* 弹出组那片浮窗透多少。和上面那一行讲的是同一块东西（软键条长什么样），所以并在
+      {/* 弹出组那片浮窗透多少。和上面那一行讲的是同一块东西（快捷键条长什么样），所以并在
           一起、不再拉一条线。**存的是透明度**（0 = 不透明），CSS 那边取的是 100 减它，
           而且加在整片浮窗上（键也一起透，只透底色的话挡掉的面积没少多少） */}
       <div className="mt-2 flex flex-wrap items-center gap-2 text-[13px]">
@@ -314,12 +314,12 @@ function TermSection({
             窄屏时 herdr 顶栏右上角有个 switch 按钮，点开的是它自己那张切换面板。开着这条时，
             触屏上点它就不再发给 herdr，改开我们的面板一览（一行一个 pane，点一下跳过去并铺满）。
             代价是 herdr 那张里的「+ new workspace / + new tab / settings / detach」这一路走不到 ——
-            要用就把这条关掉，或者从软键条走 herdr 的前缀键。
+            要用就把这条关掉，或者从快捷键条走 herdr 的前缀键。
           </span>
         </span>
       </label>
 
-      {/* 提示那一条**不属于**「终端」，但设置面板只有三页（终端 / 软键条 / 设备），
+      {/* 提示那一条**不属于**「终端」，但设置面板只有三页（终端 / 快捷键条 / 设备），
           为一个开关单开一页不值当。用一条分隔线隔开，别混进上面那串终端行为里去。 */}
       <label className="mt-1 flex cursor-pointer items-start gap-2.5 rounded-md py-1 transition-colors hover:text-fg">
         <span className="pt-px"><Checkbox checked={dot} onCheckedChange={(v) => onDot(!!v)} /></span>

@@ -1,4 +1,4 @@
-// Package softkeys 管软键条的配置：存在 ~/.herdr-web/softkeys.json，在网页上编辑。
+// Package softkeys 管快捷键条的配置：存在 ~/.herdr-web/softkeys.json，在网页上编辑。
 //
 // 存服务端而不是浏览器 localStorage，是为了手机 / 平板 / 电脑共用一份 —— 和 token
 // 落盘同一个道理，改一次到处生效。
@@ -10,7 +10,7 @@
 // 配置分成两半，因为「这个键是什么」和「它排在哪」是两件事：
 //
 //	Lib  「我的按键」：所有按键的定义（可改名字 / 按键谱 / 宽 / 两下），每个有一个 ID
-//	Bar   软键条：每行一串 **ID**，指向 Lib 里的定义
+//	Bar   快捷键条：每行一串 **ID**，指向 Lib 里的定义
 //
 // Bar 存 ID 而不是整份定义，为的是「栏里的键是从我的按键里**选**出来的」：
 //
@@ -45,7 +45,7 @@
 // 组里放的还是**引用**（和 Bar 一样），所以「改一处定义处处变」照旧。
 // **组里不能再放组**（一层就够，嵌套只会让「点开还要再点开」）—— 在 resolveConfig 里挡。
 //
-// 软键条**几行是个设置**（Config.Rows，1 或 2），不靠「第二行空不空」猜 —— 空的第二行
+// 快捷键条**几行是个设置**（Config.Rows，1 或 2），不靠「第二行空不空」猜 —— 空的第二行
 // 和「我只要一行」是两件事。两行各自横向滚动：手机上一行只放得下四五个键，横滑找键比多
 // 占一行终端便宜，但「最常用的几个」和「次常用的几个」分两行、各滑各的，比十几个键排成
 // 一条长龙好找。
@@ -100,11 +100,11 @@ import (
 	"github.com/zbysir/herdr-web/internal/profiles"
 )
 
-// MaxKeys 「我的按键」最多几个定义。比软键条上能放的多得多是有意的：定义只占一行
+// MaxKeys 「我的按键」最多几个定义。比快捷键条上能放的多得多是有意的：定义只占一行
 // JSON，屏幕上不占地方 —— 「载入预设」一下就会灌进来六十多个，卡在 40 上没法用。
 const MaxKeys = 120
 
-// MaxRows 软键条最多几行。两行是**屏幕**定的上限，不是实现限制：手机竖屏上第三行
+// MaxRows 快捷键条最多几行。两行是**屏幕**定的上限，不是实现限制：手机竖屏上第三行
 // 就该拿去当终端了（一行 28px ≈ 两行终端）。真要更多键就横滑，别往下堆。
 const MaxRows = 2
 
@@ -139,7 +139,7 @@ const MaxBar = 40
 // Key 是一个按键的定义。Spec/Send 只在 send 形态下有值。
 
 type Key struct {
-	ID    string `json:"id,omitempty"` // 稳定标识，软键条按这个引用（存盘时补齐）
+	ID    string `json:"id,omitempty"` // 稳定标识，快捷键条按这个引用（存盘时补齐）
 	Label string `json:"label"`
 	// Icon 条上画哪个**内置图标**（空 = 画 Label 那段文字）。白名单见 icons.go ——
 	// 字形（`⌨` 这种）在很多字体里压根缺（显示成方框）、有的字体里很难看、大小和基线还跟
@@ -183,7 +183,7 @@ type stored struct {
 type file struct {
 	// Rows / Bar 是**默认那一套**的排布，同时也是「老形状」：分 profile 之前整份文件就是
 	// Rows + Keys + Bar。新版本把每一套写进 Profiles，但默认那一套**照旧往这儿也写一份**
-	// —— 降级回老版本时它只认得顶层这几个字段，不镜像的话降级看到的是「软键条恢复出厂」，
+	// —— 降级回老版本时它只认得顶层这几个字段，不镜像的话降级看到的是「快捷键条恢复出厂」，
 	// 而那份配置明明还在文件里。冗余一份换这个，值。
 	Rows int        `json:"rows,omitempty"`
 	Keys []stored   `json:"keys"`
@@ -205,7 +205,7 @@ type lane struct {
 	Pin  []Pin      `json:"pin,omitempty"` // 每行两端钉住几个，见 Pin
 }
 
-// Config 是一整份软键条配置。
+// Config 是一整份快捷键条配置。
 type Config struct {
 	Rows int        `json:"rows"`
 	Lib  []Key      `json:"lib"`           // 我的按键：所有定义
@@ -482,7 +482,7 @@ func (s *Store) load(profile string) Config {
 	ln, has := pick(f, profile)
 	if !has {
 		// 这一套还没排过（名册里有、排布没有：手改过文件，或者复制那一步没成）。
-		// 给出厂那一排，别给一条空栏 —— 空栏看着就像坏了，而且软键条上一个键都没有时
+		// 给出厂那一排，别给一条空栏 —— 空栏看着就像坏了，而且快捷键条上一个键都没有时
 		// 手机上连键盘都呼不出来。
 		out, err := factory(lib)
 		if err != nil {
@@ -592,7 +592,7 @@ func normLane(ln lane) lane {
 // 就复用），再全摆到第一行。
 //
 // 为什么不是「整份恢复出厂」：定义是全局的，整份恢复会把别的 profile 条上引用的定义一起
-// 抹掉 —— 在手机上点一下「恢复默认」，平板上的软键条跟着少一半，这种连带损害用户完全
+// 抹掉 —— 在手机上点一下「恢复默认」，平板上的快捷键条跟着少一半，这种连带损害用户完全
 // 预料不到。
 //
 // **出错就报错，绝不静默退回出厂配置**：补键会顶到 MaxKeys（库里已经有 120 个的时候），
@@ -668,7 +668,7 @@ func sigOf(k Key) string {
 // migrate 把老文件（「排第几行」长在按键上：row / off）翻成 Lib + Bar 这一层。
 //
 // 老配置里一个键只可能出现在一个地方，所以迁移就是「按 row 分两桶，off 的不进桶」。
-// 顺手补 ID —— 老文件里没这个字段。已经调好的软键条不该因为升级白丢。
+// 顺手补 ID —— 老文件里没这个字段。已经调好的快捷键条不该因为升级白丢。
 func migrate(old []stored, lib *[]Key) [][]string {
 	ids := newIDs(*lib)
 	for i := range *lib {
@@ -789,7 +789,7 @@ func (s *Store) Drop(profile string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if profile == profiles.Default {
-		return fmt.Errorf("默认那一套的软键条删不掉")
+		return fmt.Errorf("默认那一套的快捷键条删不掉")
 	}
 	f, ok := s.read()
 	if !ok {
@@ -848,7 +848,7 @@ func resolveConfig(c Config, dropUnknown bool) (Config, error) {
 		rows = 1
 	}
 	if rows < 1 || rows > MaxRows {
-		return Config{}, fmt.Errorf("软键条只能是 1 或 2 行")
+		return Config{}, fmt.Errorf("快捷键条只能是 1 或 2 行")
 	}
 	if len(c.Lib) > MaxKeys {
 		return Config{}, fmt.Errorf("「我的按键」最多 %d 个", MaxKeys)
@@ -875,7 +875,7 @@ func resolveConfig(c Config, dropUnknown bool) (Config, error) {
 	}
 	for i, row := range c.Bar {
 		if i >= MaxRows {
-			return Config{}, fmt.Errorf("软键条最多 %d 行", MaxRows)
+			return Config{}, fmt.Errorf("快捷键条最多 %d 行", MaxRows)
 		}
 		if len(row) > MaxBar {
 			return Config{}, fmt.Errorf("第 %d 行最多 %d 个按键", i+1, MaxBar)

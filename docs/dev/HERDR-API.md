@@ -84,7 +84,7 @@ w(d["schemas"]["request"]); print(len(out))'
 | **zoom 是 tab 级的开关，放大的永远是当前焦点 pane** | `pane.layout` 和 `layout.export` 里只有 tab 级的 `zoomed` + `focused_pane_id`，**没有** per-pane 的 zoom 字段；而且 `layout.panes[].rect` 给的是未放大的分屏几何（放大时两个 pane 都还是 120×58），所以「谁被放大了」只能由焦点推 |
 | 同 tab 内换 pane 回 `zoom_changed:false` + `reason:"already_zoomed"` 而 `focus_changed:true` | **那不是失败**：放大的对象跟着焦点换了，不需要 off 再 on |
 | 单 pane 的 tab 回 `zoomed:false` + `reason:"single_pane"` | 那个 pane 本来就占满整个 tab，焦点已经切过去了。别当失败报错 —— 前端要单独说一句，不然用户以为按钮没生效 |
-| `mode` 默认是 `toggle` | 所以「跳到某个 pane 并铺满」必须显式传 `"on"`，不能省。软键条上绑的 zoom 键走的是默认 toggle，那条路只能二选一 |
+| `mode` 默认是 `toggle` | 所以「跳到某个 pane 并铺满」必须显式传 `"on"`，不能省。快捷键条上绑的 zoom 键走的是默认 toggle，那条路只能二选一 |
 
 ## 100ms 的坎：请求必须和 connect 同一瞬间发出
 
@@ -170,7 +170,7 @@ README 的「只开本机 shell」。）
 
 手机上键盘弹着的时候点列表里一行，原来是**第一下只收键盘、第二下才跳**（真机实拍）。两个原因叠在一起：
 
-- 开这个面板的三条路都刻意**没让浏览器改焦点** —— 软键条在 mousedown 上 `preventDefault`，触屏那层把
+- 开这个面板的三条路都刻意**没让浏览器改焦点** —— 快捷键条在 mousedown 上 `preventDefault`，触屏那层把
   `touchstart` 整个吃掉（不然手指一划就变成拖选，见 [MOBILE.md](MOBILE.md#触屏手势)）。于是面板浮出来的时候，
   发件箱 / 终端那个输入框还聚着，键盘还占着半个屏。
 - 那一下点击于是**先**把焦点带走：`--vvh` 跟着 visualViewport 一变，面板整个重排，手指底下那一行已经

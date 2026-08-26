@@ -18,7 +18,7 @@ import (
 //	GET    /api/profiles             名册 + 这台设备用哪一套 + 各设备绑在哪（只读）
 //	POST   /api/profiles             新建（可以从某一套复制排布过来）
 //	PUT    /api/profiles/{id}        改名
-//	DELETE /api/profiles/{id}        删掉（软键条 / 顶栏里那一段一起清）
+//	DELETE /api/profiles/{id}        删掉（快捷键条 / 顶栏里那一段一起清）
 //	POST   /api/profiles/bind        把某台设备绑到某一套（可以绑别人那台）
 //	PUT    /api/profiles/{id}/prefs  合并几个开关（只动传进来的那几个键）
 //
@@ -119,7 +119,7 @@ func (s *Server) profilesBind(w http.ResponseWriter, r *http.Request) {
 	s.profilesOut(w, r, c, c.Installs[installID(r)].Profile)
 }
 
-// profilesCreate 新建一套。CopyFrom 给了就把那一套的软键条 / 顶栏**复制**过来。
+// profilesCreate 新建一套。CopyFrom 给了就把那一套的快捷键条 / 顶栏**复制**过来。
 //
 // 复制而不是继承：继承要给每一项做「跟随 / 覆盖」两态，那点复杂度这十来个开关撑不起，
 // 而「从平板那套复制过来再删几个键」比从零拖快得多 —— 这也是这个功能最常用的动作。
@@ -172,7 +172,7 @@ func (s *Server) profilesRename(w http.ResponseWriter, r *http.Request, id strin
 	s.profilesOut(w, r, c, s.profileOf(r))
 }
 
-// profilesDelete 删一套：名册先删（绑在上面的设备落回默认），然后把软键条 / 顶栏里
+// profilesDelete 删一套：名册先删（绑在上面的设备落回默认），然后把快捷键条 / 顶栏里
 // 那一段清掉。
 //
 // 顺序是刻意的：名册是唯一的真相源，先把它改对。那两份里剩下的孤儿段只是占几行 JSON，
@@ -185,7 +185,7 @@ func (s *Server) profilesDelete(w http.ResponseWriter, r *http.Request, id strin
 	}
 	// 那两份清不掉只记一句：名册已经改对了，孤儿段不影响任何人（下次同名 ID 不会再发出来）
 	if err := s.Softkeys.Drop(id); err != nil {
-		log.Printf("删 %s 的软键条那一段: %v", id, err)
+		log.Printf("删 %s 的快捷键条那一段: %v", id, err)
 	}
 	if err := s.Topbar.Drop(id); err != nil {
 		log.Printf("删 %s 的顶栏那一段: %v", id, err)

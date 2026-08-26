@@ -277,7 +277,7 @@ type zoomWrap struct {
 //
 // **一次调用就能跨 workspace + tab + pane**：实测对另一个 workspace 里的 pane 发
 // mode:"on"，焦点连着 workspace 和 tab 一起切过去（focus_changed=true），不用先
-// workspace.focus 再 tab.focus。这条是这个功能的全部理由 —— 软键条发的是按键，而
+// workspace.focus 再 tab.focus。这条是这个功能的全部理由 —— 快捷键条发的是按键，而
 // 按键只能表达「下一个 tab」「往右切一格」这种**相对**动作，「让 w5:p3 全屏」说不出来；
 // socket 这层是按 pane_id 寻址的。
 //

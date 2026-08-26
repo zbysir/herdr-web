@@ -1,6 +1,6 @@
 package softkeys
 
-// 软键上能挑的**内置图标**：这份是白名单，前端那份画得出来的在
+// 键上能挑的**内置图标**：这份是白名单，前端那份画得出来的在
 // `web/src/keyicons.tsx`，两边**一字不差、顺序也一样**，有测试盯着（TestIconsMatchJS）。
 //
 // 为什么要有图标这一档：`Key.Label` 是自由文本，于是「键盘」这种键只能靠字形（`⌨`）——
@@ -24,7 +24,7 @@ var KeyIcons = []string{
 	"copy", "paste", "search", "refresh", "undo", "redo",
 	"plus", "minus", "zoom-in", "zoom-out", "max", "min",
 	"split", "menu",
-	// 界面里那几件事 —— 软键 `act:` 那一档最常用的就是这几个，得有对应的图标可挑
+	// 界面里那几件事 —— 快捷键条上 `act:` 那一档最常用的就是这几个，得有对应的图标可挑
 	"panes", "files", "image", "compose", "settings", "theme", "exit",
 }
 

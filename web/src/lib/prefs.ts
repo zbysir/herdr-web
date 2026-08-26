@@ -1,7 +1,7 @@
 import { api } from './api'
 
 /**
- * 跟着 profile 走的那几个开关（「排布」的另一半：软键条和顶栏是排布，这几个是小设置）。
+ * 跟着 profile 走的那几个开关（「排布」的另一半：快捷键条和顶栏是排布，这几个是小设置）。
  *
  * 模型是**服务端为准 + localStorage 镜像**：
  *
@@ -18,7 +18,7 @@ import { api } from './api'
  * showNotify 还要再问一次权限，所以同步过去不会出现「显示着开着、一条都不弹」。
  *
  * 不在这儿的：kbdFullErr（上次全屏为什么失败，本机诊断）、面板的尺寸位置（还要按横竖屏
- * 各存一份，见 oriented.ts）、提示的未读游标、发件箱瞄准哪个 pane，以及发件箱 / 软键条
+ * 各存一份，见 oriented.ts）、提示的未读游标、发件箱瞄准哪个 pane，以及发件箱 / 快捷键条
  * 显不显示 —— 最后这个是随手开关的视图状态，一次会话点十几次，每点一次写一趟服务端不值当。
  *
  * 键名和服务端白名单**一字不差、顺序也一样**，有测试盯着（internal/profiles 的
@@ -64,7 +64,7 @@ export function pushPref(profile: string, k: PrefKey, v: string, fail?: (m: stri
 export type KeyStyle = 'solid' | 'plain'
 
 /**
- * 这台设备该用哪种按键样式。**同步读镜像**（见上面那段）—— 软键条每渲染一个键都要它，
+ * 这台设备该用哪种按键样式。**同步读镜像**（见上面那段）—— 快捷键条每渲染一个键都要它，
  * 等一个请求或者绕一圈 React state 都不值当。
  */
 export const keyStyle = (): KeyStyle =>

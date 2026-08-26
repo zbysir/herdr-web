@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 
 /**
- * 「小方块拖来拖去」那套手势 —— 软键条编辑器和顶栏编辑器共用。
+ * 「小方块拖来拖去」那套手势 —— 快捷键条编辑器和顶栏编辑器共用。
  *
  * 两边的排布界面是同一个形状（**库在下、栏在上、拖进去**），差别只在筐有几个、落下来之后
  * 怎么改数据。所以这里只管手势和「落在哪一格」，`onDrop` / `onTap` 留给各自。
@@ -49,7 +49,7 @@ export function useChipDrag<Z extends string | number>(opts: {
    * 这个筐是**定位格**吗（网格，落哪一格就是哪一格），还是默认的**插入序列**
    * （落在两个方块之间）。
    *
-   * 软键条的固定块是定长网格：格子按位置排，「插到第 3 个前面」没有意义 —— 要的是
+   * 快捷键条的固定块是定长网格：格子按位置排，「插到第 3 个前面」没有意义 —— 要的是
    * 「就放进第 3 格」。命中判据也就不一样：序列比中点（在左半边 = 插它前面），
    * 格子比**离哪个格子的中心最近**（比「指针在不在框里」宽容 —— 格与格之间那 6px 缝里
    * 松手不该白拖一次）。
@@ -58,7 +58,7 @@ export function useChipDrag<Z extends string | number>(opts: {
    * 而「往空格里放一个」正是这种筐最主要的用法。
    */
   slots?: (z: Z) => boolean
-  /** 没拿起来就松手 = 点一下（软键条那边是「选中这个定义」） */
+  /** 没拿起来就松手 = 点一下（快捷键条那边是「选中这个定义」） */
   onTap?: (at: ChipAt<Z>) => void
 }): ChipDrag<Z> {
   const [drag, setDrag] = useState<ChipDrag<Z>['drag']>(null)

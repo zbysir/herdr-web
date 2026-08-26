@@ -258,7 +258,7 @@ func TestPruneKeys(t *testing.T) {
 		t.Errorf("p2：拿到 %v", got)
 	}
 
-	// 没有一处要清就别写盘 —— 软键条每存一次都会调这儿一遍
+	// 没有一处要清就别写盘 —— 快捷键条每存一次都会调这儿一遍
 	before, err := os.ReadFile(filepath.Join(dir, "topbar.json"))
 	if err != nil {
 		t.Fatal(err)

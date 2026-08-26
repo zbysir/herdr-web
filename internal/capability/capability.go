@@ -3,7 +3,7 @@
 // 以前这份清单散在三处，而它们其实是同一件事的三个切面：
 //
 //	topbar.Actions / topbar.Pinned   顶栏上能放哪几个、哪个删不掉
-//	softkeys 的 acts                  软键条按键的 act 白名单（是上面那份的**子集**）
+//	softkeys 的 acts                  快捷键条按键的 act 白名单（是上面那份的**子集**）
 //	web/.../topbarItems.tsx           按钮长什么样 + 那个 TS 联合类型
 //
 // 散着的代价是加一件事要动四处 + 两个测试，而漏一处的表现都是**静默**的：顶栏上画一个点了
@@ -14,7 +14,7 @@
 // 现在一件事一行，**能出现在哪些界面上是这一行里的字段**：
 //
 //	Topbar  能放到顶栏上（顺带：这个切片的顺序 = 顶栏编辑器里「库」的排列顺序）
-//	Key     能当软键条按键的 act
+//	Key     能当快捷键条按键的 act
 //	Panel   点开是一块浮层（前端据此推出 panel 那个状态的类型）
 //	Pinned  顶栏上删不掉
 //
@@ -23,23 +23,23 @@
 // （internal/capability 的 TestMatchJS）。
 //
 // 加一件事 = 这儿一行 + 那边一行。以后子进程插件（见 CLAUDE.md 的路线）就是往这张表里
-// 运行时再塞几行，顶栏 / 软键条 / 两个编辑器全都白拿到。
+// 运行时再塞几行，顶栏 / 快捷键条 / 两个编辑器全都白拿到。
 package capability
 
 // Cap 是一件能做的事。
 type Cap struct {
 	ID string
-	// Topbar 能放到顶栏上。目前全部都能 —— 留这个字段是因为「只能当软键」这种东西迟早会
+	// Topbar 能放到顶栏上。目前全部都能 —— 留这个字段是因为「只能放在快捷键条上」这种东西迟早会
 	// 有（子进程插件里那些不该占顶栏那一行的），到时候不用再改一次结构。
 	Topbar bool
-	Key    bool // 能当软键条按键的 act
+	Key    bool // 能当快捷键条按键的 act
 	Panel  bool // 点开是一块浮层（面板一览 / 文件 / 设置）
 	Pinned bool // 顶栏上删不掉
 }
 
 // All 是全部能做的事 + **顶栏编辑器里「库」的排列顺序**。
 //
-// 顺序不是随便排的：面板 / 文件 / 发件箱 / 软键条是四个常驻入口，接着是几个「点一下就发生
+// 顺序不是随便排的：面板 / 文件 / 发件箱 / 快捷键条是四个常驻入口，接着是几个「点一下就发生
 // 一件事」的动作，最后是外观和设置。库里按这个顺序摆，找起来和顶栏上的习惯一致。
 var All = []Cap{
 	{ID: "panes", Topbar: true, Key: true, Panel: true},
@@ -82,7 +82,7 @@ func TopbarPinned() []string {
 	return out
 }
 
-// KeyActs 能当软键条 act 的那些 id，按同一个顺序。
+// KeyActs 能当快捷键条 act 的那些 id，按同一个顺序。
 func KeyActs() []string {
 	out := make([]string, 0, len(All))
 	for _, c := range All {

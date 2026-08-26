@@ -2,14 +2,14 @@
 //
 // 存 ~/.herdr-web/profiles.json：一个名册（有哪几套、叫什么）+ 每个浏览器绑在哪一套上。
 //
-// 为什么要这一层：软键条和顶栏存服务端是对的（手机 / 平板 / 电脑共用一份，改一次到处
+// 为什么要这一层：快捷键条和顶栏存服务端是对的（手机 / 平板 / 电脑共用一份，改一次到处
 // 生效，见 internal/softkeys 的包注释），但**排布**这件事恰恰是每类设备各要一份 ——
 // 平板上二十个键排两行，手机竖屏上放得下五个。原来只有一份，等于平板和手机互相拆台。
 //
 // 分层是「这个键是什么」和「它排在哪」那条老缝再往上接一层：
 //
-//	全局      软键条的「我的按键」（键的定义）—— 改一个按键谱，所有 profile 一起变
-//	profile   软键条的 rows/bar、顶栏的 items、几个小开关（见 Prefs）
+//	全局      快捷键条的「我的按键」（键的定义）—— 改一个按键谱，所有 profile 一起变
+//	profile   快捷键条的 rows/bar、顶栏的 items、几个小开关（见 Prefs）
 //	设备本地  通知开关（浏览器权限绑着这一台）、面板几何、未读游标 —— 压根不进服务端
 //
 // 全局那一层是刻意的：每个 profile 各存一份定义的话，会长出「手机上那个 ⌃B 还是老按键
@@ -20,7 +20,7 @@
 // localStorage 就丢了绑定 —— 那时候按 kind 重新猜一次，人在设置里再点一下就好。
 //
 // **不按屏幕宽度自动切**：分屏、转屏、外接显示器都会让宽度跳变，而 profile 里装的正是
-// 软键条这种一跳就手忙脚乱的东西。kind 只在「这个 install 第一次来、还没绑」那一下用来
+// 快捷键条这种一跳就手忙脚乱的东西。kind 只在「这个 install 第一次来、还没绑」那一下用来
 // 挑个默认值，挑完就落盘，之后再也不猜。横屏 / 竖屏那条轴**不并进来**（profile 数量会
 // 翻倍，而朝向当场就判得出来，不需要人选）—— 那一层在前端 lib/oriented.ts。
 package profiles
@@ -76,7 +76,7 @@ var Kinds = map[string]bool{"phone": true, "tablet": true, "desktop": true}
 //
 // **不在里面的**是这些：kbdFullErr（上次全屏为什么失败，一条本机诊断）、面板的尺寸位置
 // （还要按横竖屏各存一份，见前端 lib/oriented.ts）、提示的未读游标、发件箱瞄准哪个 pane，
-// 以及发件箱 / 软键条显不显示 —— 最后这几个是随手开关的视图状态，一次会话里点十几次，
+// 以及发件箱 / 快捷键条显不显示 —— 最后这几个是随手开关的视图状态，一次会话里点十几次，
 // 每点一次写一趟服务端不值当。
 var Prefs = []string{
 	"fontSize", "scheme",
@@ -241,7 +241,7 @@ func seenHas(ps []Profile, id string) bool {
 	return false
 }
 
-// trimName 名字收一刀：去掉控制字符（软键条那边吃过一次，标签里带 \n 会把布局撑坏）、
+// trimName 名字收一刀：去掉控制字符（快捷键条那边吃过一次，标签里带 \n 会把布局撑坏）、
 // 掐到 MaxName 个字。
 func trimName(s string) string {
 	s = strings.Map(func(r rune) rune {
@@ -300,7 +300,7 @@ func (s *Store) save(c Config) (Config, error) {
 /* ------------------------------------------------------------------ 操作 */
 
 // Resolve 这个 install 用哪一套（只读，不落盘）。认不出就是默认那一套 ——
-// 软键条 / 顶栏的 GET 每次都要过这儿，不该顺手写盘。
+// 快捷键条 / 顶栏的 GET 每次都要过这儿，不该顺手写盘。
 func (s *Store) Resolve(install string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -391,7 +391,7 @@ func (s *Store) Create(name, kind string) (Config, Profile, error) {
 }
 
 // newID 发 ID：default、p2、p3……跳过用掉的号。
-// 用递增的小字符串而不是随机串，理由和软键条的 k1/k2 一样：这几份 JSON 是人会去看、
+// 用递增的小字符串而不是随机串，理由和快捷键条的 k1/k2 一样：这几份 JSON 是人会去看、
 // 偶尔手改的，`"profiles": {"p2": …}` 一眼对得上是哪一套。
 func newID(ps []Profile) string {
 	used := map[string]bool{}

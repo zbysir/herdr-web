@@ -13,7 +13,7 @@ import { Panel } from './ui/panel'
 import { cn } from '@/lib/utils'
 
 /**
- * 拖放的筐：软键条第一行 / 第二行 / 「我的按键」/ 选中那个**弹出组**的格子。
+ * 拖放的筐：快捷键条第一行 / 第二行 / 「我的按键」/ 选中那个**弹出组**的格子。
  * 手势本身在 lib/chipdrag（和顶栏编辑器共用）。
  *
  * `'pad'` 和别的筐**语义不一样**：它是定长网格，落哪一格就**替换**那一格（别的筐是
@@ -66,7 +66,7 @@ function minter(lib: SoftKey[]) {
 }
 
 /**
- * 软键条编辑器：**上面是软键条（一 / 两行），下面是「我的按键」**。
+ * 快捷键条编辑器：**上面是快捷键条（一 / 两行），下面是「我的按键」**。
  *
  * 关键在于这两层是**引用**关系，不是搬家：条上放的是「我的按键」里某个键的 id。所以
  *
@@ -88,7 +88,7 @@ export function SoftkeysPanel({
   onClose, onSaved, toast, embedded, profile,
 }: {
   onClose?: () => void
-  /** 存好之后把**整份**配置交回去（rows / lib / bar / pad），软键条立刻跟着变 */
+  /** 存好之后把**整份**配置交回去（rows / lib / bar / pad），快捷键条立刻跟着变 */
   onSaved: (c: SoftkeysConfig) => void
   toast: (m: string) => void
   embedded?: boolean
@@ -641,7 +641,7 @@ export function SoftkeysPanel({
     <>
       {/* 行数 + 存盘。行数放最前面：它决定下面画一栏还是两栏 */}
       <div className="mb-2.5 flex flex-wrap items-center gap-2">
-        <span className="text-[13px] font-medium">软键条</span>
+        <span className="text-[13px] font-medium">快捷键条</span>
         {/* 「在改哪一套」要一直看得见：这一页能拖十分钟，改错了套还得重来一遍 */}
         <span className="rounded border border-line bg-ctl px-1.5 py-0.5 text-xs text-muted">{profile.name}</span>
         {/* 「一行 / 两行」是二选一，贴成一个分段控件 —— 两个独立按钮并排时看不出
@@ -906,5 +906,5 @@ export function SoftkeysPanel({
     </>
   )
 
-  return embedded ? body : <Panel title="软键条" onClose={onClose ?? (() => {})}>{body}</Panel>
+  return embedded ? body : <Panel title="快捷键条" onClose={onClose ?? (() => {})}>{body}</Panel>
 }

@@ -9,7 +9,7 @@ import { useEffect, useState } from 'react'
  *
  * 判据是「比这个朝向上见过的最高那次矮了 20% 以上」。**不能拿 window.innerHeight 当
  * 基准**（原来就是那么写的，安卓上整个信号是死的）：viewport meta 里有
- * `interactive-widget=resizes-content`（不加的话 iOS 上键盘直接盖住软键条和发件箱），
+ * `interactive-widget=resizes-content`（不加的话 iOS 上键盘直接盖住快捷键条和发件箱），
  * 而它的语义正是「键盘同时缩布局视口」，于是 innerHeight 跟着 visualViewport 一起变矮、
  * 比值恒等于 1。**这个失败是完全静默的**：iOS 上照旧对（iOS 从不缩布局视口），安卓上
  * 表现是「在输入法自己那个收起按钮上收掉键盘之后，⌨ 那个键还亮着，要点两下才能把键盘

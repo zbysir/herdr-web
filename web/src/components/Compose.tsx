@@ -14,9 +14,9 @@ import { cn } from '@/lib/utils'
  * 转成字节发走、不维护可编辑文本，所以对着网页终端说话只能「说得出、改不了」。有了
  * 真字段，选区 + 输入法提交覆盖选区（textarea 的默认行为）才能实现「框选重说」。
  *
- * 位置和宽度都不归它自己管：它是**底部面板**（见 Dock）里的一块，和软键条共用一套边框
+ * 位置和宽度都不归它自己管：它是**底部面板**（见 Dock）里的一块，和快捷键条共用一套边框
  * 和左右宽度。以前它能抓着 ⠿ 从底部撕下来变成浮动面板（自己一套位置 / 大小 / 边框），
- * 和底下的软键条叠成错位的两层 —— 现在整块一起挪、一起缩，只调一次。
+ * 和底下的快捷键条叠成错位的两层 —— 现在整块一起挪、一起缩，只调一次。
  *
  * 里面这排控件按**面板宽度**折行（`@max-3xl:`，容器查询），不是按视口宽度：面板缩到
  * 半屏之后视口还是那么宽，按视口算的话这排会挤成一团。
@@ -58,7 +58,7 @@ export function Compose({
   return (
     <section
       data-testid="compose"
-      // 手机竖屏上纵向再挤一点：这一块和软键条加起来占的每一像素都是从终端那儿借的
+      // 手机竖屏上纵向再挤一点：这一块和快捷键条加起来占的每一像素都是从终端那儿借的
       className={cn('flex flex-col gap-1.5 py-[7px] max-phone:gap-1 max-phone:py-1', busy && 'pointer-events-none opacity-60')}
       onDragOver={(e) => { if ([...e.dataTransfer.types].includes('Files')) e.preventDefault() }}
       onDrop={(e) => {

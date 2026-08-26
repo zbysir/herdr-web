@@ -129,7 +129,7 @@ func TestProfilesEndToEnd(t *testing.T) {
 		t.Errorf("存到已删的一套该 404，拿到 %d", code)
 	}
 	if code, _ = call(t, s, "PUT", "/api/softkeys"+q+"&profile=p2", `{"rows":1,"lib":[],"bar":[[]]}`); code != 404 {
-		t.Errorf("软键条存到已删的一套该 404，拿到 %d", code)
+		t.Errorf("快捷键条存到已删的一套该 404，拿到 %d", code)
 	}
 	// 但 GET 不挑食：退回这台设备该用的那一套，并在响应里说清是哪一套
 	code, out = call(t, s, "GET", "/api/softkeys"+q+"&profile=p2", "")

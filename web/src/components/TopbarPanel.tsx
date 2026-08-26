@@ -10,16 +10,16 @@ import { cn } from '@/lib/utils'
 /**
  * 顶栏编辑器：**上面是顶栏，下面是没上栏的，按住拖上去**。
  *
- * 和软键条那一页是同一个形状（库在下、栏在上、拖进去），手势也是同一份
+ * 和快捷键条那一页是同一个形状（库在下、栏在上、拖进去），手势也是同一份
  * （`lib/chipdrag`）—— 两套排布界面各写一遍拖动，是「同一个动作两种手感」的来路。
  *
  * 下面的库有**两个**：
  *
  *   - 「内置按钮」：这一版有哪些功能按钮，唯一一份清单在 `topbarItems.tsx`（服务端有一份
  *     一样的白名单，有测试盯着）。拖上去就从库里消失 —— 顶栏上同一个按钮放两次没有意义
- *     （软键条那边 Esc 两行各放一个是有意义的，这里没有对应的场景，服务端也直接拒重复）。
- *   - 「我的按键」：软键条那份定义（`internal/softkeys` 的 Lib）。顶栏上存成
- *     `key:<定义ID>`，**定义还是那一份** —— 改一处按键谱，软键条和顶栏一起变。于是
+ *     （快捷键条那边 Esc 两行各放一个是有意义的，这里没有对应的场景，服务端也直接拒重复）。
+ *   - 「我的按键」：快捷键条那份定义（`internal/softkeys` 的 Lib）。顶栏上存成
+ *     `key:<定义ID>`，**定义还是那一份** —— 改一处按键谱，快捷键条和顶栏一起变。于是
  *     「顶栏上能不能加个 ctrl+b z」不用每次都动一遍白名单。
  *
  * ⚙ 设置**拖不下来**：那是唯一一条改回这份配置的路，而配置是跟着人走的（存服务端），
@@ -295,7 +295,7 @@ export function TopbarPanel({
     <div className="flex flex-col gap-2.5">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-[13px] font-medium">顶栏</span>
-        {/* 在改哪一套 —— 和软键条那页同一个位置、同一个样子 */}
+        {/* 在改哪一套 —— 和快捷键条那页同一个位置、同一个样子 */}
         <span className="rounded border border-line bg-ctl px-1.5 py-0.5 text-xs text-muted">{profile.name}</span>
         <span className="text-xs text-faint">{items.length} / {max}</span>
         <div className="ml-auto flex items-center gap-2">
@@ -308,12 +308,12 @@ export function TopbarPanel({
 
       {box('bar', '顶栏', '空的 —— 从下面拖一个上来', items)}
       {box('lib', '内置按钮', '都在顶栏上了', lib.map((it) => it.id))}
-      {box('keys', '我的按键', '「我的按键」里的都在顶栏上了 —— 去「软键条」那页加', keyLib.map((k) => TOPBAR_KEY + k.id))}
+      {box('keys', '我的按键', '「我的按键」里的都在顶栏上了 —— 去「快捷键条」那页加', keyLib.map((k) => TOPBAR_KEY + k.id))}
 
       {err && <p className="text-xs text-bad">{err}</p>}
 
       {/* 就地说明：**只写「怎么用」**，不写「为什么这么设计」—— 理由归 docs/dev/MOBILE.md。
-          混进来的后果是用户面前这一块变成一堵墙（软键条那一页犯过，用户报的） */}
+          混进来的后果是用户面前这一块变成一堵墙（快捷键条那一页犯过，用户报的） */}
       <div className="text-xs/relaxed text-muted
                       [&_code]:rounded [&_code]:border [&_code]:border-line [&_code]:bg-ctl
                       [&_code]:px-1 [&_code]:py-px [&_code]:font-mono [&_code]:text-[11px] [&_code]:text-fg
@@ -321,8 +321,8 @@ export function TopbarPanel({
         <ul className="ml-3.5 list-disc space-y-0.5">
           <li>下面的方块<strong>点一下</strong>就加到顶栏末尾，<strong>按住拖</strong>能放到指定位置。</li>
           <li>顶栏里拖是排序；拖下来（或点 ✕）就是去掉。⚙ 设置去不掉。</li>
-          <li><strong>「我的按键」</strong>那一筐是软键条上那份定义：拖上来就多一个键。
-            改一处按键谱（在「软键条」那页）两边一起变，在那儿删掉一个，顶栏上也跟着没了 ——
+          <li><strong>「我的按键」</strong>那一筐是快捷键条上那份定义：拖上来就多一个键。
+            改一处按键谱（在「快捷键条」那页）两边一起变，在那儿删掉一个，顶栏上也跟着没了 ——
             所以 <code>ctrl+b z</code> 这种自己配一个拖上来就行。</li>
           <li>顶栏放不下会<strong>自己横滑</strong>，不换行、也不会藏起来。</li>
         </ul>

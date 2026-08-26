@@ -5,7 +5,7 @@ import { INSTALL, type Pin, type SoftKey } from './api'
  *
  * 真相在服务端（换台设备、清了缓存、换个浏览器都还在，见 internal/profiles），可那两个 GET
  * 排在 `whoami → state → profiles/hello` 后面，最快也要好几百毫秒：这段时间顶栏画的是前端
- * 那份出厂顺序、软键条是空的、顶栏上的「我的按键」（`key:` 引用）连定义都还没有，等响应回来
+ * 那份出厂顺序、快捷键条是空的、顶栏上的「我的按键」（`key:` 引用）连定义都还没有，等响应回来
  * 整条栏跳一下。用户报的就是「刷新页面顶部始终会闪动」。
  *
  * 所以和 prefs 一个模型（见 prefs.ts）：**服务端为准 + localStorage 镜像**。区别是这份镜像
@@ -28,7 +28,7 @@ export interface LayoutCache {
   install: string
   /** 这台设备当时绑在哪一套上（设置面板的标题、pushPref 都要它） */
   profile?: { id: string; name: string }
-  /** 软键条：`resolveRows` / `libMap` 要的三样，见 lib/api.ts */
+  /** 快捷键条：`resolveRows` / `libMap` 要的三样，见 lib/api.ts */
   softkeys?: { lib: SoftKey[]; bar: string[][]; pin?: Pin[] | null }
   /** 顶栏那串 id（**已经过滤过**：认不出的按钮和坏引用不进镜像） */
   topbar?: string[]
@@ -63,7 +63,7 @@ export function readLayoutCache(): LayoutCache | null {
 }
 
 /**
- * 更新镜像里的一部分（软键条和顶栏是两个口，分两次回来）。
+ * 更新镜像里的一部分（快捷键条和顶栏是两个口，分两次回来）。
  *
  * 写不进去就算了（存储满了、Safari 隐私模式）：最坏的后果是下次刷新第一帧退回出厂顺序，
  * 为它弹一条提示反而是把一个没人在乎的失败摆到脸上。
