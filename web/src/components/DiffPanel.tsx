@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { RefreshCw, GitBranch } from 'lucide-react'
+import { RefreshCw, GitBranch, X } from 'lucide-react'
 import { gitApi, type DiffMode, type GitRepo, type GitStatus, type Pane } from '@/lib/api'
 import { Panel } from './ui/panel'
 import { Button } from './ui/button'
@@ -159,7 +159,7 @@ export function DiffPanel({
 
   return (
     <>
-      <Panel title="改动" onClose={onClose} className="max-md:bottom-2 md:max-h-[calc(100%-34px)]">
+      <Panel onClose={onClose} className="max-md:bottom-2 md:max-h-[calc(100%-34px)]">
         {/* 仓库这一行。下拉只在**这个工作空间下有好几个 git 项目**时出现
             （一个选项的选择器只是噪音），但路径照旧显示 —— 「我现在看的是哪个项目」不能靠猜 */}
         <div className="mb-1.5 flex items-center gap-1.5">
@@ -182,6 +182,14 @@ export function DiffPanel({
             onClick={() => { if (root) void load(root, mode) }}
           >
             <RefreshCw className={cn('size-4', busy && 'animate-spin')} />
+          </Button>
+          {/* 关闭并进这一排（面板不再有标题栏）。位置还是右上角那个 —— 只是不再为它单占
+              一整行。和「重新读一遍」留一点距离：这是唯一一个「点了就没了」的按钮 */}
+          <Button
+            variant="ghost" size="icon" className="ml-0.5"
+            aria-label="关闭" title="关闭（Esc 也行）" onClick={onClose}
+          >
+            <X className="size-4" />
           </Button>
         </div>
 
