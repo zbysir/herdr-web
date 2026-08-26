@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowUp, File, FileImage, FileText, Folder, Link2, RefreshCw, Search, Clock, SortAsc } from 'lucide-react'
+import { ArrowUp, File, FileImage, FileText, Folder, Link2, RefreshCw, Search, Clock, SortAsc, X } from 'lucide-react'
 import { filesApi, type FileEntry, type FileListing, type FileRoot, type FileRoots, type Pane } from '@/lib/api'
 import { Panel } from './ui/panel'
 import { Button } from './ui/button'
@@ -112,14 +112,18 @@ export function FilesPanel({
    * 正在跑的那个目录里，而那份数据前端手上已经有了（面板一览用的同一份），
    * 不用为它再打一次 herdr socket。
    *
-   * pane 那一段自己再分三轮：**焦点 pane → 同一个工作空间里的别的 pane → 别的工作空间**，
-   * 前两轮带一个「当前」标。理由是 herdr 里同时开着好几个工作空间、几十个 pane 是常态
-   * （实测 48 个 pane / 34 个不同 cwd），不排一下的话「我正在做的这个项目」那一条就淹在
-   * 一长串里，而第一条又恰好是最好点的那条 —— 「第 1 个一定是当前这个工作空间」是用户
-   * 点名要的（改动面板那边是同一条道理，见 DiffPanel）。
+   * pane 那一段自己再分三轮：**焦点 pane → 同一个工作空间里的别的 pane → 别的工作空间**。
+   * 理由是 herdr 里同时开着好几个工作空间、几十个 pane 是常态（实测 48 个 pane / 34 个
+   * 不同 cwd），不排一下的话「我正在待的那个目录」就淹在一长串里，而第一条恰好是最好点
+   * 的那条 —— 「第 1 个一定是当前那个」是用户点名要的。
    *
-   * 去重按路径，所以**先加的那一轮赢** —— 同一个目录在两个工作空间里都开着时，
-   * 「当前」这个标该留在当前那一条上。
+   * **「当前」这个标只给焦点 pane 那一条**，同工作空间的其余几条只是排在前面、不带标。
+   * 第一版按工作空间标，于是一个工作空间里有几个 cwd 就亮几个「当前」（用户报的：
+   * 「我正在看一个目录的 pane，只应该有一个当前」）—— 这个标回答的是「我现在在哪儿」，
+   * 那是**一个** pane 的事，标成一片就等于没回答。
+   *
+   * 去重按路径，所以**先加的那一轮赢** —— 好几个 pane 开在同一个目录里是常态
+   * （实测同一个 cwd 上 4 个 pane），焦点那个先加，「当前」才落在它身上。
    */
   const starts = useMemo(() => {
     const out: (FileRoot & { hint?: string; cur?: boolean })[] = []
@@ -132,8 +136,9 @@ export function FilesPanel({
     const name = (p: Pane) => (p.agent ? `${p.agent} · ${p.workspace}/${p.tab}` : `${p.workspace}/${p.tab}`)
     const focus = panes.find((p) => p.focused)
     if (focus) add(focus.cwd, name(focus), 'pane', true)
+    // 同工作空间的排在前面但**不带「当前」标**（那个标只属于焦点 pane 那一条）。
     // 「同一个工作空间」认 `workspaceId` 不认 `workspace`（后者是标签，同名是常态）
-    for (const p of panes) if (focus && p.workspaceId === focus.workspaceId) add(p.cwd, name(p), 'pane', true)
+    for (const p of panes) if (focus && p.workspaceId === focus.workspaceId) add(p.cwd, name(p), 'pane')
     for (const p of panes) add(p.cwd, name(p), 'pane')
     for (const r of roots?.roots ?? []) add(r.path, r.label)
     for (const d of recentDirs()) add(d, '最近去过')
@@ -169,7 +174,7 @@ export function FilesPanel({
   return (
     // 宽屏上留一截底：文件面板下面就是发件箱，挡住它就没法「看一眼图再接着说」。
     // 那个 34px 是跟着 Panel 的 top-1.5 算的（改 Panel 的 top 就得跟着改这儿）
-    <Panel title="文件" onClose={onClose} className="max-md:bottom-2 md:max-h-[calc(100%-34px)]">
+    <Panel onClose={onClose} className="max-md:bottom-2 md:max-h-[calc(100%-34px)]">
       {/* 粘任意绝对路径。**这一条兜住所有「不在任何起点下面」的情况** ——
           agent 往 /var/folders/xx/T/ 里写了张图，这儿粘进去就完了。 */}
       <div className="mb-2 flex gap-1.5">
@@ -184,6 +189,14 @@ export function FilesPanel({
           autoCorrect="off"
         />
         <Button size="default" onClick={openJump} disabled={!jump.trim()}>打开</Button>
+        {/* 关闭并进这一排（面板不再有标题栏）。位置还是右上角那个 —— 只是不再为它单占
+            一整行。和「打开」留一点距离：这是唯一一个「点了就没了」的按钮 */}
+        <Button
+          variant="ghost" size="icon" className="ml-0.5"
+          aria-label="关闭" title="关闭（Esc 也行）" onClick={onClose}
+        >
+          <X className="size-4" />
+        </Button>
       </div>
 
       {dir === null ? (
@@ -208,8 +221,9 @@ export function FilesPanel({
                     <span className="block truncate font-mono text-xs text-fg">{short(s.path)}</span>
                     <span className="block truncate text-[11px] text-faint">{s.label}</span>
                   </span>
-                  {/* 「当前」= 这一条是当前工作空间的。淡绿底 + 绿边 + 绿字那一套
-                      （面板一览里焦点那行同款），不是整块涂满 —— 见配色那节 */}
+                  {/* 「当前」= **焦点 pane 正待在这个目录里**（一份列表里只会有一个）。
+                      淡绿底 + 绿边 + 绿字那一套（面板一览里焦点那行同款），不是整块涂满
+                      —— 见配色那节 */}
                   {s.cur && (
                     <span className="shrink-0 rounded border border-brand/40 bg-brand/12 px-1 py-px text-[10px] text-brand">
                       当前
