@@ -12,7 +12,7 @@ import { SoftkeysPanel } from './SoftkeysPanel'
 import { TopbarPanel } from './TopbarPanel'
 import { ProfilePicker } from './ProfilePicker'
 import { DevicesPanel } from './DevicesPanel'
-import { lanAuto, onLanNow, setLanAuto } from '@/hooks/useLanDirect'
+import { lanAuto, onLanNow, onLoopback, setLanAuto } from '@/hooks/useLanDirect'
 import { cn } from '@/lib/utils'
 
 /**
@@ -461,6 +461,9 @@ function TermSection({
  */
 function LanDirectRow({ origins }: { origins: string[] }) {
   const here = onLanNow(origins)
+  // 本机开的页面上这一节说的不是「正走公网」（那是错的，它谁也没绕），而是
+  // 「下面这些地址是给别的设备用的」—— 见 useLanDirect 的 onLoopback。
+  const local = !here && onLoopback()
   const [auto, setAuto] = useState(lanAuto)
   return (
     <div className="mt-3 border-t border-line pt-3">
@@ -472,14 +475,16 @@ function LanDirectRow({ origins }: { origins: string[] }) {
             here ? 'border-brand/40 bg-brand/12 text-brand' : 'border-line text-muted',
           )}
         >
-          {here ? '正走直连' : '正走公网'}
+          {here ? '正走直连' : local ? '本机访问' : '正走公网'}
         </span>
       </div>
 
       <p className="mt-1 text-xs/relaxed text-muted">
         {here
           ? '这个页面已经是直连的 —— 按键不再绕公网。'
-          : '在这台设备上先开一次下面的地址、点「继续访问」（自签证书），之后从公网地址进来就会自动切过去。'}
+          : local
+            ? '这个页面是从本机开的，按键压根没出过这台机器 —— 下面的地址是给别的设备用的。'
+            : '在这台设备上先开一次下面的地址、点「继续访问」（自签证书），之后从公网地址进来就会自动切过去。'}
       </p>
 
       <ul className="m-0 mt-1.5 list-none p-0">

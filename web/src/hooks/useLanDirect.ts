@@ -50,6 +50,24 @@ export function onLanNow(origins: string[]): boolean {
   return origins.includes(location.origin)
 }
 
+/**
+ * 这个页面本来就是从**本机**开的（localhost / 127.x / ::1）。
+ *
+ * 那时候直连这条路整个没有意义：请求已经走 loopback 了，「切过去」只会多一跳网卡、
+ * 多一张要点「继续访问」的自签证书，一点都不会更快。用户报的就是这个 —— 站在
+ * `http://localhost:7788` 上还被问「切过去就不绕公网了」。
+ *
+ * 判据只收 loopback，**不扩到所有私网地址**：VPN（Tailscale 的 100.64/10、WireGuard
+ * 的 10.x）发的也是私网 IP，而那时候对面可能在几百公里外，直连确实更快 —— 一并挡掉
+ * 就是把这条路在 VPN 上静默关了，而「静默」正是这块最不能有的东西。
+ */
+export function onLoopback(): boolean {
+  const h = location.hostname
+  return h === 'localhost' || h.endsWith('.localhost') // RFC 6761 保留给回环
+    || h === '::1' || h === '[::1]' // hostname 一般已经脱了方括号，兜一手
+    || /^127\./.test(h)
+}
+
 export type LanDirect =
   | { kind: 'idle' }
   /** 通了，但还没问过人要不要走 */
@@ -102,7 +120,9 @@ export function useLanDirect(lan: State['lan'], enabled: boolean) {
 
   useEffect(() => {
     const origins = lan?.origins ?? []
-    if (!enabled || !origins.length) return
+    // 本机开的页面直接收工：见 onLoopback。放在最前面而不是塞进下面那串判断里 ——
+    // 后面每一条都会写 localStorage，而这条的意思是「这个页面跟直连没关系」。
+    if (!enabled || !origins.length || onLoopback()) return
 
     // 已经在直连这条路上了：把「走通过」记下来（IP 变了要靠它认），然后什么都不做。
     if (onLanNow(origins)) {
