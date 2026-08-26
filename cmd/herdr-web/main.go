@@ -646,28 +646,43 @@ func localURL(cfg *config.Config, host string, port int) string {
 func entries(cfg *config.Config) []entry {
 	out := []entry{{label: "本机", url: localURL(cfg, "127.0.0.1", cfg.Port)}}
 
-	nics := lan.Addresses()
-	switch {
-	case cfg.Loopback:
-		out = append(out, entry{label: "局域网",
-			note: "没开：只监听 " + cfg.Host + "（要让同一个 Wi-Fi 下的手机连上就 HERDR_WEB_HOST=0.0.0.0）"})
-	case len(nics) == 0:
-		out = append(out, entry{label: "局域网", note: "没找到网卡地址（没连网？）"})
-	default:
-		for i, n := range nics {
+	// 局域网这一行要回答的是「手机在同一个 Wi-Fi 下开哪个」，而**有两个口可能落在
+	// 这儿**：主口（只有听着 0.0.0.0 时才算）和局域网直连口（HERDR_WEB_LAN_PORT，
+	// 它永远听通配地址，见上面起监听那段）。只看主口的话，「主口只听本机 + 配了直连
+	// 口」这套配置会被打成「局域网 没开」，而下面「局域网直连」那节正列着一个局域网
+	// 地址 —— 同一屏里自相矛盾（用户报的）。
+	var lanRows []entry
+	if !cfg.Loopback {
+		for _, n := range lan.Addresses() {
 			note := n.Name
-			switch {
-			case i == 0:
-				note += "  ← 手机用这个"
-			case n.Virtual:
+			if n.Virtual {
 				note += "（虚拟网卡，手机碰不到）"
 			}
-			label := ""
-			if i == 0 {
-				label = "局域网"
-			}
-			out = append(out, entry{label: label, url: localURL(cfg, n.Address, cfg.Port), note: note})
+			lanRows = append(lanRows, entry{url: localURL(cfg, n.Address, cfg.Port), note: note})
 		}
+	}
+	// 直连口就是主口那档（TLS auto + 听着局域网）上面已经列过了，别列第二遍。
+	if p := cfg.LanDirectPort(); p > 0 && p != cfg.Port {
+		for _, n := range lan.Addresses() {
+			if n.Virtual || !lan.IsPrivate(n.Address) {
+				continue // 和 lan.Origins 同一套筛法，两处的地址必须一模一样
+			}
+			lanRows = append(lanRows, entry{
+				url:  fmt.Sprintf("https://%s:%d/", n.Address, p),
+				note: n.Name + "  直连口",
+			})
+		}
+	}
+	switch {
+	case len(lanRows) > 0:
+		lanRows[0].label = "局域网"
+		lanRows[0].note += "  ← 手机用这个"
+		out = append(out, lanRows...)
+	case !cfg.Loopback || cfg.LanDirectPort() > 0:
+		out = append(out, entry{label: "局域网", note: "口开着，但没找到能用的网卡地址（没连网？）"})
+	default:
+		out = append(out, entry{label: "局域网",
+			note: "没开：主口只监听 " + cfg.Host + "，也没配 HERDR_WEB_LAN_PORT —— 两个二选一，手机才连得上"})
 	}
 
 	// 远程那条路的地址**只能由人给**（HERDR_WEB_PUBLIC_URL）：隧道那头是什么域名、
@@ -737,22 +752,14 @@ func banner(cfg *config.Config, store *auth.Store, passkeys *auth.Passkeys, cert
 	// 局域网直连口。**必须说「点一次继续访问」**：那张证书是自签的，不点过一次的话
 	// 网页那边的嗅探会因为证书不认而失败 —— 而失败是静默的（安静走公网），人根本
 	// 不会知道这条路存在过。见 internal/server/lanapi.go。
-	if origins := lan.Origins(cfg.LanDirectPort()); len(origins) > 0 {
+	// 地址上面「局域网」那几行已经有了，这儿只说规矩 —— 同一个地址在一屏里出现两次，
+	// 人会以为是两条不同的路。
+	if len(lan.Origins(cfg.LanDirectPort())) > 0 {
 		fmt.Println()
-		fmt.Println("  局域网直连（不绕公网，按键往返快一截）：")
-		// 直连口就是主口时（TLS auto + 听着局域网，见 LanDirectPort）这几个地址
-		// 和上面「局域网」那几行是同一批，别再抄一遍 —— 同一个地址在一屏里出现
-		// 两次，人会以为是两条不同的路。
-		if cfg.LanDirectPort() == cfg.Port {
-			fmt.Println("    就是上面那几个局域网地址。")
-		} else {
-			for _, o := range origins {
-				fmt.Println("    " + o + "/")
-			}
-		}
-		fmt.Println("    ↑ 每台设备**先手动开一次**上面任一个、点「继续访问」（自签证书）。")
-		fmt.Println("      之后从公网那个地址进来，网页会自己探到它并切过去。")
-		fmt.Println("      建议在路由器上给这台机器绑个固定内网 IP —— 地址一变那一下信任就得重来。")
+		fmt.Println("  局域网直连（不绕公网，按键往返快一截）走的就是上面那几个局域网地址：")
+		fmt.Println("    每台设备**先手动开一次**、点「继续访问」（自签证书）。")
+		fmt.Println("    之后从公网那个地址进来，网页会自己探到它并切过去。")
+		fmt.Println("    建议在路由器上给这台机器绑个固定内网 IP —— 地址一变那一下信任就得重来。")
 	}
 
 	fmt.Println()
