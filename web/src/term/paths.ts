@@ -146,18 +146,33 @@ const EDGE_SLACK = 2
  */
 const FINISHED = /\/[^/]*[^/.]\.[A-Za-z0-9]{1,5}$/
 
+/**
+ * `https://` 里那两个斜杠。测 `FINISHED` 之前要**先剥掉** —— 它不是路径分隔符。
+ *
+ * 用户报的那一条（截图 20260825-203949）：`https://p54fi1e2ddoy.preview.creght.cn/#diff`
+ * 被切在 `…preview.creg` 上，点开只有半个域名。剥不掉的话 `FINISHED` 看到的是
+ * 「最后一个斜杠（scheme 那个）之后有个 `.creg`」，于是把一截**被切开的主机名**判成
+ * 「已经是完整文件名，别拼」—— 而主机名里的点是标签分隔，`.creg` 是 `.creght` 的前半截。
+ *
+ * 剥掉之后剩下的正好是该判的那部分：主机名里没有斜杠，`FINISHED` 自然不成立（照拼）；
+ * 真到了路径段上（`https://x.com/img/a.png`）它照旧成立，那种不该拼。
+ */
+const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//
+
 /** 一格的内容。空格子和宽字符的第二格都是空串 */
 function chAt(term: Terminal, y: number, x: number): string {
   return term.buffer.active.getLine(y)?.getCell(x)?.getChars() ?? ''
 }
 
 /**
- * 从 `edge` 往左找最后一个有内容的格子：返回它**结束在哪一列**（宽字符占两格，所以
- * 是起始列 + 宽度）和那个字符本身。整段空白返回 -1。
+ * 在 `[lb, rb)` 里从右往左找最后一个有内容的格子：返回它**结束在哪一列**（宽字符占两格，
+ * 所以是起始列 + 宽度）和那个字符本身。整段空白返回 -1。
+ *
+ * **左边界不能省**：分栏时 `lb` 左边是另一个 pane 的内容，越过去量出来的是别人的字。
  */
-function lastEnd(term: Terminal, y: number, edge: number) {
+function lastEnd(term: Terminal, y: number, lb: number, rb: number) {
   const ln = term.buffer.active.getLine(y)
-  for (let x = edge - 1; x >= 0; x--) {
+  for (let x = rb - 1; x >= lb; x--) {
     const cell = ln?.getCell(x)
     if (!cell) continue
     const w = cell.getWidth()
@@ -193,12 +208,48 @@ function spaceAt(term: Terminal, y: number, x: number): boolean {
   return blankAt(cell.getChars())
 }
 
-/** [from, to) 这一段是不是全空 */
-function blank(term: Terminal, y: number, from: number, to: number): boolean {
-  for (let x = from; x < to; x++) {
-    if (!blankAt(chAt(term, y, x))) return false
+/**
+ * **内容带**：一行被竖直分隔线切出来的一段，`[lb, rb)`。
+ *
+ * herdr 分栏的两个 pane、TUI 自己画的框（`│ … │`）在一行上就是并排的几段，互不相干 ——
+ * 折行要拼、路径要找，都只能在**一条带里**算。
+ */
+interface Band {
+  lb: number
+  rb: number
+}
+
+/**
+ * 这一行上的分隔线在哪几列。
+ *
+ * 判「这个 `│` 是分隔线，还是内容里偶然出现的一个」：**上一行或下一行的同一列也得是竖线**
+ * —— 竖着连成一条的才是分隔。
+ */
+function dividers(term: Terminal, y: number): number[] {
+  const out: number[] = []
+  for (let x = 0; x < term.cols; x++) {
+    if (!FRAME.test(chAt(term, y, x))) continue
+    if (FRAME.test(chAt(term, y - 1, x)) || FRAME.test(chAt(term, y + 1, x))) out.push(x)
   }
-  return true
+  return out
+}
+
+/** 这一行上所有内容带，从左到右。没有分隔线时就是整行一条。 */
+function bands(term: Terminal, y: number): Band[] {
+  const out: Band[] = []
+  let lb = 0
+  for (const d of dividers(term, y)) {
+    if (d > lb) out.push({ lb, rb: d })
+    lb = d + 1
+  }
+  if (lb < term.cols) out.push({ lb, rb: term.cols })
+  return out
+}
+
+/** 某一格落在哪条带上 */
+function bandAt(term: Terminal, y: number, x: number): Band {
+  for (const b of bands(term, y)) if (x >= b.lb && x < b.rb) return b
+  return { lb: 0, rb: term.cols }
 }
 
 /**
@@ -217,7 +268,8 @@ function blank(term: Terminal, y: number, from: number, to: number): boolean {
  *      空格上，右边一定剩一截。差别在于「它自己那一层」比 pane 窄几列（根 Box 让一列、
  *      框里还有 padding），所以判据不能是「一格都不剩」，见 `EDGE_SLACK`。
  *      框线（`│ 内容 │`）里内容和竖线之间另有一格 padding，所以有竖线时再容一格。
- *   2. **这两行的内容全落在同一条带子里。** 分栏时另一半 pane 的内容在带子外面。
+ *      **「右边界」是这条带的，不是整行的** —— 见 `band`。
+ *   2. **这条带在下一行也还在**（两侧的分隔线都在），不然这两行不是同一个内容带。
  *   3. **被切开的那个词真的一行装不下。** 光靠第 1 条会把「英文单词正好压线」当成折断，
  *      实测在真 pane 上就有 3 处 —— 见下面那段。
  *   4. **结尾那个词不能看着已经是个完整文件名。** 这条是第 1 条容了两格之后才需要的：
@@ -226,48 +278,30 @@ function blank(term: Terminal, y: number, from: number, to: number): boolean {
  *
  * 中文不用单独防：它占两格，落在边界上会剩 1–2 格，断点也不是路径字符，前两条自然挡掉。
  */
-function tuiWrap(term: Terminal, y: number): { to: number; next: number } | null {
+function tuiWrap(term: Terminal, y: number, band: Band): { to: number; next: number } | null {
   const buf = term.buffer.active
   if (!buf.getLine(y) || !buf.getLine(y + 1)) return null
+  const { lb, rb } = band
 
-  // 内容区右边界：整行最右，或者最右那条竖线所在的列
-  let edge = term.cols
-  let tail = lastEnd(term, y, edge)
+  // 这条带在下一行也得是同一条：两侧的分隔线都还在。**这一条是分栏时的命门** ——
+  // 早先那版是拿「整行最右那个非空格」去推右边界的，分栏时那个字在**另一个 pane** 里，
+  // 量出来的边界离本带的字几十列远，「顶到右边界」永远不成立，于是**分栏时压根不拼**
+  // （用户报的：平板上左右两个 pane，URL 点开只有 `https://p`）。
+  if (rb < term.cols && !FRAME.test(chAt(term, y + 1, rb))) return null
+  if (lb > 0 && !FRAME.test(chAt(term, y + 1, lb - 1))) return null
+
+  const tail = lastEnd(term, y, lb, rb)
   if (tail.end < 0) return null
-  if (FRAME.test(tail.ch)) {
-    edge = tail.end - 1
-    tail = lastEnd(term, y, edge)
-    if (tail.end < 0) return null
-  }
   // 顶到右边界。**容 `EDGE_SLACK` 格**（TUI 自己那一层比 pane 窄几列），有竖线的话
   // 再容一格（框线和内容之间那个 padding）。`strict` 是原来那条严判据，第 4 条要用它
   // 分辨「这一下是不是靠 slack 才过的」
-  const strict = edge - (edge === term.cols ? 0 : 1)
+  const strict = rb - (rb === term.cols ? 0 : 1)
   if (tail.end < strict - EDGE_SLACK) return null
   if (!PATHCH.test(tail.ch)) return null
-  // 右边那条竖线在下一行也得在，不然这两行不是同一个内容带
-  if (edge < term.cols && !FRAME.test(chAt(term, y + 1, edge))) return null
-
-  // 左边界：往左找最近的一条竖线。**要求同一列在下一行也是竖线** —— 竖着连成一条的
-  // 才是分隔，内容里偶然出现的一个 `│` 不算
-  let lb = 0
-  for (let x = edge - 1; x >= 0; x--) {
-    if (FRAME.test(chAt(term, y, x)) && FRAME.test(chAt(term, y + 1, x))) {
-      lb = x + 1
-      break
-    }
-  }
-
-  // **只在「这两行的内容全落在这条带子里」时才拼。** 分栏时另一半 pane 的内容在带子
-  // 外面，一拼就把它整段丢掉了 —— 那一行上别人的路径当场点不动。宁可这一条不拼（只是
-  // 少认一半，和现在一样），也不能把没坏的那半弄坏
-  if (lb > 0 && (!blank(term, y, 0, lb - 1) || !blank(term, y + 1, 0, lb - 1))) return null
-  if (edge < term.cols && (!blank(term, y, edge + 1, term.cols) || !blank(term, y + 1, edge + 1, term.cols)))
-    return null
 
   // 下一行从内容区左边接着念（跳过缩进 —— `⏺` 块的续行缩两格、`⎿` 缩五格）
   let next = -1
-  for (let x = lb; x < edge; x++) {
+  for (let x = lb; x < rb; x++) {
     const ch = chAt(term, y + 1, x)
     if (blankAt(ch)) continue
     if (!PATHCH.test(ch)) return null
@@ -292,11 +326,11 @@ function tuiWrap(term: Terminal, y: number): { to: number; next: number } | null
   // 「中文和 ASCII 粘在一起、又正好停在边界上」和真被切开的分不开了（几何上本来就分不
   // 开，见上面 slack 那条）：那种会多拼一次，但它要一个巧合，比「每条中文后面的链接都
   // 断掉」少见得多。
-  const width = tail.end - lb - (tail.end < edge ? 1 : 0)
+  const width = tail.end - lb - (tail.end < rb ? 1 : 0)
   let ws = tail.end
   while (ws > lb && !spaceAt(term, y, ws - 1)) ws--
   let we = next
-  while (we < edge && !spaceAt(term, y + 1, we)) we++
+  while (we < rb && !spaceAt(term, y + 1, we)) we++
   if (tail.end - ws + (we - next) < width) return null
 
   // **第四道：靠 slack 才算「顶到边界」的那些，结尾那个词不能看着已经是个完整文件名。**
@@ -305,10 +339,14 @@ function tuiWrap(term: Terminal, y: number): { to: number; next: number } | null
   // 于是「一条正好差一两格填满这行的路径」会把下一行的头一个词粘上来 —— 原来那条好好的
   // 链接变成点开报「找不到」的。真被切开的路径**极少**正好切在扩展名后面，而切在那儿
   // 的话本来也不用拼（路径已经完整，下一行是别的内容）。
+  //
+  // 「看着完整」要**剥掉 scheme 再判**（见 `SCHEME`）：`https://` 里那两个斜杠不是路径
+  // 分隔符，不剥的话一截被切开的主机名（`…preview.creg`）会被当成完整文件名，URL 于是
+  // 只认出前半截 —— 用户报的「点超链接还是一半，不是一个完整的域名」。
   if (tail.end < strict) {
     let word = ''
     for (let x = ws; x < tail.end; x++) word += chAt(term, y, x)
-    if (FINISHED.test(word)) return null
+    if (FINISHED.test(word.replace(SCHEME, ''))) return null
   }
 
   // 这一行读到**最后一个字符为止**，不是读到 edge：框线里内容和竖线之间还有一格
@@ -326,23 +364,28 @@ function tuiWrap(term: Terminal, y: number): { to: number; next: number } | null
  * 为什么不用 `translateToString`：有中文（或者 emoji）时它返回的字符数和格子数对不上，
  * 拿匹配下标去算 x 坐标会整条错位 —— 下划线画在半个词上、点下去取到的是另一段。
  * 所以逐格读，xs/ys 和 text 一一对应。
+ *
+ * **只读这一条带**（`band`）。整行一起读的话，分栏时另一半 pane 的字会被拼到这条路径
+ * 前面或后面 —— 早先那版就是因为这个，干脆在「行上有分隔线」时整个放弃拼行（宁可少认
+ * 一半也别把没坏的那半弄坏）。按带读之后两边都成立：本带拼得回来，另一半各算各的。
  */
-function logical(term: Terminal, row: number) {
+function logical(term: Terminal, row: number, band: Band) {
   const buf = term.buffer.active
+  const { lb, rb } = band
   // 往上找这条逻辑行的头。判据要和下面往下走的那套**一模一样**，否则同一条路径在
   // 两行上会算出两个不同的区间
   let top = row
-  while (top > 0 && (buf.getLine(top)?.isWrapped || tuiWrap(term, top - 1))) top--
+  while (top > 0 && (buf.getLine(top)?.isWrapped || tuiWrap(term, top - 1, band))) top--
 
   let text = ''
   const xs: number[] = []
   const ys: number[] = []
-  let from = 0
+  let from = lb
   for (let y = top; y < buf.length; y++) {
     const ln = buf.getLine(y)
     const wrapped = buf.getLine(y + 1)?.isWrapped
-    const tui = wrapped ? null : tuiWrap(term, y)
-    const to = tui ? tui.to : term.cols
+    const tui = wrapped ? null : tuiWrap(term, y, band)
+    const to = tui ? tui.to : rb
     for (let x = from; ln && x < to; x++) {
       const cell = ln.getCell(x)
       // 宽字符占两格，第二格没有自己的内容（getWidth() === 0）—— 跳过，
@@ -355,7 +398,7 @@ function logical(term: Terminal, row: number) {
       }
       text += chars
     }
-    if (wrapped) from = 0
+    if (wrapped) from = lb
     else if (tui) from = tui.next
     else break
   }
@@ -372,37 +415,40 @@ export function pathLinkProvider(term: Terminal, onOpen: (p: string) => void): I
   return {
     provideLinks(bufferLineNumber, cb) {
       const row = bufferLineNumber - 1 // xterm 给的是 1-based
-      const { text, xs, ys } = logical(term, row)
-      if (!text) return cb(undefined)
-
       const links: ILink[] = []
-      for (const hit of findPaths(text)) {
-        const a = hit.start
-        const b = Math.min(hit.end, xs.length) - 1
-        if (b < a) continue
-        // 折行的路径跨好几行：**只交回落在这一行的那一截**。整段交回去的话 xterm 会把
-        // 中间的续行缩进和竖线一起划上下划线（它按「首行从 x 到行尾、末行从行首到 x」
-        // 铺），而这一行的另一截等悬到那儿时自己会再问一次
-        let s = -1
-        let e = -1
-        for (let i = a; i <= b; i++) {
-          if (ys[i] !== row) continue
-          if (s < 0) s = i
-          e = i
+      // xterm 要的是「这一行上所有的链接」，而分栏时一行上并排着好几条带 —— 每条各算
+      // 一遍再合起来。带之间列区间不重叠，所以不会重复
+      for (const band of bands(term, row)) {
+        const { text, xs, ys } = logical(term, row, band)
+        if (!text) continue
+        for (const hit of findPaths(text)) {
+          const a = hit.start
+          const b = Math.min(hit.end, xs.length) - 1
+          if (b < a) continue
+          // 折行的路径跨好几行：**只交回落在这一行的那一截**。整段交回去的话 xterm 会把
+          // 中间的续行缩进和竖线一起划上下划线（它按「首行从 x 到行尾、末行从行首到 x」
+          // 铺），而这一行的另一截等悬到那儿时自己会再问一次
+          let s = -1
+          let e = -1
+          for (let i = a; i <= b; i++) {
+            if (ys[i] !== row) continue
+            if (s < 0) s = i
+            e = i
+          }
+          if (s < 0) continue
+          links.push({
+            text: hit.path,
+            range: {
+              start: { x: xs[s] + 1, y: row + 1 },
+              end: { x: xs[e] + 1, y: row + 1 },
+            },
+            decorations: { pointerCursor: true, underline: true },
+            activate: (e) => {
+              e.preventDefault()
+              onOpen(hit.path)
+            },
+          })
         }
-        if (s < 0) continue
-        links.push({
-          text: hit.path,
-          range: {
-            start: { x: xs[s] + 1, y: row + 1 },
-            end: { x: xs[e] + 1, y: row + 1 },
-          },
-          decorations: { pointerCursor: true, underline: true },
-          activate: (e) => {
-            e.preventDefault()
-            onOpen(hit.path)
-          },
-        })
       }
       cb(links.length ? links : undefined)
     },
@@ -427,7 +473,8 @@ export function linkAtCell(
   row: number,
 ): { kind: 'path' | 'url'; text: string } | null {
   const bufRow = term.buffer.active.viewportY + row - 1
-  const { text, xs, ys } = logical(term, bufRow)
+  // 手指落在哪条带上就只算那条带（分栏时另一半 pane 的字不该被拼进来）
+  const { text, xs, ys } = logical(term, bufRow, bandAt(term, bufRow, col - 1))
   if (!text) return null
 
   // 手指落在哪个字符上：xs/ys 和 text 一一对应（见 logical，中文占两格也对得上）

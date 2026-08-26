@@ -53,6 +53,17 @@ function mk(lines: string[], cols = COLS): Terminal {
   return { cols, buffer: { active } } as unknown as Terminal
 }
 
+/** 可见宽度：宽字符占两格。拼分栏那几行的 padding 要用 */
+function wid(s: string): number {
+  let n = 0
+  for (const ch of s) n += WIDE.test(ch) ? 2 : 1
+  return n
+}
+/** `│ 内容 │`：herdr 的 pane 框，内容区固定 `inner` 格 */
+function pane(s: string, inner: number): string {
+  return `│ ${s}${' '.repeat(Math.max(0, inner - wid(s)))} │`
+}
+
 let fails = 0
 function links(term: Terminal, row: number): string[] {
   let got: { text: string }[] = []
@@ -92,11 +103,13 @@ check('差一格但结尾是完整文件名：不拼', links(mk([
   'found 3 matches',
 ]), 0), ['/Users/bysir/dev/bysir/herdr/a/report.txt'])
 
-/* 4. 分栏：另一半 pane 的内容在带子外面，拼一下就把它整段丢了 */
-check('分栏不拼', links(mk([
-  '/Users/bysir/.herdr-web/uploads/2026 │ other',
-  '08-24-x.jpg                          │ stuff',
-], 44), 0), ['/Users/bysir/.herdr-web/uploads/2026'])
+/* 4. 分栏：**左右两条带各算各的**。左边那条该拼的拼回来，右边那条不能因为左边拼了就
+   找不着 —— 原来这里是「一行上有分隔线就整个放弃拼行」（宁可少认一半，也别把另一半
+   pane 上那条好好的路径弄成点不动的），按「只读这一条带」之后两边同时成立。 */
+check('分栏：两条带各算各的', links(mk([
+  '/Users/bysir/.herdr-web/uploads/2026 │ /tmp/a.png',
+  '08-24-x.jpg                          │ hi',
+], 54), 0), ['/Users/bysir/.herdr-web/uploads/202608-24-x.jpg', '/tmp/a.png'])
 
 /* 5. 竖线框里（`╭…╮` 的问题块、左右分栏的左边那半）：离竖线差两格也算顶到边 */
 check('框里的路径拼回来', links(mk([
@@ -131,6 +144,44 @@ const zh = mk([
   '  eb/uploads/20260824-173712-e33266.jpg',
 ])
 check('中文后面那条路径：拼回来', linkAtCell(zh, 3, 2)?.text, JPG)
+
+/* 9. **同一条 URL，切在域名当中。**（真机截图 20260825-203949：点开只有
+   `https://p54fi1e2ddoy.preview.creg`，用户报「不是一个完整的域名」）
+   scheme 里那两个斜杠**不是路径分隔符** —— 紧跟在它后面的是主机名，而主机名里的点是
+   标签分隔（`.creg` 是被切开的 `.creght`），不是扩展名。而 `FINISHED`（「结尾看着已经是
+   个完整文件名就别拼」）只按「最后一个斜杠之后有没有扩展名」判，于是 `//` 被当成路径
+   分隔、`.creg` 被当成扩展名 —— 判成「已经完整」，不拼。
+   偏偏这一行只差一格顶满（Ink 在自己那一层让出一格），FINISHED 那道正是这时候才生效的。 */
+const HASH = 'https://p54fi1e2ddoy.preview.creght.cn/#diff'
+const cut = mk([
+  '  预览: https://p54fi1e2ddoy.preview.creg', // 字画到第 40 列（42 列的 pane，差一格）
+  '  ht.cn/#diff',
+])
+check('切在域名当中的 URL：首行 tap', linkAtCell(cut, 20, 1)?.text, HASH)
+check('切在域名当中的 URL：续行 tap', linkAtCell(cut, 4, 2)?.text, HASH)
+
+/* 10. 反过来那一半还得管住：URL 结尾**真是个文件名**时，差一两格顶满也不许把下一行的头
+   一个词粘上来（`/photo.png` + `next` → 点开找不到）。这是第 9 条那个改动的边界。 */
+const png = mk([
+  '  见 https://ex.com/img/photo.png',
+  '  next word here',
+], 35)
+check('URL 结尾是文件名：不粘下一行', linkAtCell(png, 10, 1)?.text, 'https://ex.com/img/photo.png')
+
+/* 11. **分栏（平板上左右两个 pane）里的那条 URL。**（真机截图 20260825-235355：95×46 的
+   终端、左右两个 pane，URL 被切在 `https://p` 上，点开直接跳到 `https://p`）
+   「内容带」（这一行被竖直分隔线切成的几段）**要按落点算**，不能拿「整行最右那个非空格」
+   去推 —— 那个字在**另一个 pane** 里，量出来的右边界离本带的字十万八千里，「顶到右边界」
+   一条永远不成立，于是分栏时折行压根不拼。 */
+const INNER = 43
+const two = (l: string, r: string) => '    ' + pane(l, INNER) + pane(r, INNER)
+const SITE2 = 'https://p54fi1e2ddoy.preview.creght.cn/'
+const split2 = mk([
+  two('⏺ 改完推了草稿（还是没 publish）：https://p', ''),
+  two('  54fi1e2ddoy.preview.creght.cn/', ''),
+], 4 + (INNER + 4) * 2)
+check('分栏里的 URL：首行 tap', linkAtCell(split2, 45, 1)?.text, SITE2)
+check('分栏里的 URL：续行 tap', linkAtCell(split2, 12, 2)?.text, SITE2)
 
 if (fails) {
   console.error(`\n${fails} 处不对`)
