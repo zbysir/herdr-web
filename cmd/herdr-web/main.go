@@ -617,30 +617,138 @@ func certIPs(cfg *config.Config) []net.IP {
 	return ips
 }
 
+// entry 是横幅上「入口」那一段的一行：进来的三条路（本机 / 局域网 / 远程）各占一行。
+type entry struct {
+	label string // 只在一组的头一行给，后面几行留空（多张网卡时看着像一个块）
+	url   string // 空 = 这条路现在没有，那时 note 说明为什么、怎么开
+	note  string
+}
+
+// localURL 是「直连本进程这个口」的地址。**不能用 base()** —— 那个一旦配了
+// HERDR_WEB_PUBLIC_URL 就对任何 host 都返回同一个公网地址，而横幅上这三行恰恰是
+// 人用来回答「我现在该开哪个」的：全打成同一个公网地址等于这三行都没了。
+//
+// scheme 跟 ServesTLS 走而不是 BrowserHTTPS：proxy 档的 TLS 在前面那层，直连本进程
+// 这个口收的是明文 http，写成 https 的话本机那行点开是连不上的。
+func localURL(cfg *config.Config, host string, port int) string {
+	s := "http"
+	if cfg.ServesTLS() {
+		s = "https"
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
+		host = "[" + host + "]" // IPv6 要方括号（现在 lan.Addresses 只给 v4，兜一手）
+	}
+	return fmt.Sprintf("%s://%s:%d/", s, host, port)
+}
+
+// entries 把三条路各自算一遍。没有的那条也留一行说明 —— 「没打印」和「没有」在
+// 屏幕上长得一样，而人正是在这儿找「为什么手机连不上」。
+func entries(cfg *config.Config) []entry {
+	out := []entry{{label: "本机", url: localURL(cfg, "127.0.0.1", cfg.Port)}}
+
+	nics := lan.Addresses()
+	switch {
+	case cfg.Loopback:
+		out = append(out, entry{label: "局域网",
+			note: "没开：只监听 " + cfg.Host + "（要让同一个 Wi-Fi 下的手机连上就 HERDR_WEB_HOST=0.0.0.0）"})
+	case len(nics) == 0:
+		out = append(out, entry{label: "局域网", note: "没找到网卡地址（没连网？）"})
+	default:
+		for i, n := range nics {
+			note := n.Name
+			switch {
+			case i == 0:
+				note += "  ← 手机用这个"
+			case n.Virtual:
+				note += "（虚拟网卡，手机碰不到）"
+			}
+			label := ""
+			if i == 0 {
+				label = "局域网"
+			}
+			out = append(out, entry{label: label, url: localURL(cfg, n.Address, cfg.Port), note: note})
+		}
+	}
+
+	// 远程那条路的地址**只能由人给**（HERDR_WEB_PUBLIC_URL）：隧道那头是什么域名、
+	// 什么端口，本进程这边一点信息都没有。所以配了就照原样印，没配就说清楚缺哪一样。
+	switch {
+	case cfg.PublicURL != "":
+		note := "⚠️ 配了地址但公网口没开，外面连不进来（HERDR_WEB_PUBLIC_PORT）"
+		if cfg.PublicPort > 0 {
+			note = fmt.Sprintf("← 隧道 / 端口转发 / 反代指公网口 %d", cfg.PublicPort)
+		} else if cfg.Exposed {
+			note = fmt.Sprintf("← 隧道 / 端口转发 / 反代指主口 %d（老写法）", cfg.Port)
+		}
+		out = append(out, entry{label: "远程", url: cfg.PublicURL + "/", note: note})
+	case cfg.PublicPort > 0:
+		out = append(out, entry{label: "远程",
+			note: fmt.Sprintf("公网口 %d 开着，但没给 HERDR_WEB_PUBLIC_URL —— 隧道那头是什么地址本进程猜不出来", cfg.PublicPort)})
+	case cfg.Exposed:
+		out = append(out, entry{label: "远程",
+			note: fmt.Sprintf("主口 %d 被声明成公网口了（HERDR_WEB_EXPOSED=1），地址取决于隧道那头", cfg.Port)})
+	default:
+		out = append(out, entry{label: "远程", note: "没开（要暴露就 HERDR_WEB_PUBLIC_PORT=<另一个端口> + 隧道指过去）"})
+	}
+	return out
+}
+
+func printEntries(es []entry) {
+	w := 0
+	for _, e := range es {
+		if n := len(e.url); n > w {
+			w = n
+		}
+	}
+	for _, e := range es {
+		switch {
+		case e.url == "":
+			fmt.Printf("  %s  %s\n", padLabel(e.label), e.note)
+		case e.note == "":
+			fmt.Printf("  %s  %s\n", padLabel(e.label), e.url)
+		default:
+			fmt.Printf("  %s  %-*s   %s\n", padLabel(e.label), w, e.url, e.note)
+		}
+	}
+}
+
+// padLabel 把「本机 / 局域网 / 远程」补到同样宽。不能用 %-6s：那个数的是**字节**，
+// 一个汉字 UTF-8 占 3 个，三行会各歪各的。
+func padLabel(s string) string {
+	w := 0
+	for _, r := range s {
+		if r > 0x2e80 { // CJK 起点，够用：这里只可能是那三个词
+			w += 2
+		} else {
+			w++
+		}
+	}
+	if w < 6 {
+		return s + strings.Repeat(" ", 6-w)
+	}
+	return s
+}
+
 func banner(cfg *config.Config, store *auth.Store, passkeys *auth.Passkeys, cert *tlsgen.Result, noWeb bool, adminAddr string, updates *selfupdate.Checker) {
 	fmt.Println()
 	fmt.Println("  herdr-web " + version.Version + " 已启动")
-	fmt.Println("  " + base(cfg, "127.0.0.1") + "/")
-
-	var nics []lan.Addr
-	if !cfg.Loopback {
-		nics = lan.Addresses()
-	}
-	for i, n := range nics {
-		tag := ""
-		if i == 0 {
-			tag = "  ← 手机用这个"
-		}
-		fmt.Printf("  %s/   %s%s\n", base(cfg, n.Address), n.Name, tag)
-	}
+	fmt.Println()
+	printEntries(entries(cfg))
 	// 局域网直连口。**必须说「点一次继续访问」**：那张证书是自签的，不点过一次的话
 	// 网页那边的嗅探会因为证书不认而失败 —— 而失败是静默的（安静走公网），人根本
 	// 不会知道这条路存在过。见 internal/server/lanapi.go。
 	if origins := lan.Origins(cfg.LanDirectPort()); len(origins) > 0 {
 		fmt.Println()
 		fmt.Println("  局域网直连（不绕公网，按键往返快一截）：")
-		for _, o := range origins {
-			fmt.Println("    " + o + "/")
+		// 直连口就是主口时（TLS auto + 听着局域网，见 LanDirectPort）这几个地址
+		// 和上面「局域网」那几行是同一批，别再抄一遍 —— 同一个地址在一屏里出现
+		// 两次，人会以为是两条不同的路。
+		if cfg.LanDirectPort() == cfg.Port {
+			fmt.Println("    就是上面那几个局域网地址。")
+		} else {
+			for _, o := range origins {
+				fmt.Println("    " + o + "/")
+			}
 		}
 		fmt.Println("    ↑ 每台设备**先手动开一次**上面任一个、点「继续访问」（自签证书）。")
 		fmt.Println("      之后从公网那个地址进来，网页会自己探到它并切过去。")
@@ -649,8 +757,7 @@ func banner(cfg *config.Config, store *auth.Store, passkeys *auth.Passkeys, cert
 
 	fmt.Println()
 	if cfg.PublicPort > 0 {
-		fmt.Printf("  公网口：%d ← 隧道 / 端口转发 / 反代指这个口。\n", cfg.PublicPort)
-		fmt.Printf("    主口 %d 只服务本地网络（公网连过来会被拒），它上面的本机免配对在公网口不生效。\n", cfg.Port)
+		fmt.Printf("  主口 %d 只服务本地网络（公网连过来会被拒），它上面的本机免配对在公网口 %d 上不生效。\n", cfg.Port, cfg.PublicPort)
 	} else if cfg.Exposed {
 		fmt.Printf("  主口 %d 被声明成公网口了（HERDR_WEB_EXPOSED=1，老写法）。\n", cfg.Port)
 		fmt.Printf("    建议改成 HERDR_WEB_PUBLIC_PORT=<另一个端口> 并让隧道指过去：\n")
