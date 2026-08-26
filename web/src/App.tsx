@@ -142,7 +142,7 @@ export default function App() {
    * 为什么是一个「当前是哪一块」而不是三个布尔量：三块都浮在同一个角上（现在还贴着顶栏、
    * 更高了），两块同时开就是互相遮盖。用一个字段的话，互斥是「**存不下**第二块」——
    * 而三个布尔量要靠每个入口都记得把另外两个关掉，漏一个就是一个只在某条路径上出现的
-   * 遮挡 bug（而且入口不止顶栏：软键条的 act:、herdr 的 switch、提示卡的「更多」、
+   * 遮挡 bug（而且入口不止顶栏：快捷键条的 act:、herdr 的 switch、提示卡的「更多」、
    * 终端里点一条路径都能开）。
    *
    * 面板一览（panes）在手机上是换 pane 唯一走得通的路，见 PaneSwitcher。
@@ -166,11 +166,16 @@ export default function App() {
    * 多点一下 —— 点路径的人要的就是「打开它」。
    */
   /**
-   * 顶栏「改动」那个角标盯着**哪个仓库**：上次在面板里看的那个（面板改仓库时会告诉我们），
-   * 没有就用焦点 pane 的 cwd。不是「所有仓库一起盯」—— 一台机器上开着几十个 pane 是常态，
-   * 一拍几十次 git 换一个小点不值当（见 hooks/useGitDirty）。
+   * 顶栏「改动」那个角标盯着**哪个仓库**：面板里正看的那个（面板一定这个仓库就告诉我们），
+   * 没有就用焦点 pane 的 cwd（服务端会自己从任意子目录找到仓库根）。不是「所有仓库一起
+   * 盯」—— 一台机器上开着几十个 pane 是常态，一拍几十次 git 换一个小点不值当
+   * （见 hooks/useGitDirty）。
+   *
+   * **不从 localStorage 恢复，换工作空间就作废**（下面那个 effect）：角标要说的是「我现在
+   * 这个项目有没有新改动」，记着上次那个仓库的话，它说的是另一个项目 —— 面板那边同一条
+   * 毛病是用户报出来的（见 DiffPanel）。
    */
-  const [diffRepo, setDiffRepo] = useState<string | null>(() => localStorage.getItem('diffRepo'))
+  const [diffRepo, setDiffRepo] = useState<string | null>(null)
   const [filesAt, setFilesAt] = useState<string | undefined>(undefined)
   const [viewing, setViewing] = useState<FileStat | null>(null)
   // 记住上次看的那一页
@@ -209,7 +214,7 @@ export default function App() {
    * 「这开关点了没反应」那种查不出来的毛病。桌面上没有软键盘，这个开关等于不存在。
    */
   const [kbdFull, setKbdFull] = useState(() => lsBool('kbdFull', true))
-  // 软键条按键样式（有底色 / 无底色）。跟着排布那一套走 —— state 只为了改完立刻重渲染，
+  // 快捷键条按键样式（有底色 / 无底色）。跟着排布那一套走 —— state 只为了改完立刻重渲染，
   // **读的地方一律读镜像**（keyStyle()），见 lib/prefs.ts
   const [keyStyleS, setKeyStyleS] = useState<KeyStyle>(keyStyle)
   const [popupClearS, setPopupClearS] = useState<PopupClear>(popupClear)
@@ -217,15 +222,15 @@ export default function App() {
   const [noticeMs, setNoticeMs] = useState(
     () => Number(localStorage.getItem('noticeCardMs') ?? AUTO_MS_DEFAULT) || 0,
   )
-  // 软键条每行的按键（已按 id 解析好）。几行、哪个键在哪一行都是服务端存的配置，
+  // 快捷键条每行的按键（已按 id 解析好）。几行、哪个键在哪一行都是服务端存的配置，
   // 编辑器存完把整份配置回传过来
-  // 软键条每行的三段：钉左 / 跟着滑 / 钉右（见 lib/api.ts 的 resolveRows）。
+  // 快捷键条每行的三段：钉左 / 跟着滑 / 钉右（见 lib/api.ts 的 resolveRows）。
   // 钉住那两段不跟着横滑 —— 「呼键盘」「Esc」这种滑走了就等于没有
   const [bar, setBar] = useState<RowSegments[]>(
     () => (CACHED?.softkeys ? resolveRows(CACHED.softkeys.lib, CACHED.softkeys.bar, CACHED.softkeys.pin) : []),
   )
   /**
-   * 「我的按键」按 ID 索引。软键条的 `bar` 已经解析成定义了，这一份是给**顶栏**用的 ——
+   * 「我的按键」按 ID 索引。快捷键条的 `bar` 已经解析成定义了，这一份是给**顶栏**用的 ——
    * 顶栏上放的是 `key:<定义ID>`（见 internal/topbar），渲染时才落到定义上。
    *
    * 为什么不在服务端就解析好：定义是全局的、顶栏配置是分套的，服务端那边一解析就等于把
@@ -251,7 +256,7 @@ export default function App() {
    * 这台设备用哪一套排布（profile，见 internal/profiles）。
    *
    * 初值优先用上一次报到记下的那一套（镜像，见 lib/layoutcache.ts），没有才写「默认」——
-   * 不等服务端：软键条 / 顶栏的 GET 服务端自己会按绑定算，这里这份只用来显示名字和往
+   * 不等服务端：快捷键条 / 顶栏的 GET 服务端自己会按绑定算，这里这份只用来显示名字和往
    * prefs 上写。镜像有可能过期（那一套在别的设备上被删了），代价是报到回来之前改开关会
    * 收到一条「没同步到「排布」里」，而那几百毫秒里没人来得及点。
    */
@@ -335,6 +340,14 @@ export default function App() {
     diffRepo || compose.panes.find((p) => p.focused)?.cwd || undefined,
     gate === 'ok' && state?.git !== false && noticeDot,
   )
+  /**
+   * 换了工作空间就把上面那个仓库作废，退回「焦点 pane 的 cwd」。
+   *
+   * 面板关着的时候没人会来更新它 —— 不作废的话你切到另一个项目上，角标还在盯着上一个
+   * 项目的改动（见 diffRepo 的注释）。作废只是退回默认，面板一开又会告诉我们准确的那个。
+   */
+  const focusWs = compose.panes.find((p) => p.focused)?.workspace
+  useEffect(() => { setDiffRepo(null) }, [focusWs])
 
   const cwdRef = useRef('')
   useEffect(() => {
@@ -522,7 +535,7 @@ export default function App() {
    * Esc 的 document 级兜底 —— 不管焦点在哪都能用。
    *
    * 之前只在发件箱的 textarea 里转发，漏了最常见的情况：**焦点落在按钮或 body 上**。
-   * 点过一下界面（顶栏、软键条、面板）焦点就会停在按钮上，此时 Esc 既不进 xterm
+   * 点过一下界面（顶栏、快捷键条、面板）焦点就会停在按钮上，此时 Esc 既不进 xterm
    * 也不进 textarea，谁都不处理，一个字节都发不出去。用户的 PTY 输入日志里只有
    * 焦点上报（CSI I / CSI O）和鼠标上报、没有任何键盘字节，就是这个原因。
    *
@@ -561,14 +574,14 @@ export default function App() {
     return () => removeEventListener('keydown', onKey, true)
   }, [panel, viewing])
 
-  // 布局变化（软键条 / 发件箱开合、顶栏收放）都要重排终端
+  // 布局变化（快捷键条 / 发件箱开合、顶栏收放）都要重排终端
   useEffect(() => { sess.current?.relayout() }, [showCompose, showKeys, peek])
 
   /**
    * 手机上**键盘一弹起来就把顶栏收掉**，只留一条能点开的缝。
    *
    * 那一刻屏幕上只剩 ~430px 高，而顶栏（45px）里的东西那时候一个都用不上 ——
-   * 正在打字的人要的是软键条和发件箱，「连接」是连之前的事。
+   * 正在打字的人要的是快捷键条和发件箱，「连接」是连之前的事。
    *
    * 收起是临时的：手动点开（peek）只管这一次，键盘一收就自动恢复常态，不留状态 ——
    * 否则用户会记不住自己上次是展开还是收起的，下次打字时顶栏在不在全靠碰。
@@ -618,13 +631,13 @@ export default function App() {
   }, [])
 
   /**
-   * 拉这台设备该用的那一套排布（软键条 + 顶栏）。
+   * 拉这台设备该用的那一套排布（快捷键条 + 顶栏）。
    *
    * 不带 `?profile=`：**哪一套由服务端按这台设备的绑定算**，前端这份 profile.id 只是显示用。
    * 换一套之后也走这儿 —— 绑定在服务端已经改了，这一趟拿回来的就是新那一套。
    */
   /**
-   * 一份软键条配置铺到界面上。**读回来和编辑器存完都走这一条** —— 两处各摊一遍字段的话，
+   * 一份快捷键条配置铺到界面上。**读回来和编辑器存完都走这一条** —— 两处各摊一遍字段的话，
    * 加一个字段（rows / pad 都是这么来的）就会漏掉一处，表现是「存完没变，刷新才出来」。
    */
   const applySoftkeys = useCallback((c: SoftkeysConfig) => {
@@ -642,7 +655,7 @@ export default function App() {
   const loadLayout = useCallback(async () => {
     try {
       applySoftkeys(await api.get<SoftkeysResponse>('/softkeys'))
-    } catch { /* 软键条拿不到就先空着，面板里还能改 */ }
+    } catch { /* 快捷键条拿不到就先空着，面板里还能改 */ }
     try {
       const tb = await api.get<TopbarResponse>('/topbar')
       // 认不出的直接跳过（服务端不该给，防一手 —— 新版本存的配置在旧前端上读到过）。
@@ -914,7 +927,7 @@ export default function App() {
    * 键盘是在全屏之后升起来的，不会被全屏那一下的重排顶掉。
    *
    * 只认真正会弹键盘的东西（textarea / input）。**终端那一块不算** —— 手机上点终端多半
-   * 是要看、要滚，不是要打字，点一下就全屏太粗暴；从终端进键盘走的是软键条那个 ⌨ 键，
+   * 是要看、要滚，不是要打字，点一下就全屏太粗暴；从终端进键盘走的是快捷键条那个 ⌨ 键，
    * 那条路单独接（见 onKeyboard）。
    */
   useEffect(() => {
@@ -1029,8 +1042,8 @@ export default function App() {
    * 开「面板一览」。顺手刷一次列表 —— agent 状态和 pane 的增删随时在变，
    * 而这个面板多半是隔了好一会儿才再打开一次。
    *
-   * **开之前先收键盘。** 开它的三条路（顶栏 ▦、软键条 `act:panes`、点 herdr 顶栏那个
-   * switch）都可能是在键盘弹着的时候按的，而且三条都刻意**没让浏览器改焦点**（软键条在
+   * **开之前先收键盘。** 开它的三条路（顶栏 ▦、快捷键条 `act:panes`、点 herdr 顶栏那个
+   * switch）都可能是在键盘弹着的时候按的，而且三条都刻意**没让浏览器改焦点**（快捷键条在
    * mousedown 上 preventDefault，触屏那层把 touchstart 整个吃掉）—— 于是面板浮出来时
    * 发件箱 / 终端那个输入框还聚着，键盘还占着半个屏。那时候点列表里一行，那一下先去把键盘
    * 收掉（焦点一走 `--vvh` 一变，面板跟着重排），于是「第一下不跳、第二下才跳」（真机实拍）。
@@ -1183,7 +1196,7 @@ export default function App() {
   /**
    * 顶栏上的一个**「我的按键」**（items 里的 `key:<定义ID>`，见 internal/topbar）。
    *
-   * 画成软键条那种 mono 方块而不是图标：顶栏上「图标 = 内置功能、mono 方块 = 我自己配的键」
+   * 画成快捷键条那种 mono 方块而不是图标：顶栏上「图标 = 内置功能、mono 方块 = 我自己配的键」
    * 一眼分得开，而这两类点下去的后果差得远（一个开面板，一个往 pane 里发字节）。
    * 高度还是 32px —— `variant="key"` 配默认 size，**别用 `size="key"`**：那一档在手机上
    * 矮一号（h-7），混在一排图标里就歪了。
@@ -1251,11 +1264,11 @@ export default function App() {
   return (
     <div className="flex h-full flex-col">
       {/*
-        传图用的文件框。顶栏不放按钮 —— 入口是软键条里的 act:img（自己配，位置随便放）
+        传图用的文件框。顶栏不放按钮 —— 入口是快捷键条里的 act:img（自己配，位置随便放）
         和全页粘贴。accept=image/* 在手机上会同时给出「相机」和「相册」。
 
         **必须挂在根一级，不能塞进顶栏**：手机上键盘一弹起来顶栏整段就不渲染了，藏在里面
-        的 input 跟着一起卸掉，picker.current 变成 null —— 那时候点软键条上的「传图」
+        的 input 跟着一起卸掉，picker.current 变成 null —— 那时候点快捷键条上的「传图」
         一点反应都没有（踩过）。这个框和顶栏在不在没有任何关系。
       */}
       <input
@@ -1269,7 +1282,7 @@ export default function App() {
       />
 
       {/* 键盘弹起时顶栏收成这一条：8px 高、通屏宽，点一下把顶栏放回来。
-          比「什么都不留」稳 —— 软键条也可能是关着的，那时候没有别的路能把顶栏找回来 */}
+          比「什么都不留」稳 —— 快捷键条也可能是关着的，那时候没有别的路能把顶栏找回来 */}
       {barHidden && (
         <button
           data-testid="header-peek"
@@ -1337,7 +1350,7 @@ export default function App() {
         </div>
 
         {/* 「敲 herdr」那个按钮去掉了：连上就自动敲（HERDR_WEB_ONCONNECT），退出去了要再敲
-            一次的话，软键条预设里有现成的「敲 herdr」键 —— 顶栏这个位置比它值钱。 */}
+            一次的话，快捷键条预设里有现成的「敲 herdr」键 —— 顶栏这个位置比它值钱。 */}
         <div className="flex shrink-0 items-center gap-1.5">
           {/* 连上之后「连接」没用了（真断了会弹遮罩，那上面有自己的连接按钮），
               手机上这 54px 让给别的 */}
@@ -1345,7 +1358,7 @@ export default function App() {
         </div>
 
         {/* 顶栏那排按钮：**放哪几个、什么顺序**是配置（设置 →「顶栏」页里拖，存服务端）。
-            一行不换行、放不下自己横滑 —— 和手机上的软键条一个做法。换行的话顶栏会长出
+            一行不换行、放不下自己横滑 —— 和手机上的快捷键条一个做法。换行的话顶栏会长出
             第二行，白吃掉两行终端；而「拖上去的按钮被藏起来」是最难解释的一种行为，
             所以这儿一个都不藏（原来字号 ± / 明暗在手机竖屏是 CSS 藏掉的，去掉了）。 */}
         <div
@@ -1475,7 +1488,7 @@ export default function App() {
             popupClear={popupClearS}
             onPopupClear={(v) => { setPopupClearS(v); pushPref(profile.id, 'popupClear', String(v), toast) }}
             heals={heals}
-            // 存完把整份配置回传过来：软键条那一条和顶栏上放的「我的按键」是同一份定义
+            // 存完把整份配置回传过来：快捷键条那一条和顶栏上放的「我的按键」是同一份定义
             onSaved={applySoftkeys}
             onTopbar={applyTopbar}
             toast={toast}
@@ -1522,7 +1535,7 @@ export default function App() {
         <Toast msg={toastMsg} />
       </main>
 
-      {/* 底部一块面板：发件箱 + 软键条同一套边框、同一个宽度（见 Dock）。
+      {/* 底部一块面板：发件箱 + 快捷键条同一套边框、同一个宽度（见 Dock）。
           两块都关掉时整块不出现，那点边框和内边距不该白占终端的地方 */}
       {(showCompose || showKeys) && (
         <Dock

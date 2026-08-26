@@ -16,19 +16,23 @@ import { cn } from '@/lib/utils'
  * 改了哪个词、翻页只能靠 pager（触屏上要点方向键）。这三件在终端里一件都解决不了，
  * 所以只能另开一层：折行、按词高亮、按文件分开点（补丁在 internal/gitdiff 那边解析好）。
  *
- * # 「在哪个仓库」不问人，从 pane 的 cwd 猜
+ * # 「在哪个仓库」不问人，看**当前这个工作空间**
  *
- * 和文件浏览的起点列表同一个思路（那份数据前端手上本来就有）：把各个 pane 的 cwd 丢给
+ * 和文件浏览的起点列表同一个思路（那份数据前端手上本来就有）：把 pane 的 cwd 丢给
  * 服务端问一句「哪些是 git 仓库」，按仓库根去重。人心里那个东西是**仓库**不是目录 ——
- * 好几个 pane 开在同一个仓库的不同子目录里是常态。焦点那个 pane 排最前面（十有八九
- * 就是它），上次看的那个也一起丢进去问。
+ * 好几个 pane 开在同一个仓库的不同子目录里是常态。
+ *
+ * 但**只丢当前工作空间那几个 pane**：一个工作空间就是「我现在在做的这个项目」，而
+ * herdr 里同时开着好几个工作空间是常态（实测 48 个 pane / 34 个不同 cwd）。把所有
+ * cwd 都丢进去问的话，选择器里是一长串八竿子打不着的仓库，默认落在哪个上面全看顺序
+ * —— 用户报的就是这个：面板打开看到的是**另一个项目**的 diff。
+ * 所以下拉框现在的语义也跟着变实了：**它出现 = 这个工作空间下真有好几个 git 项目**。
  *
  * # 只读
  *
  * 这一层没有 add / commit / checkout，也不打算有：会改仓库的事在终端里做，那儿有完整的
  * git，还看得见输出。一个从公网点得到的「一键 checkout」按钮，值不了它带来的那些问题。
  */
-const LS_REPO = 'diffRepo'
 const LS_MODE = 'diffMode'
 
 const MODES: { id: DiffMode; label: string; hint: string }[] = [
@@ -58,7 +62,12 @@ export function DiffPanel({
   toast: (m: string) => void
 }) {
   const [repos, setRepos] = useState<GitRepo[] | null>(null)
-  const [root, setRoot] = useState<string | null>(() => localStorage.getItem(LS_REPO))
+  /**
+   * 正在看哪个仓库。**开面板时不从 localStorage 恢复** —— 上次看的那个多半是别的工作
+   * 空间里的项目，恢复出来就是「打开面板看到的不是我正在做的这个」（用户报的），
+   * 而且还白跑一次那个仓库的 `git status`。由 probe 定（默认焦点 pane 那个）。
+   */
+  const [root, setRoot] = useState<string | null>(null)
   const [mode, setMode] = useState<DiffMode>(
     () => (MODES.some((m) => m.id === localStorage.getItem(LS_MODE)) ? localStorage.getItem(LS_MODE) as DiffMode : 'all'),
   )
@@ -75,12 +84,12 @@ export function DiffPanel({
   const [open, setOpen] = useState<string | null>(null)
 
   /**
-   * 候选目录，**按重要性排**：焦点 pane 的 cwd（十有八九就是它）→ 上次看的那个仓库
-   * → 别的 pane。
+   * 候选目录 = **当前工作空间**那几个 pane 的 cwd，焦点 pane 排第一（十有八九就是它）。
    *
-   * 「上次看的」排第二不是随手放的：服务端那边有个 32 个的上限，而一台开着几十个 pane
-   * 的机器上（实测 48 个 pane / 34 个不同 cwd）排在最后就会被切掉 —— 表现是每次开面板
-   * 都跳回别的仓库，而且完全看不出为什么。
+   * 原来还把「上次看的那个仓库」也丢进去问，删了：它当初排第二是为了绕服务端 32 个的
+   * 上限（排最后会被切掉），而夹到一个工作空间之后候选本来就只有几个。留着它的代价正是
+   * 用户报的那个 bug —— 那个仓库永远在候选里，于是「留着人挑过的那个」这条永远命中，
+   * 换到别的项目上去也不换。
    *
    * memo 出来的是**一个字符串**：panes 每刷新一次就是一个新数组，按数组做依赖的话
    * 内容没变也会重探一遍（几十次 fork）。
@@ -88,9 +97,12 @@ export function DiffPanel({
   const dirKey = useMemo(() => {
     const out: string[] = []
     const add = (d?: string | null) => { if (d && !out.includes(d)) out.push(d) }
-    add(panes.find((p) => p.focused)?.cwd)
-    add(localStorage.getItem(LS_REPO))
-    for (const p of panes) add(p.cwd)
+    const cur = panes.find((p) => p.focused)
+    add(cur?.cwd)
+    // 分组认 `workspaceId` 不认 `workspace`（那是标签，两个工作空间同名是常态）。
+    // 没有焦点 pane（herdr 没报）时退回「所有 pane」：那会儿夹不出工作空间，
+    // 而一个候选都不给比给多了糟
+    for (const p of panes) if (!cur || p.workspaceId === cur.workspaceId) add(p.cwd)
     return out.join('\n')
   }, [panes])
 
@@ -100,6 +112,8 @@ export function DiffPanel({
       const r = await gitApi.repos(extra ? [extra, ...dirs] : dirs)
       setRepos(r.repos)
       setRoot((cur) => {
+        // 人自己在下拉里挑过的那个，只要还在候选里就留着（换工作空间时它就不在了，
+        // 于是自己回到焦点 pane 那个仓库）；否则落到第一个 —— 候选是按重要性排的
         const next = cur && r.repos.some((x) => x.root === cur) ? cur : (r.repos[0]?.root ?? null)
         if (next) onRepo?.(next)
         return next
@@ -130,7 +144,7 @@ export function DiffPanel({
 
   useEffect(() => { if (root) void load(root, mode) }, [root, mode, load])
 
-  const pick = (r: string) => { setRoot(r); localStorage.setItem(LS_REPO, r); onRepo?.(r) }
+  const pick = (r: string) => { setRoot(r); onRepo?.(r) }
   const pickMode = (m: DiffMode) => { setMode(m); localStorage.setItem(LS_MODE, m) }
 
   const repo = st?.repo
@@ -146,8 +160,8 @@ export function DiffPanel({
   return (
     <>
       <Panel title="改动" onClose={onClose} className="max-md:bottom-2 md:max-h-[calc(100%-34px)]">
-        {/* 仓库这一行。一个仓库时不画下拉（一个选项的选择器只是噪音），
-            但路径照旧显示 —— 「我现在看的是哪个项目」不能靠猜 */}
+        {/* 仓库这一行。下拉只在**这个工作空间下有好几个 git 项目**时出现
+            （一个选项的选择器只是噪音），但路径照旧显示 —— 「我现在看的是哪个项目」不能靠猜 */}
         <div className="mb-1.5 flex items-center gap-1.5">
           {(repos?.length ?? 0) > 1 ? (
             <select
@@ -211,7 +225,7 @@ export function DiffPanel({
         {!err && repos?.length === 0 && (
           <div className="px-1 py-2">
             <p className="mb-2 text-xs/relaxed text-muted">
-              这些 pane 的当前目录都不在 git 仓库里。下面粘一个仓库路径试试。
+              当前工作空间这几个 pane 的目录都不在 git 仓库里。下面粘一个仓库路径试试。
             </p>
             <div className="flex gap-1.5">
               <Input

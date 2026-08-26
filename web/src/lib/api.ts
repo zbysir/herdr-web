@@ -40,7 +40,7 @@ export const SESSION = (() => {
  *
  * 为什么不用 auth 那个设备 ID：本机直连（loopback / 旧 token）压根没有设备 ID，而那正是
  * 桌面上最常见的情形。为什么不放 cookie：它不是凭据，服务端也不拿它做任何权限判断 ——
- * 拿到它最多只能说「我是那台平板」，然后读到那台平板的软键条排布。
+ * 拿到它最多只能说「我是那台平板」，然后读到那台平板的快捷键条排布。
  *
  * 清掉 localStorage 就丢了绑定：那时候服务端按 deviceKind() 重新猜一套，人在设置里再点
  * 一下就好（比把它塞进凭据、再为它做一套过期 / 撤销强得多）。
@@ -92,7 +92,7 @@ export const deviceKind = (): DeviceKind => {
 // 悄悄读了默认 session」，而漏没漏只能一个调用点一个调用点去看。用不上的口（softkeys、
 // auth）服务端直接忽略这个参数。
 //
-// install 同理挂在每个请求上：软键条 / 顶栏的 GET 靠它算出「这台设备用哪一套」，不带
+// install 同理挂在每个请求上：快捷键条 / 顶栏的 GET 靠它算出「这台设备用哪一套」，不带
 // 就一律给默认那一套 —— 漏了的表现是「平板上打开是手机那套排布」。
 function url(path: string) {
   const extra = new URLSearchParams()
@@ -219,7 +219,14 @@ export interface Pane {
   id: string
   agent: string
   status: string
+  /**
+   * workspace / tab 是**给人看的标签**（herdr 那两个 list 给的，拿不到就是 id）。
+   * **别拿 workspace 分组**：两个工作空间同名是常态（标签多半就是目录名）。
+   * 「这个 pane 是不是当前这个工作空间的」认 workspaceId ——
+   * 改动面板挑仓库、文件面板排起点都靠它（见 components/DiffPanel.tsx）。
+   */
   workspace: string
+  workspaceId: string
   tab: string
   title: string
   cwd: string
@@ -492,7 +499,7 @@ export const gitApi = {
 }
 
 export interface SoftKey {
-  id?: string         // 稳定标识，软键条按这个引用（服务端存盘时补齐）
+  id?: string         // 稳定标识，快捷键条按这个引用（服务端存盘时补齐）
   label: string
   /**
    * 占几格宽（1..MAX_SPAN，见 lib/keys.ts）。一格 = `--sk-w`。
@@ -595,7 +602,7 @@ export function topbarKeyRef(item: string): string | null {
 }
 
 /**
- * 一套排布（profile）。**装的是「这类设备上怎么排」**：软键条几行 / 哪些键、顶栏放哪几个、
+ * 一套排布（profile）。**装的是「这类设备上怎么排」**：快捷键条几行 / 哪些键、顶栏放哪几个、
  * 外加几个小开关（见 lib/prefs.ts）。「我的按键」那些定义是全局的，不在这里面 ——
  * 理由见 internal/profiles 的包注释。
  */
@@ -616,9 +623,9 @@ export interface ProfilesResponse {
 }
 
 /**
- * 「我的按键」按 ID 索引。软键条的 bar、固定块的格子、顶栏的 `key:` 引用都靠它落到定义上。
+ * 「我的按键」按 ID 索引。快捷键条的 bar、固定块的格子、顶栏的 `key:` 引用都靠它落到定义上。
  *
- * 顺手把**弹出组的格子解析成成员**（`members`）：组里放的是引用，而渲染的地方（软键条 /
+ * 顺手把**弹出组的格子解析成成员**（`members`）：组里放的是引用，而渲染的地方（快捷键条 /
  * 顶栏）拿到的是一个个已经解析好的键、手上没有整份 lib。组里不能再放组，所以第二遍就够。
  */
 export function libMap(lib: SoftKey[]): Map<string, SoftKey> {

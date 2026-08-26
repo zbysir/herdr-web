@@ -33,16 +33,21 @@ type Outbox struct {
 // Changed（上次状态变化的 unix 毫秒）只有 herdr-web 在盯的这段时间里才有 —— 所以
 // 排序以 Seq 兜底，Changed 只管显示「3 分钟前」。
 type Target struct {
-	ID        string `json:"id"`
-	Agent     string `json:"agent"`
-	Status    string `json:"status"`
-	Workspace string `json:"workspace"`
-	Tab       string `json:"tab"`
-	Title     string `json:"title"`
-	CWD       string `json:"cwd"`
-	Focused   bool   `json:"focused"`
-	Seq       uint64 `json:"seq,omitempty"`
-	Changed   int64  `json:"changed,omitempty"`
+	ID     string `json:"id"`
+	Agent  string `json:"agent"`
+	Status string `json:"status"`
+	// Workspace / Tab 是**给人看的标签**（herdr 的 workspace.list / tab.list，拿不到就退回 id）。
+	// **别拿它们分组** —— 两个工作空间同名是常态（标签多半就是目录名），而前端有几处要问
+	// 「这个 pane 是不是当前这个工作空间的」（改动面板的候选仓库、文件面板的起点排序）。
+	// 那件事认下面这个 id。
+	Workspace   string `json:"workspace"`
+	WorkspaceID string `json:"workspaceId"`
+	Tab         string `json:"tab"`
+	Title       string `json:"title"`
+	CWD         string `json:"cwd"`
+	Focused     bool   `json:"focused"`
+	Seq         uint64 `json:"seq,omitempty"`
+	Changed     int64  `json:"changed,omitempty"`
 }
 
 // Info 是一个 pane 的可显示身份（workspace / tab 的好看标签由前端用缓存补）。
@@ -180,9 +185,10 @@ func (o *Outbox) ListTargets() ([]Target, error) {
 	for _, p := range panes {
 		t := Target{
 			ID: p.PaneID, Agent: p.Agent, Status: orUnknown(p.AgentStatus),
-			Workspace: orElse(wsLabel[p.WorkspaceID], p.WorkspaceID),
-			Tab:       orElse(tabLabel[p.TabID], p.TabID),
-			Title:     p.Title, CWD: p.CWD, Focused: p.Focused,
+			Workspace:   orElse(wsLabel[p.WorkspaceID], p.WorkspaceID),
+			WorkspaceID: p.WorkspaceID,
+			Tab:         orElse(tabLabel[p.TabID], p.TabID),
+			Title:       p.Title, CWD: p.CWD, Focused: p.Focused,
 			Seq: seq[p.PaneID],
 		}
 		if o.Seen != nil {
@@ -206,7 +212,7 @@ type GotoResult struct {
 
 // Goto 跳到某个 pane：切焦点（跨 workspace / tab 也一次到位）并按 zoom 开关放大。
 //
-// 这是给手机用的。手机上未放大的多 pane 布局根本读不了，而软键条只能发按键、按键只能
+// 这是给手机用的。手机上未放大的多 pane 布局根本读不了，而快捷键条只能发按键、按键只能
 // 表达相对导航（下一个 tab、往右一格），要走到另一个 workspace 里的某个 pane 得盲敲
 // 一串 —— 中间每一步的屏幕正好都是那个读不了的状态。socket 这层按 pane_id 寻址，所以
 // 「跳过去 + 全屏」是一次调用，界面上就是点一下。

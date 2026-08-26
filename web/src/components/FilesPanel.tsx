@@ -111,19 +111,30 @@ export function FilesPanel({
    * 起点列表。**pane 的 cwd 排在最前面** —— 十有八九要找的东西就在某个 agent
    * 正在跑的那个目录里，而那份数据前端手上已经有了（面板一览用的同一份），
    * 不用为它再打一次 herdr socket。
+   *
+   * pane 那一段自己再分三轮：**焦点 pane → 同一个工作空间里的别的 pane → 别的工作空间**，
+   * 前两轮带一个「当前」标。理由是 herdr 里同时开着好几个工作空间、几十个 pane 是常态
+   * （实测 48 个 pane / 34 个不同 cwd），不排一下的话「我正在做的这个项目」那一条就淹在
+   * 一长串里，而第一条又恰好是最好点的那条 —— 「第 1 个一定是当前这个工作空间」是用户
+   * 点名要的（改动面板那边是同一条道理，见 DiffPanel）。
+   *
+   * 去重按路径，所以**先加的那一轮赢** —— 同一个目录在两个工作空间里都开着时，
+   * 「当前」这个标该留在当前那一条上。
    */
   const starts = useMemo(() => {
-    const out: (FileRoot & { hint?: string })[] = []
+    const out: (FileRoot & { hint?: string; cur?: boolean })[] = []
     const seen = new Set<string>()
-    const add = (path: string, label: string, hint?: string) => {
+    const add = (path: string, label: string, hint?: string, cur?: boolean) => {
       if (!path || seen.has(path)) return
       seen.add(path)
-      out.push({ path, label, hint })
+      out.push({ path, label, hint, cur })
     }
-    for (const p of panes) {
-      if (!p.cwd) continue
-      add(p.cwd, p.agent ? `${p.agent} · ${p.workspace}/${p.tab}` : `${p.workspace}/${p.tab}`, 'pane')
-    }
+    const name = (p: Pane) => (p.agent ? `${p.agent} · ${p.workspace}/${p.tab}` : `${p.workspace}/${p.tab}`)
+    const focus = panes.find((p) => p.focused)
+    if (focus) add(focus.cwd, name(focus), 'pane', true)
+    // 「同一个工作空间」认 `workspaceId` 不认 `workspace`（后者是标签，同名是常态）
+    for (const p of panes) if (focus && p.workspaceId === focus.workspaceId) add(p.cwd, name(p), 'pane', true)
+    for (const p of panes) add(p.cwd, name(p), 'pane')
     for (const r of roots?.roots ?? []) add(r.path, r.label)
     for (const d of recentDirs()) add(d, '最近去过')
     return out
@@ -177,11 +188,14 @@ export function FilesPanel({
 
       {dir === null ? (
         <>
-          <p className="mb-1.5 text-[11px] text-muted">
-            从哪儿开始看。{roots?.jailed
-              ? '这台机器配了 HERDR_WEB_FILE_ROOTS，只有这几棵树看得到。'
-              : '进去之后一路 .. 能走到 /。'}
-          </p>
+          {/* 只在**真有边界**时说一句。原来这儿还有一句「从哪儿开始看。进去之后一路 ..
+              能走到 /。」，删了：列表自己就长得像起点列表，而那半句是句永远为真的废话，
+              占掉的是手机上最贵的那一屏顶部 */}
+          {roots?.jailed && (
+            <p className="mb-1.5 text-[11px] text-muted">
+              这台机器配了 HERDR_WEB_FILE_ROOTS，只有这几棵树看得到。
+            </p>
+          )}
           <ul className="flex flex-col gap-0.5">
             {starts.map((s) => (
               <li key={s.path}>
@@ -194,6 +208,13 @@ export function FilesPanel({
                     <span className="block truncate font-mono text-xs text-fg">{short(s.path)}</span>
                     <span className="block truncate text-[11px] text-faint">{s.label}</span>
                   </span>
+                  {/* 「当前」= 这一条是当前工作空间的。淡绿底 + 绿边 + 绿字那一套
+                      （面板一览里焦点那行同款），不是整块涂满 —— 见配色那节 */}
+                  {s.cur && (
+                    <span className="shrink-0 rounded border border-brand/40 bg-brand/12 px-1 py-px text-[10px] text-brand">
+                      当前
+                    </span>
+                  )}
                 </button>
               </li>
             ))}
