@@ -83,7 +83,7 @@ var Prefs = []string{
 	"kitty", "meta", "copyOnSelect", "sync2026", "switchPanel",
 	"kbdFull",
 	"noticeDot", "noticeOS", "noticeOSFg", "noticeCardMs",
-	"keyStyle", "popupClear",
+	"keyStyle", "popupClear", "holdRate",
 	"diffWrap",
 }
 

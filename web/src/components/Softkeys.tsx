@@ -6,6 +6,7 @@ import type { RowSegments, SoftKey } from '@/lib/api'
 import type { KeyAct } from '@/capabilities'
 import { usePhone } from '@/hooks/usePhone'
 import { useArm } from '@/hooks/useArm'
+import { canHold, useHold } from '@/hooks/useHold'
 import { keyStyle } from '@/lib/prefs'
 import { keyFace } from '@/keyicons'
 import { cn } from '@/lib/utils'
@@ -66,6 +67,9 @@ export function Softkeys({
   // **手指点的那个**。bar 变了（编辑器里存了一版）就放下，见 useArm。
   const { armed, tap } = useArm(rows)
 
+  // 按住不放就连发（方向键 / 翻页）。顶栏那边放「我的按键」时是同一份，见 useHold
+  const hold = useHold()
+
   /**
    * 开着的那个**弹出组**（坐标 + 它那个键的 DOM，浮窗贴着它摆）。
    * 一次只开一个：两片浮窗同时飘着分不清哪个是哪个的。
@@ -104,6 +108,9 @@ export function Softkeys({
     return (
       <Button
         key={at}
+        // 按住不放就连发（只有方向键那几个，见 useHold 的 canHold）。**一下点照旧走
+        // onClick** —— 条是横滑的，按下就发的话每划一下都白发一个方向键
+        {...hold.bind(canHold(k) ? () => onSend(k.send!) : null)}
         data-testid={up ? 'softkey-armed' : undefined}
         variant={kv}
         size="key"
@@ -125,6 +132,7 @@ export function Softkeys({
         // 这一个不能顺手 focus 终端，否则没法收起键盘
         onMouseDown={(e) => e.preventDefault()}
         onClick={(e) => {
+          if (hold.swallow()) return        // 刚按住连发过，这一下是松手补的 click
           if (!tap(at, k.confirm)) return   // 这一下只是举起来
           // 弹出组：点一下开 / 再点一下关。**浮窗不占条上的地方**（见 KeyGroupPopup）
           if (isGroup) {

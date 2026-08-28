@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { X } from 'lucide-react'
 import { AArrowDown, AArrowUp, CircleHalf } from '@/icons'
 import type { ProfilesResponse, SoftkeysConfig, State } from '@/lib/api'
-import { POPUP_CLEARS, type KeyStyle, type PopupClear } from '@/lib/prefs'
+import { HOLD_RATES, POPUP_CLEARS, type HoldRate, type KeyStyle, type PopupClear } from '@/lib/prefs'
 import { enableNotify, notifyState, testNotify, type NotifyState } from '@/lib/notify'
 import { Panel } from './ui/panel'
 import { Button } from './ui/button'
@@ -52,7 +52,7 @@ const TABS: { id: SettingsTab; label: string }[] = [
 
 export function SettingsPanel({
   tab, onTab, onClose, opts, setOpt, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs,
-  kbdFull, onKbdFull, keyStyle, onKeyStyle, popupClear, onPopupClear,
+  kbdFull, onKbdFull, keyStyle, onKeyStyle, popupClear, onPopupClear, holdRate, onHoldRate,
   heals, onSaved, onTopbar, toast, state,
   fontSize, onFont, scheme, onScheme, profile, onProfiles,
 }: {
@@ -82,6 +82,9 @@ export function SettingsPanel({
   /** 弹出组浮窗的底色透明度（%，0 = 不透明）。同上 */
   popupClear: PopupClear
   onPopupClear: (v: PopupClear) => void
+  /** 方向键按住不放的连发速度（次/秒）。同上 */
+  holdRate: HoldRate
+  onHoldRate: (v: HoldRate) => void
   heals: number
   onSaved: (c: SoftkeysConfig) => void
   /** 顶栏存好了：把新的那一串 id 交回去，顶栏立刻跟着变（不用刷新页面） */
@@ -153,6 +156,7 @@ export function SettingsPanel({
           kbdFull={kbdFull} onKbdFull={onKbdFull}
           keyStyle={keyStyle} onKeyStyle={onKeyStyle}
           popupClear={popupClear} onPopupClear={onPopupClear}
+          holdRate={holdRate} onHoldRate={onHoldRate}
           osFg={osFg} onOSFg={onOSFg} cardMs={cardMs} onCardMs={onCardMs}
           heals={heals} state={state} toast={toast}
           fontSize={fontSize} onFont={onFont} scheme={scheme} onScheme={onScheme}
@@ -167,7 +171,7 @@ export function SettingsPanel({
 
 function TermSection({
   opts, setOpt, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs, kbdFull, onKbdFull,
-  keyStyle, onKeyStyle, popupClear, onPopupClear,
+  keyStyle, onKeyStyle, popupClear, onPopupClear, holdRate, onHoldRate,
   heals, state, fontSize, onFont, scheme, onScheme, toast,
 }: {
   opts: TermOpts
@@ -186,6 +190,9 @@ function TermSection({
   onKeyStyle: (v: KeyStyle) => void
   popupClear: PopupClear
   onPopupClear: (v: PopupClear) => void
+  /** 方向键按住不放的连发速度（次/秒） */
+  holdRate: HoldRate
+  onHoldRate: (v: HoldRate) => void
   toast: (m: string) => void
   heals: number
   state?: State | null
@@ -299,6 +306,27 @@ function TermSection({
           ))}
         </div>
         <span className="text-xs text-faint">方向键那种浮窗，整片透（键也一起）</span>
+      </div>
+
+      {/* 方向键按住不放连发多快。**存的是次/秒**（界面上写的也是这个），间隔那边是 1000 除它。
+          出厂 16 是物理键盘那一档，但触屏上按下到抬起本来就比按键盘长，常常一按就冲过头
+          （想在选择列表里下移两项，结果走到底）—— 慢的那几档就是拿来「走得动、但看得住」的。 */}
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-[13px]">
+        方向键长按
+        <div className="flex overflow-hidden rounded-md border border-line">
+          {HOLD_RATES.map((v) => (
+            <Button
+              key={v}
+              size="tiny" on={holdRate === v}
+              title={`按住不放每秒发 ${v} 下${v === 16 ? '（默认，最快 —— 物理键盘那一档）' : v === 1 ? '（最慢，一秒一格）' : ''}`}
+              className="rounded-none border-0 border-r border-line last:border-r-0"
+              onClick={() => onHoldRate(v)}
+            >
+              {v}
+            </Button>
+          ))}
+        </div>
+        <span className="text-xs text-faint">次/秒（左快右慢）。按住约 0.4 秒开始连发，只有 ↑↓←→ 和 PgUp/PgDn 有</span>
       </div>
 
       {/* 「点 switch 开面板一览」和上面那串终端行为不是一类：它改的是「点 herdr 那个按钮会

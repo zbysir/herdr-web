@@ -29,7 +29,7 @@ export const PREF_KEYS = [
   'kitty', 'meta', 'copyOnSelect', 'sync2026', 'switchPanel',
   'kbdFull',
   'noticeDot', 'noticeOS', 'noticeOSFg', 'noticeCardMs',
-  'keyStyle', 'popupClear',
+  'keyStyle', 'popupClear', 'holdRate',
   'diffWrap',
 ] as const
 export type PrefKey = (typeof PREF_KEYS)[number]
@@ -93,6 +93,32 @@ export type PopupClear = (typeof POPUP_CLEARS)[number]
 export const popupClear = (): PopupClear => {
   const n = Number(localStorage.getItem('popupClear'))
   return (POPUP_CLEARS as readonly number[]).includes(n) ? (n as PopupClear) : 60
+}
+
+/**
+ * 方向键**按住不放**连发的速度（次/秒）。见 hooks/useHold。
+ *
+ * 出厂 16 ≈ 物理键盘那一档，但这一档在触屏上不是人人都要：手指按下去到抬起来那点时间
+ * 本来就比按键盘长，16 下/秒 常常一按就冲过头（在 agent 的选择列表里想下移两项，结果
+ * 走到底）。慢的那几档就是拿来「按住走得动、但看得住」的。
+ *
+ * 存的是**次/秒**（界面上写的也是这个），间隔那边是 `1000 / 它` —— 别把两者存反了，
+ * 存毫秒的话「16」在界面上就成了最慢的一档。
+ *
+ * 和 popupClear 一样只给几档，不给滑块：这是「顺手不顺手」的偏好，不是要精调的参数，
+ * 而滑块在手机上拖不准（还得给它一个数值显示）。
+ */
+export const HOLD_RATES = [16, 8, 4, 2, 1] as const
+export type HoldRate = (typeof HOLD_RATES)[number]
+
+/**
+ * 这台设备上长按连发多快。**同步读镜像**（见上面那段）—— 它是在 pointerdown 里现读的
+ * （见 useHold），这样在设置里改完，下一次按住就是新速度，中间不用把这个值一路传进
+ * 快捷键条和顶栏。认不出来的值退回 16。
+ */
+export const holdRate = (): HoldRate => {
+  const n = Number(localStorage.getItem('holdRate'))
+  return (HOLD_RATES as readonly number[]).includes(n) ? (n as HoldRate) : 16
 }
 
 /**

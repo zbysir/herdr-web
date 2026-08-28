@@ -149,4 +149,7 @@ body {
 /* 触屏上干掉长按弹出的选择 / 查找气泡，它会顺带把键盘也顶出来 */
 @media (pointer: coarse) {
   .term-host { -webkit-touch-callout: none; }
+  /* 按钮同理，而且方向键**按住不放会连发**（见 hooks/useHold）——长按正是那个手势，
+     气泡一弹出来手指底下的键就等于按不动了 */
+  button { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
 }

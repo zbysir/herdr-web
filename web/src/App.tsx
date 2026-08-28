@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Maximize, Minimize } from './icons'
 import { api, deviceKind, filesApi, libMap, resolveRows, SESSION, topbarKeyRef, UNAUTHED, type ClipResult, type FileStat, type Notice, type ProfilesResponse, type RowSegments, type SoftKey, type SoftkeysConfig, type SoftkeysResponse, type State, type TopbarResponse, type UnauthedDetail, type WhoAmI } from '@/lib/api'
-import { applyPrefs, keyStyle, popupClear, pushPref, type KeyStyle, type PopupClear } from '@/lib/prefs'
+import { applyPrefs, holdRate, keyStyle, popupClear, pushPref, type HoldRate, type KeyStyle, type PopupClear } from '@/lib/prefs'
 import { cacheLayout, readLayoutCache } from '@/lib/layoutcache'
 import { readClipboard, writeClipboard } from '@/lib/clipboard'
 import { Session } from '@/term/session'
@@ -15,6 +15,7 @@ import { away, onNotifyClick, showNotify } from '@/lib/notify'
 import { usePhone } from '@/hooks/usePhone'
 import { useKeyboardUp } from '@/hooks/useKeyboardUp'
 import { useArm } from '@/hooks/useArm'
+import { canHold, useHold } from '@/hooks/useHold'
 import { keyFace } from '@/keyicons'
 import { Button } from '@/components/ui/button'
 import { Toast } from '@/components/ui/toast'
@@ -222,6 +223,9 @@ export default function App() {
   // **读的地方一律读镜像**（keyStyle()），见 lib/prefs.ts
   const [keyStyleS, setKeyStyleS] = useState<KeyStyle>(keyStyle)
   const [popupClearS, setPopupClearS] = useState<PopupClear>(popupClear)
+  // 长按连发多快（次/秒）。这个 state **只为了设置面板上那排按钮亮哪一个** —— 真正用它的
+  // 地方是在 pointerdown 里现读镜像的（见 hooks/useHold），不经过 React
+  const [holdRateS, setHoldRateS] = useState<HoldRate>(holdRate)
   /** 「跑完了」那种卡片挂多久（ms）；0 = 一直挂着。「等你回答」的永远挂着，不受这个管 */
   const [noticeMs, setNoticeMs] = useState(
     () => Number(localStorage.getItem('noticeCardMs') ?? AUTO_MS_DEFAULT) || 0,
@@ -689,6 +693,7 @@ export default function App() {
     setKbdFull(lsBool('kbdFull', false))
     setKeyStyleS(keyStyle())
     setPopupClearS(popupClear())
+    setHoldRateS(holdRate())
     setNoticeDot(lsBool('noticeDot', true))
     setNoticeOS(lsBool('noticeOS', false))
     setNoticeOSFg(lsBool('noticeOSFg', false))
@@ -1111,6 +1116,8 @@ export default function App() {
   // 顶栏上放的「我的按键」里也可能有打了 confirm 的（关 pane 那种）。坐标用 item 本身
   // （顶栏上一个按钮只有一个，服务端拒重复），keyLib 换了就放下。见 hooks/useArm
   const { armed, tap } = useArm(keyLib)
+  // 顶栏上的方向键也要能按住连发（同一个定义，两处一种手感）。见 hooks/useHold
+  const hold = useHold()
   /**
    * 顶栏上开着的那个**弹出组**（那一项 + 它的 DOM，浮窗贴着它摆）。
    * 顶栏在屏幕上半，所以浮窗朝下弹（见 KeyGroupPopup）—— 一个图标格子点开方向键，
@@ -1218,6 +1225,8 @@ export default function App() {
     return (
       <Button
         variant={keyStyle() === 'plain' ? 'keyPlain' : 'key'}
+        // 按住不放就连发（方向键那几个）。**一下点照旧走 onClick**，理由同快捷键条
+        {...hold.bind(canHold(k) ? () => sess.current?.sendKey(k.send!) : null)}
         on={isGroup ? openGroup?.item === item : (k.sticky ? sticky[k.sticky] : !!ta?.on)}
         title={up ? '再点一次才真的发出去'
           : isGroup ? `${k.label}：点开一小片键（浮在下面，不占顶栏的地方）`
@@ -1227,6 +1236,7 @@ export default function App() {
           up && 'border-bad bg-bad text-white hover:border-bad hover:bg-bad')}
         onMouseDown={(e) => e.preventDefault()}
         onClick={(e) => {
+          if (hold.swallow()) return          // 刚按住连发过，这一下是松手补的 click
           if (!tap(item, k.confirm)) return   // 这一下只是举起来
           if (isGroup) {
             const el = e.currentTarget as HTMLElement
@@ -1491,6 +1501,8 @@ export default function App() {
             onKeyStyle={(v) => { setKeyStyleS(v); pushPref(profile.id, 'keyStyle', v, toast) }}
             popupClear={popupClearS}
             onPopupClear={(v) => { setPopupClearS(v); pushPref(profile.id, 'popupClear', String(v), toast) }}
+            holdRate={holdRateS}
+            onHoldRate={(v) => { setHoldRateS(v); pushPref(profile.id, 'holdRate', String(v), toast) }}
             heals={heals}
             // 存完把整份配置回传过来：快捷键条那一条和顶栏上放的「我的按键」是同一份定义
             onSaved={applySoftkeys}
