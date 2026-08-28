@@ -320,8 +320,10 @@ export default function App() {
       if (!away() && !lsBool('noticeOSFg', false)) return
       void showNotify({
         title: `${n.status === 'blocked' ? '等你回答' : '跑完了'} · ${n.title || n.pane}`,
-        // 通知里放不下长文，系统自己也会截；这儿先收一刀，别把整段塞给它
-        body: n.text.slice(0, 200) || `${n.agent || 'agent'} · ${n.pane}`,
+        // **不贴读屏抽出来的那段话**，和右上角那张卡同一条理由（见 components/Notices.tsx
+        // 文件头）：抽出来的常常不准，而通知里的地方比卡上还小、截得更狠 —— 一段看着像
+        // 内容其实是错的摘要，比只说「那边有事了」糟。正文只报是谁
+        body: `${n.agent || 'agent'} · ${n.pane}`,
         tag: n.term, // 同一个 agent 的新提示替换旧那条，别在通知中心堆成一摞
         pane: n.pane,
       })

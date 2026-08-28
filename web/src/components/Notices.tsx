@@ -12,8 +12,23 @@ import { cn } from '@/lib/utils'
  * 全屏那一个），而正在跑的 agent 常常有十几个。以前要发现「那个在等我」只能自己去开
  * 面板一览翻 —— 于是 agent 停在一个 y/n 上等半小时是常事。
  *
- * 卡片上带**那段话本身**（服务端读屏抽的，见 internal/agentwatch/extract.go），不是
- * 光一句「有变化」：光说有变化的话，你还是得跳过去看一眼才知道要不要理它，那就等于没提示。
+ * **卡上不贴那段话**（服务端照旧抽，见下）——它只回答「谁、什么事」：某个 agent 在等你 /
+ * 跑完了，点一下过去看。
+ *
+ * 这一条改过一次，理由是用下来的三点（用户报的），三点是叠在一起的：
+ *
+ *   - **读屏抽出来的话经常不准**：那是从 TUI 画面上扒的（`internal/agentwatch/extract.go`），
+ *     选择框、进度条、被折断的行都可能混进来，而一段**看着像内容、其实是错的**摘要比没有
+ *     摘要糟 —— 你会照着它做判断；
+ *   - **卡上那点地方本来就放不全**（右上角一张卡、最多五行，长问题一律截断）；
+ *   - **反正每次都要点进去看**。既然如此，那五行的代价就是白付的：它压在终端右上角，
+ *     盖住的正是 agent 刚写的那几行。
+ *
+ * 所以卡片退回它真正不可替代的那件事：**你不知道另外十几个 pane 里发生了什么**，
+ * 而这一张告诉你「那边有事了」。内容去它自己那儿读。
+ *
+ * （`Notice.text` 服务端照旧发、也照旧要抽 —— 去重靠它认「投了又按 Esc」那一档，
+ * 见 internal/agentwatch/notice.go 的 lastText。别因为界面不画就把那一层拆了。）
  *
  * 点一下卡片 = 跳到那个 pane（顺带全屏，和面板一览点一行一样）。
  *
@@ -139,13 +154,8 @@ function Card({
           <span className="ml-auto shrink-0 font-mono text-[10px] text-faint">{ago(n.at)}</span>
         </span>
 
-        {/* 抽不到话时**不占位**：与其放一行「（没有内容）」，不如就只有上面那一行状态 —— 
-            那一行本身已经把最要紧的事说完了 */}
-        {n.text && (
-          <p className="mt-1.5 line-clamp-5 font-mono text-[11px]/snug break-words whitespace-pre-wrap text-fg">
-            {n.text}
-          </p>
-        )}
+        {/* 这儿原来贴那段读屏抽出来的话，去掉了（理由见文件头：常常不准、放不全、反正都要
+            点进去）。**服务端那一层别跟着拆** —— 去重要用它 */}
         <span className="mt-1 block truncate font-mono text-[10px] text-faint">{n.pane} · 点击跳转</span>
       </button>
 
