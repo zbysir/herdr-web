@@ -183,6 +183,60 @@ const split2 = mk([
 check('分栏里的 URL：首行 tap', linkAtCell(split2, 45, 1)?.text, SITE2)
 check('分栏里的 URL：续行 tap', linkAtCell(split2, 12, 2)?.text, SITE2)
 
+/* 12. **切成三段的 `file:///` 路径**（真机抓的那一屏：codex 打出自己生成的图，43 列的
+   手机 pane，见用户报的「这些地址点不开」那张截图）。三条以前没有用例盯着：
+   ① 折三行（原来所有用例都只折两行 —— 而 `logical` 是一路往下拼的，断在哪一段上
+   完全看不出来）；② `file:///` 前缀（点开要的是剥掉 scheme 之后那个真路径）；
+   ③ **首行**也要点得中 —— 老用例一律 tap 在续行上，而人眼看到路径开头就在第一行，
+   手指自然点那儿。 */
+const CODEX = '/Users/bysir/.codex/generated_images/01a041b8-273a-7361-ae5b-a329fdf4886d/exec-e43ae3c9-3575-4096-a5d5-a27873a291aa.png'
+const codex = mk([
+  '  file:///Users/bysir/.codex/generated_imag',
+  'es/01a041b8-273a-7361-ae5b-a329fdf4886d/exe',
+  'c-e43ae3c9-3575-4096-a5d5-a27873a291aa.png',
+], 43)
+check('三行的 file:// 路径：三行都给同一条链接',
+  [links(codex, 0), links(codex, 1), links(codex, 2)], [[CODEX], [CODEX], [CODEX]])
+check('三行的 file:// 路径：首行 tap', linkAtCell(codex, 10, 1)?.text, CODEX)
+check('三行的 file:// 路径：中间那行 tap', linkAtCell(codex, 10, 2)?.text, CODEX)
+check('三行的 file:// 路径：末行 tap', linkAtCell(codex, 10, 3)?.text, CODEX)
+
+/* 13. 同一屏上那两条**缩进续行**的路径（codex 列出它写了哪几个文件）：续行缩 5 格，
+   而缩进那几格要跳掉（`tuiWrap` 的 `next`），不然拼出来的路径中间多一截空格。 */
+const LIST = '/Users/bysir/dev/bysir/game/recursion-game/art-assets/storybook-experiments/detective-man.png'
+const list = mk([
+  '• 1. /Users/bysir/dev/bysir/game/recursion-',
+  '     game/art-assets/storybook-experiments/',
+  '     detective-man.png',
+], 43)
+check('缩进续行的路径：首行 tap', linkAtCell(list, 10, 1)?.text, LIST)
+check('缩进续行的路径：末行 tap', linkAtCell(list, 10, 3)?.text, LIST)
+
+/* 14. **用户报的那一条（截图 20260830-1013 / 电脑上）：codex 的列表项。**
+   `• /Users/…/recursion-game/art-` 这一行离**本带右边界差四格** —— codex（ratatui）自己
+   那层留了滚动条的一列，列表块又有右留白。原来 `EDGE_SLACK` 只容两格，于是折行没认出来，
+   而续行 `assets/chapter-7/pianist-nochair.png` **自己就是一条合法的相对路径**（带扩展名），
+   按焦点 pane 的 cwd 一解就成了 `…/recursion-game/assets/…` —— 屏幕上那条下划线看着完全
+   正常，点下去报「找不到」。所以这条用例两头都要钉：拼出来的必须是全的，**而且续行不许
+   单独变成那条相对路径**。 */
+const ART = '/Users/bysir/dev/bysir/game/recursion-game/art-assets/chapter-7/pianist-nochair.png'
+const CW = 53 // 内容宽 53，那一行 49 格 —— 差四格
+const codexList = mk([
+  '│' + '─ Worked ─────'.padEnd(CW) + '│',
+  '│' + '• /Users/bysir/dev/bysir/game/recursion-game/art-'.padEnd(CW) + '│',
+  '│' + '  assets/chapter-7/pianist-nochair.png'.padEnd(CW) + '│',
+  '│' + '─ Worked for 1m 09s ─────'.padEnd(CW) + '│',
+], CW + 2)
+check('差四格的折行（codex 列表项）：拼回来', links(codexList, 2), [ART])
+check('差四格的折行：续行 tap 也是全的', linkAtCell(codexList, 6, 3)?.text, ART)
+
+/* 15. 放宽到四格之后，「正常断句」那道还得站得住：一行在**差四格**的地方断在空格上，
+   下一行接着念 —— 这不是被切开的词，不许拼（第 3 条：两截加起来还不到一行宽）。 */
+check('差四格的正常断句：还是不拼', links(mk([
+  '  I will now check whether the deploy',   // 37 格，band 41 → 差四格
+  '  target is reachable from here',
+], 41), 0), [])
+
 if (fails) {
   console.error(`\n${fails} 处不对`)
   process.exit(1)

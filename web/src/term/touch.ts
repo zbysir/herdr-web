@@ -260,14 +260,41 @@ export function attachTouch(host: HTMLElement, term: Terminal, hooks: Hooks): ()
     touch = null
     if (!tc) return
     clearTimeout(tc.hold)
+    const still = Math.abs(tc.y - tc.y0) <= 8 && Math.abs(tc.x - tc.x0) <= 8
+    // 时间戳用事件自带的那个（和 tc.at 一个时间轴），不是处理函数里的 Date.now()
+    const slow = (e?.timeStamp ?? performance.now()) - tc.at > 500
+
+    /**
+     * **按久了的那一下，手指没挪过的话照样开链接。**
+     *
+     * 用户报的「终端里那条路径点不开」换来的这一条。判「这是一下点击」原来有两道时间闸：
+     * 380ms 就变成「抓住」（`grab`，为了拖分隔线），超过 500ms 干脆什么都不做。而**在
+     * 手机上瞄准一条路径按下去很容易超过 380ms** —— 那时候这一下已经被当成抓住了，松手
+     * 只补一个鼠标松开，链接一个字都不响。屏幕上完全看不出所以然：触屏没有 hover，路径
+     * 上压根没有下划线可看，于是就是「点了没反应，也不知道为什么」。
+     *
+     * 那两道闸挡的是**滑动**和**长按拖动**，而这两件事都要求手指**动**过。手指落在一条
+     * 路径上按住不放、又在原地松开，从意图上就只可能是「我要点它」——所以这儿只问
+     * 「挪没挪过」，时间不看。
+     *
+     * 只在「快速点击那条路走不到」时才走这儿（抓住了 / 超时了），下面那条正常路一个字
+     * 都没动 —— 尤其是 `claimTap` 照旧排在链接前面（herdr 那个 switch 按钮接走的一下，
+     * 不该顺手再去查链接）。这儿不查 claimTap 是因为它**会开面板**：让长按也能开那张
+     * 面板是另一件事，不该顺手夹带。
+     */
+    if (still && (tc.drag || slow)) {
+      const b = cellBox()
+      // 用**按下**那一点：抓着不动的手指多半已经飘了几像素
+      if (b) { const at = cellAt(tc.x0, tc.y0, b); hooks.openLinkAt(at.col, at.row) }
+    }
+
     // 拖动结束必须发松开：不发的话 herdr 那边左键一直是按着的
     if (tc.drag) { release(tc); return }
-    if (Math.abs(tc.y - tc.y0) > 8 || Math.abs(tc.x - tc.x0) > 8) return // 是滑动，已经处理过了
+    if (!still) return // 是滑动，已经处理过了
 
     // 长按什么都不做（重点是别弹键盘）。有鼠标上报的时候长按已经在上面被「抓住」接走了，
-    // 走到这儿只剩普通 shell，以及抓取还没到点就松手的情况。
-    // 时间戳用事件自带的那个（和 tc.at 一个时间轴），不是处理函数里的 Date.now()。
-    if ((e?.timeStamp ?? performance.now()) - tc.at > 500) return
+    // 走到这儿只剩普通 shell，以及抓取还没到点就松手的情况 —— 链接那件事上面办过了
+    if (slow) return
 
     const box = cellBox()
     if (!box) return
