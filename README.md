@@ -416,13 +416,25 @@ herdr-web service restart     # needed after replacing the binary
 herdr-web service uninstall   # stop and remove (data and logs untouched)
 ```
 
-**Configuration is copied out of the current shell at install time.** So the order is "get the environment right, then install"; changing configuration means installing again (it is idempotent — overwrite and restart). To read it from a file:
+**Configuration is copied out of the current shell at install time**, so the order is "get the environment right, then install". **Changing it later takes the same route** — there is no "edit one setting" subcommand; changing configuration means installing again from a different environment (idempotent — it overwrites and restarts):
 
 ```bash
-herdr-web service install --env-file .env
+HERDR_WEB_PUBLIC_PORT=9000 herdr-web service install   # change one, the rest comes from this shell
+herdr-web service install --env-file .env              # or let one file be the single source
 ```
 
-What gets copied is every `HERDR_WEB_*`, plus `PATH` / `SHELL` / `HOME` / `USER` / `LOGNAME` / `LANG` / `LC_ALL` / `TERM` / `HERDR_SOCKET_PATH`. `install` prints the whole list — from then on, "which configuration is this machine's service actually using" can only be answered by the plist / unit, so it is cheapest to read it at install time.
+What gets copied is every `HERDR_WEB_*`, plus `PATH` / `SHELL` / `HOME` / `USER` / `LOGNAME` / `LANG` / `LC_ALL` / `TERM` / `HERDR_SOCKET_PATH`. `install` prints the whole list — from then on, "which configuration is this machine's service actually using" can only be answered by the plist / unit, so it is cheapest to read it at install time. To check later, read that file directly (`service status` only answers installed / running, never configuration):
+
+```bash
+plutil -p ~/Library/LaunchAgents/io.github.zbysir.herdr-web.plist   # macOS
+systemctl --user cat herdr-web.service                              # Linux
+```
+
+It is **plaintext**, credentials included — do not paste that output into a pane with an agent in it.
+
+**`install` redoes the whole snapshot; it does not edit one key.** What lands in the file is whatever that shell has at that moment, so **anything installed last time but absent from this shell disappears silently**: open a fresh terminal, run `install` with a single inline prefix, and the port does change — along with the DNS credentials (next paragraph) going missing, which only blows up at the next certificate renewal. So keep configuration either in your shell rc (every new shell carries it) or in an `--env-file` that is the single source; the list `install` prints is the only chance to notice **on the spot** that something dropped out.
+
+**`service restart` does not re-read configuration.** It only kills and restarts the process (that is what you want after replacing the binary); the snapshot inside the plist / unit is untouched. Changing configuration means running `install` again.
 
 **DNS provider credentials carry the `HERDR_WEB_` prefix too** (`HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN`, `HERDR_WEB_ALICLOUD_ACCESS_KEY` and friends), so the rule above already copies them — exporting them in your shell is enough, no `--env-file` required. The prefix is not cosmetic: a bare `CLOUDFLARE_DNS_API_TOKEN` matches neither the prefix nor the allowlist, so it is not copied, and that failure only surfaces at the first issuance (or three months later, at the first renewal). lego still reads the bare names, but those can only reach the service through `--env-file`; when both are set, the prefixed one wins. Per-provider variable names are in [DNS.md](DNS.md).
 

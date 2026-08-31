@@ -407,13 +407,25 @@ herdr-web service restart     # 换过二进制之后要这一步
 herdr-web service uninstall   # 停掉并删掉（数据和日志不动）
 ```
 
-**配置是装的那一刻从当前 shell 抄进去的。** 所以顺序是「先把环境配对，再 install」；改了配置要重新 `install`（幂等，就是覆盖 + 重启）。想从文件读：
+**配置是装的那一刻从当前 shell 抄进去的**，所以顺序是「先把环境配对，再 install」。**装完之后想改配置也走同一条路** —— 没有「改一项」的子命令，改配置 = 换个环境重新 `install`（幂等，就是覆盖 + 重启，装着的那份会被停掉再起来）：
 
 ```bash
-herdr-web service install --env-file .env
+HERDR_WEB_PUBLIC_PORT=9000 herdr-web service install   # 改一项，其余照抄当前 shell
+herdr-web service install --env-file .env              # 或者让一个文件当唯一出处
 ```
 
-抄进去的是所有 `HERDR_WEB_*`，加上 `PATH` / `SHELL` / `HOME` / `USER` / `LOGNAME` / `LANG` / `LC_ALL` / `TERM` / `HERDR_SOCKET_PATH`。`install` 会把这份清单全打出来 —— 以后「这台机器上服务到底在用哪套配置」只能靠 plist / unit 回答，装的时候看一眼最省事。
+抄进去的是所有 `HERDR_WEB_*`，加上 `PATH` / `SHELL` / `HOME` / `USER` / `LOGNAME` / `LANG` / `LC_ALL` / `TERM` / `HERDR_SOCKET_PATH`。`install` 会把这份清单全打出来 —— 以后「这台机器上服务到底在用哪套配置」只能靠 plist / unit 回答，装的时候看一眼最省事。事后要查就直接读那个文件（`service status` 只说装没装、跑没跑，不显示配置）：
+
+```bash
+plutil -p ~/Library/LaunchAgents/io.github.zbysir.herdr-web.plist   # macOS
+systemctl --user cat herdr-web.service                              # Linux
+```
+
+里面是**明文**，凭据也在里面 —— 这两条命令的输出别往跑着 agent 的 pane 里贴。
+
+**`install` 是整份重来，不是「改一项」。** 写进去的那份快照就是「敲这条命令的那个 shell 里此刻有什么」，所以**上次装进去、而这个 shell 里没有的变量会静默消失**：开个新终端、只带一个前缀就 `install`，端口是改成了，DNS 凭据（下一段那些）一起没了，而这条要等到证书续期才炸。所以配置要么写进 shell 的 rc（每个新 shell 都带着），要么用 `--env-file` 让一个文件当唯一出处；`install` 打出来的那份清单是唯一能**当场**发现「谁丢了」的机会。
+
+**`service restart` 不重读配置。** 它只是把进程杀掉重起（换过二进制之后要的就是这一步），plist / unit 里那份快照一个字都没动。改配置只有重新 `install` 一条路。
 
 **DNS provider 的凭据也带 `HERDR_WEB_` 前缀**（`HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN`、`HERDR_WEB_ALICLOUD_ACCESS_KEY` 这些），所以跟着上面那条规则一起抄进去 —— shell 里 export 过就行，不用非走 `--env-file`。前缀不是为了整齐：光秃秃的 `CLOUDFLARE_DNS_API_TOKEN` 前缀和白名单两头都不占，抄不进去，而这个失败要等到第一次签发（或者三个月后第一次续期）才现形。老写法 lego 自己仍然认，但只能靠 `--env-file` 送进服务；两个都给的话带前缀的赢。各家变量名见 [DNS.md](DNS.md)。
 

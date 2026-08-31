@@ -22,8 +22,11 @@ func serviceCmd() *cobra.Command {
 		Long: "把 herdr-web 装成 user 级常驻服务：macOS 用 launchd，Linux 用 systemd。\n\n" +
 			"配置是**装的那一刻**从当前 shell 里抄进 plist / unit 的（所有 HERDR_WEB_* 加上\n" +
 			"PATH / SHELL / LANG 这几个）。DNS 凭据也带 HERDR_WEB_ 前缀，所以一起抄进去。\n" +
-			"所以先把环境配对，再 install；改了配置要重新 install。\n" +
-			"想从文件读：herdr-web service install --env-file .env",
+			"所以先把环境配对，再 install。装完之后改配置也是同一条路 —— 没有「改一项」的\n" +
+			"子命令，换个环境重新 install 就行（幂等，覆盖 + 重启）：\n\n" +
+			"  HERDR_WEB_PUBLIC_PORT=9000 herdr-web service install   # 改一项，其余照抄当前 shell\n" +
+			"  herdr-web service install --env-file .env              # 或者让一个文件当唯一出处\n\n" +
+			"注意它是**整份重来**：这个 shell 里没有的变量，上次装进去的那份也会跟着没了。",
 	}
 	root.AddCommand(serviceInstallCmd(), serviceUninstallCmd(), serviceStatusCmd(),
 		serviceRestartCmd(), serviceLogsCmd())
