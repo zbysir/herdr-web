@@ -157,17 +157,24 @@ const EDGE_SLACK = 4
 const FINISHED = /\/[^/]*[^/.]\.[A-Za-z0-9]{1,5}$/
 
 /**
- * `https://` 里那两个斜杠。测 `FINISHED` 之前要**先剥掉** —— 它不是路径分隔符。
+ * 到 `://` 为止的那一截（**含**前面粘着的东西）。测 `FINISHED` 之前要**先剥掉** ——
+ * scheme 里那两个斜杠不是路径分隔符，它后面跟的是主机名，而主机名里的点是标签分隔。
  *
  * 用户报的那一条（截图 20260825-203949）：`https://p54fi1e2ddoy.preview.creght.cn/#diff`
  * 被切在 `…preview.creg` 上，点开只有半个域名。剥不掉的话 `FINISHED` 看到的是
  * 「最后一个斜杠（scheme 那个）之后有个 `.creg`」，于是把一截**被切开的主机名**判成
- * 「已经是完整文件名，别拼」—— 而主机名里的点是标签分隔，`.creg` 是 `.creght` 的前半截。
+ * 「已经是完整文件名，别拼」—— 而 `.creg` 是 `.creght` 的前半截。
  *
- * 剥掉之后剩下的正好是该判的那部分：主机名里没有斜杠，`FINISHED` 自然不成立（照拼）；
- * 真到了路径段上（`https://x.com/img/a.png`）它照旧成立，那种不该拼。
+ * **前面那个 `.*` 不能去掉**（用户报的第二条，截图 20260902-2138）：这个「词」是按空格
+ * 切出来的，而 agent 说话时 URL 前面常常直接粘着中文和标点、中间一个空格都没有 ——
+ * `- B · 更大胆:https://p7boof571u9u.preview.c`。锚在词首的话这种压根剥不掉，于是
+ * 同一条毛病原样复发：`.c` 被当成扩展名，链接停在断点上（用户报的「只有半截」）。
+ * 贪婪的 `.*` 取的是**最后**那个 `://`，剩下的正好是该判的那一段。
+ *
+ * 剥掉之后：主机名里没有斜杠，`FINISHED` 自然不成立（照拼）；真到了路径段上
+ * （`https://x.com/img/a.png`）它照旧成立，那种不该拼。
  */
-const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//
+const SCHEME = /^.*[A-Za-z][A-Za-z0-9+.-]*:\/\//
 
 /** 一格的内容。空格子和宽字符的第二格都是空串 */
 function chAt(term: Terminal, y: number, x: number): string {
@@ -285,6 +292,8 @@ function bandAt(term: Terminal, y: number, x: number): Band {
  *   4. **结尾那个词不能看着已经是个完整文件名。** 这条是第 1 条容了两格之后才需要的：
  *      「一条正好差一两格填满这行的路径」和「被切开的路径」几何上分不开了，而这时第 3 条
  *      压根不起作用（结尾那个词自己就顶满一行）。见 `FINISHED` 那儿。
+ *      **但上一行在同一列上也断着的话这条不算** —— 那一列就是硬折的宽度，「凑巧差几格」
+ *      这个前提没了（不然被切在扩展名当中的 URL 会少最后几个字符，见那儿的注释）。
  *
  * 中文不用单独防：它占两格，落在边界上会剩 1–2 格，断点也不是路径字符，前两条自然挡掉。
  */
@@ -353,10 +362,21 @@ function tuiWrap(term: Terminal, y: number, band: Band): { to: number; next: num
   // 「看着完整」要**剥掉 scheme 再判**（见 `SCHEME`）：`https://` 里那两个斜杠不是路径
   // 分隔符，不剥的话一截被切开的主机名（`…preview.creg`）会被当成完整文件名，URL 于是
   // 只认出前半截 —— 用户报的「点超链接还是一半，不是一个完整的域名」。
+  //
+  // 例外（用户报的，截图 20260902-2058）：**上一行在同一列上也是断的**（末字符还是
+  // 路径字符）。那这一列就是这个 TUI 的硬折宽度 —— 「这一行只是凑巧差几格填满」这个
+  // 前提当场不成立，结尾看着像文件名也照拼。少了这条例外，一条被切在**扩展名当中**的
+  // URL（`…__contact_qr.pn` + `g`）就会停在第二行上：`.pn` 一样满足「点后面 1–5 位
+  // 字母数字」，于是一截被切开的扩展名被判成「已经完整」，点开少最后一个字符 ——
+  // 和上面那条「切在域名当中」是同一种静默：屏幕上那条链接看着完全正常，点下去才知道。
   if (tail.end < strict) {
-    let word = ''
-    for (let x = ws; x < tail.end; x++) word += chAt(term, y, x)
-    if (FINISHED.test(word.replace(SCHEME, ''))) return null
+    const prev = lastEnd(term, y - 1, lb, rb)
+    const hardEdge = prev.end === tail.end && PATHCH.test(prev.ch)
+    if (!hardEdge) {
+      let word = ''
+      for (let x = ws; x < tail.end; x++) word += chAt(term, y, x)
+      if (FINISHED.test(word.replace(SCHEME, ''))) return null
+    }
   }
 
   // 这一行读到**最后一个字符为止**，不是读到 edge：框线里内容和竖线之间还有一格

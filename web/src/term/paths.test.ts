@@ -237,6 +237,47 @@ check('差四格的正常断句：还是不拼', links(mk([
   '  target is reachable from here',
 ], 41), 0), [])
 
+/* 16. **用户报的那一条（截图 20260902-2058）：URL 被切在扩展名当中。**
+   `…__contact_qr.pn` + `g` —— 点开少最后一个 `g`，而屏幕上那条链接看着完全正常。
+   卡住的是第 4 道（`FINISHED`：结尾看着已经是个完整文件名就别拼）：`.pn` 一样满足
+   「点后面 1–5 位字母数字」，于是一截**被切开的扩展名**被判成「已经完整」。
+   分得开这两种的证据在**上一行**：它在**同一列**上也是断的（末字符还是路径字符），
+   那这一列就是这个 TUI 的硬折宽度 ——「凑巧差几格」这个前提不成立，照拼。 */
+const QR = 'https://fsu.creght.com/site/2087143196390854656/1786454035627__contact_qr.png'
+const qr = mk([
+  '  基准原图：https://fsu.creght.com/site/20871', // 顶到第 45 列（46 列的带，差一格）
+  '  43196390854656/1786454035627__contact_qr.pn', // 同一列上断的 —— 硬折宽度就在这儿
+  '  g',
+], 46)
+check('切在扩展名当中的 URL：首行 tap', linkAtCell(qr, 20, 1)?.text, QR)
+check('切在扩展名当中的 URL：末行 tap', linkAtCell(qr, 3, 3)?.text, QR)
+
+/* 17. 第 16 条的边界：上一行**不在**同一列上断（普通一行字），那就还是老判据 ——
+   结尾看着是完整文件名就不许把下一行的头一个词粘上来。 */
+check('上一行没顶到同一列：结尾像文件名还是不拼', links(mk([
+  '  刚跑完了',
+  '  /Users/bysir/dev/bysir/herdr/a/report.txt', // 43 格（46 列的带，差三格）
+  '  found 3 matches',
+], 46), 1), ['/Users/bysir/dev/bysir/herdr/a/report.txt'])
+
+/* 18. **用户报的那一条（截图 20260902-2138）：URL 前面直接粘着中文，没有空格。**
+   `- B · 更大胆:https://p7boof571u9u.preview.c` + `reght.cn/?hero=b` —— 点开只有
+   `https://p7boof571u9u.preview.c`。和第 9 条同一处（`FINISHED` 把被切开的主机名当成
+   完整文件名），但 scheme 那道剥不掉：**「词」是按空格切的**，而这一条的词是
+   `更大胆:https://…`，`^` 锚在词首的正则压根匹配不上。所以 `SCHEME` 前面那个 `.*`
+   是承重的 —— agent 说话时 URL 前面常常直接粘着中文和标点。
+   （45 列的 pane，Ink 在自己那层让出一格 —— 正是 slack 那一档，`FINISHED` 才生效） */
+const HERO = 'https://p7boof571u9u.preview.creght.cn/?hero=b'
+const ab = mk([
+  '  - A · 贴源站(当前默认):https://p7boof571u9u',
+  '    .preview.creght.cn/',
+  '  - B · 更大胆:https://p7boof571u9u.preview.c',
+  '    reght.cn/?hero=b',
+], 46)
+check('中文直接粘着的 URL：A 那条', linkAtCell(ab, 30, 1)?.text, 'https://p7boof571u9u.preview.creght.cn/')
+check('中文直接粘着的 URL：B 那条（首行 tap）', linkAtCell(ab, 30, 3)?.text, HERO)
+check('中文直接粘着的 URL：B 那条（续行 tap）', linkAtCell(ab, 6, 4)?.text, HERO)
+
 if (fails) {
   console.error(`\n${fails} 处不对`)
   process.exit(1)
