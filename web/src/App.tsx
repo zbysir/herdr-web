@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Maximize, Minimize } from './icons'
 import { api, deviceKind, filesApi, libMap, resolveRows, SESSION, topbarKeyRef, UNAUTHED, type ClipResult, type FileStat, type Notice, type ProfilesResponse, type RowSegments, type SoftKey, type SoftkeysConfig, type SoftkeysResponse, type State, type TopbarResponse, type UnauthedDetail, type WhoAmI } from '@/lib/api'
-import { applyPrefs, holdRate, keyStyle, popupClear, pushPref, type HoldRate, type KeyStyle, type PopupClear } from '@/lib/prefs'
+import { applyPrefs, composeEnter, holdRate, keyStyle, popupClear, pushPref, type HoldRate, type KeyStyle, type PopupClear } from '@/lib/prefs'
 import { cacheLayout, readLayoutCache } from '@/lib/layoutcache'
 import { readClipboard, writeClipboard } from '@/lib/clipboard'
 import { Session } from '@/term/session'
@@ -185,10 +185,30 @@ export default function App() {
   const [showKeys, setShowKeys] = useState(() =>
     lsBool('softkeys', matchMedia('(pointer: coarse)').matches),
   )
-  const [live, setLive] = useState(() => lsBool('composeLive', false))
   /**
-   * 面板图标上那个红点（有还没看的）画不画。**只管红点，不管弹窗** —— 有人嫌它一直挂着扎眼，
-   * 而提示卡是自己会走的，两件事分开。整套提示要关在服务端（`HERDR_WEB_NOTICE_MS=0`）。
+   * 发件箱里回车是投稿还是换行、以及双向同步开没开。
+   *
+   * 两个都**跟着这一套排布走**（见 lib/prefs.ts），设置 →「终端」里那一档改。原来
+   * 「双向」是发件箱那一排上的一个勾 —— 发件箱缩成一行之后那一排整个没了，而它本来
+   * 就是「设一次就不再动」的开关（默认关，开着还有风险，见 docs/dev/OUTBOX.md）。
+   */
+  const [live, setLive] = useState(() => lsBool('composeLive', false))
+  const [enterSend, setEnterSend] = useState(composeEnter)
+  /**
+   * 右上角那几张提示卡弹不弹。**默认关**（用户要的）。
+   *
+   * 为什么默认关：它是**主动打断** —— 浮在终端右上角，盖住的正是 agent 刚写的那几行，
+   * 而一屋子 agent 同时干活时这一片是一直在动的。想知道「谁在等我」有两条不打断的路
+   * 一直开着：顶栏 ▦ 上那个红点（有还没看的就亮）和面板一览里那一列「几分钟前」。
+   * 要被主动叫一下的人自己去设置里开 —— 那时候它才是他要的东西。
+   *
+   * **只管卡片**：红点、系统通知、面板一览各是各的开关，轮询也照旧（那三样都要它）。
+   * 整套提示要关是服务端那侧（`HERDR_WEB_NOTICE_MS=0`），那才连轮询一起停。
+   */
+  const [noticeCard, setNoticeCard] = useState(() => lsBool('noticeCard', false))
+  /**
+   * 面板图标上那个红点（有还没看的）画不画。**只管红点，不管卡片** —— 点是一直挂在那儿的，
+   * 卡是自己会走的，两件事分开（卡片那个开关在上面）。
    *
    * 跟着**这套排布**走（见 lib/prefs.ts）：这是「这类设备上看着舒服不舒服」的偏好，不是部署
    * 的策略。localStorage 里那份是镜像，服务端为准。
@@ -696,6 +716,9 @@ export default function App() {
     setKeyStyleS(keyStyle())
     setPopupClearS(popupClear())
     setHoldRateS(holdRate())
+    setLive(lsBool('composeLive', false))
+    setEnterSend(composeEnter())
+    setNoticeCard(lsBool('noticeCard', false))
     setNoticeDot(lsBool('noticeDot', true))
     setNoticeOS(lsBool('noticeOS', false))
     setNoticeOSFg(lsBool('noticeOSFg', false))
@@ -1109,6 +1132,30 @@ export default function App() {
   }
 
   /**
+   * 快捷键条 / 顶栏上那个键**发一串字节**走这儿。
+   *
+   * 多这一层只为一件事：**焦点在发件箱里、而且「回车发送」开着时，↵ 这一下是投稿**，
+   * 不是往 pane 里发一个回车。用户要的是「回车就发出去 —— 软键盘上的、快捷键条上的、
+   * 真键盘上的都算」，而条上那个 ↵ 原来只认「把 \r 打进终端」：一边在框里说话、一边
+   * 顺手点条上的 ↵，结果是那个回车落进了 pane（把 agent 输入框里的残留原样提交了），
+   * 而自己写的那段话还在框里。
+   *
+   * 只认**光秃秃的一个回车**：`"herdr" enter` 这种带文本的键送来的是 `herdr\r`，它是
+   * 「往终端敲一条命令」，和发件箱没关系。条上的键刻意不抢焦点（`onMouseDown` 里
+   * preventDefault），所以这时候 activeElement 还是发件箱那个 textarea —— 认不出来
+   * （某些浏览器把焦点挪到了 body）就退回老路子，往终端发。
+   */
+  const sendKeyBytes = (b: string) => {
+    if ((b === '\r' || b === '\n') && enterSend && showCompose
+      && document.activeElement?.closest?.('[data-testid="compose"]')) {
+      void compose.submit()
+      return
+    }
+    sess.current?.sendKey(b)
+    if (kbdUp) sess.current?.focus()
+  }
+
+  /**
    * 顶栏每个按钮**点了干什么**（`on` 是亮不亮、`dot` 是红点、`hide` 是这个部署没有这项）。
    *
    * 和「按钮长什么样」分开放：图标和名字在 `components/topbarItems.tsx`（编辑器要用同一份），
@@ -1171,6 +1218,11 @@ export default function App() {
     // 这一下是用户手势，正好在这儿进全屏（键盘那条路见 kbdFull 的注释）
     kbd: { on: kbdUp, run: () => { if (kbdFull && !kbdUp) enterFull(true); sess.current?.toggleKeyboard() } },
     img: { run: () => picker.current?.click() },
+    // 拉回：把远端输入框里已有的内容拽进发件箱。原来是发件箱那一排上的一个按钮，
+    // 缩成一行之后挪成了一件「可以放上顶栏 / 快捷键条」的事 —— 它是偶尔用一次的
+    // （远端按过 Tab 补全、或者本地草稿写岔了想拿回原文），不值得一直占着地方。
+    // 发件箱关着的时候先把它打开：拉回来的东西总得有地方装
+    pull: { run: () => { if (!showCompose) toggleCompose(true); void compose.pull() } },
     clip: { run: () => void pullClip() },
     paste: { run: () => void pastePhone() },
     'font-': { run: () => bumpFont(-1) },
@@ -1247,7 +1299,7 @@ export default function App() {
           }
           if (ta) ta.run()
           else if (k.sticky) sess.current?.toggleSticky(k.sticky)
-          else if (k.send) { sess.current?.sendKey(k.send); if (kbdUp) sess.current?.focus() }
+          else if (k.send) sendKeyBytes(k.send)
         }}
       >
         {keyFace(k)}
@@ -1489,6 +1541,8 @@ export default function App() {
             onClose={() => setPanel(null)}
             opts={opts}
             setOpt={setOpt}
+            card={noticeCard}
+            onCard={(v) => { setNoticeCard(v); pushPref(profile.id, 'noticeCard', v ? '1' : '0', toast) }}
             dot={noticeDot}
             onDot={(v) => { setNoticeDot(v); pushPref(profile.id, 'noticeDot', v ? '1' : '0', toast) }}
             os={noticeOS}
@@ -1505,6 +1559,10 @@ export default function App() {
             onPopupClear={(v) => { setPopupClearS(v); pushPref(profile.id, 'popupClear', String(v), toast) }}
             holdRate={holdRateS}
             onHoldRate={(v) => { setHoldRateS(v); pushPref(profile.id, 'holdRate', String(v), toast) }}
+            enterSend={enterSend}
+            onEnterSend={(v) => { setEnterSend(v); pushPref(profile.id, 'composeEnter', v ? 'send' : 'newline', toast) }}
+            live={live}
+            onLive={(v) => { setLive(v); pushPref(profile.id, 'composeLive', v ? '1' : '0', toast) }}
             heals={heals}
             // 存完把整份配置回传过来：快捷键条那一条和顶栏上放的「我的按键」是同一份定义
             onSaved={applySoftkeys}
@@ -1539,12 +1597,13 @@ export default function App() {
           onDecline={lanDirect.decline}
           onDismiss={lanDirect.dismiss}
         />
-        {/* 提示浮在终端右上角。面板开着时先让开 —— 那几块浮层就在同一个角上，
-            叠上去会把面板的标题栏盖掉 */}
+        {/* 提示浮在终端右上角。**默认不弹**（设置里开，见 noticeCard）；面板开着时也先让开
+            —— 那几块浮层就在同一个角上，叠上去会把面板的标题栏盖掉。
+            关着的时候只是不画：未读和红点照旧在算（那是另一个开关的事） */}
         <Notices
           items={notices.items}
           autoMs={noticeMs}
-          hidden={!!panel || !!viewing}
+          hidden={!noticeCard || !!panel || !!viewing}
           // 点卡片 = 我去看这个 agent 了：它名下的未读全消掉（别人还有没看的，红点就还亮着），别的一条不动
           onGoto={(id) => { notices.seePane(id); void gotoPane(id, paneZoomPref()) }}
           onDismiss={notices.dismiss}
@@ -1562,7 +1621,7 @@ export default function App() {
             <Softkeys
               rows={bar}
               sticky={sticky}
-              onSend={(b) => { sess.current?.sendKey(b); if (kbdUp) sess.current?.focus() }}
+              onSend={sendKeyBytes}
               onSticky={(w) => sess.current?.toggleSticky(w)}
               // act 那一档直接走顶栏那张动作表：softkeys 的 act 白名单是 CapId 的**子集**
               // （internal/capability 那张表里 Key 那一列），同一个 id 就是同一件事 ——
@@ -1575,21 +1634,13 @@ export default function App() {
             <Compose
               text={compose.text}
               onChangeText={compose.setText}
-              panes={compose.panes}
-              sel={compose.sel}
-              onSelect={compose.selectTarget}
               info={compose.info}
               bad={compose.bad}
               busy={compose.busy}
-              live={live}
-              onLive={(v) => { setLive(v); localStorage.setItem('composeLive', v ? '1' : '0') }}
-              onPull={compose.pull}
+              enterSend={enterSend}
               onSubmit={compose.submit}
-              onReload={() => void compose.loadPanes()}
               onAttach={compose.attach}
               onRecall={compose.recall}
-              pollMs={cfg.poll}
-              pushMs={cfg.push}
             />
           )}
         </Dock>

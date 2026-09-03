@@ -51,8 +51,9 @@ const TABS: { id: SettingsTab; label: string }[] = [
 ]
 
 export function SettingsPanel({
-  tab, onTab, onClose, opts, setOpt, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs,
+  tab, onTab, onClose, opts, setOpt, card, onCard, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs,
   kbdFull, onKbdFull, keyStyle, onKeyStyle, popupClear, onPopupClear, holdRate, onHoldRate,
+  enterSend, onEnterSend, live, onLive,
   heals, onSaved, onTopbar, toast, state,
   fontSize, onFont, scheme, onScheme, profile, onProfiles,
 }: {
@@ -61,6 +62,9 @@ export function SettingsPanel({
   onClose: () => void
   opts: TermOpts
   setOpt: (k: keyof TermOpts, v: boolean) => void
+  /** 右上角那几张提示卡弹不弹。**默认关** —— 它是主动打断，见 App 里那段。同上 */
+  card: boolean
+  onCard: (v: boolean) => void
   /** 面板图标上那个红点画不画（有人不喜欢）。跟着这套排布走，见 lib/prefs.ts */
   dot: boolean
   onDot: (v: boolean) => void
@@ -85,6 +89,12 @@ export function SettingsPanel({
   /** 方向键按住不放的连发速度（次/秒）。同上 */
   holdRate: HoldRate
   onHoldRate: (v: HoldRate) => void
+  /** 发件箱里回车是投稿（true）还是换行。同上 */
+  enterSend: boolean
+  onEnterSend: (v: boolean) => void
+  /** 发件箱的双向同步（本地草稿推回远端输入框）。默认关，同上 */
+  live: boolean
+  onLive: (v: boolean) => void
   heals: number
   onSaved: (c: SoftkeysConfig) => void
   /** 顶栏存好了：把新的那一串 id 交回去，顶栏立刻跟着变（不用刷新页面） */
@@ -152,11 +162,12 @@ export function SettingsPanel({
 
       {tab === 'term' && (
         <TermSection
-          opts={opts} setOpt={setOpt} dot={dot} onDot={onDot} os={os} onOS={onOS}
+          opts={opts} setOpt={setOpt} card={card} onCard={onCard} dot={dot} onDot={onDot} os={os} onOS={onOS}
           kbdFull={kbdFull} onKbdFull={onKbdFull}
           keyStyle={keyStyle} onKeyStyle={onKeyStyle}
           popupClear={popupClear} onPopupClear={onPopupClear}
           holdRate={holdRate} onHoldRate={onHoldRate}
+          enterSend={enterSend} onEnterSend={onEnterSend} live={live} onLive={onLive}
           osFg={osFg} onOSFg={onOSFg} cardMs={cardMs} onCardMs={onCardMs}
           heals={heals} state={state} toast={toast}
           fontSize={fontSize} onFont={onFont} scheme={scheme} onScheme={onScheme}
@@ -170,12 +181,15 @@ export function SettingsPanel({
 }
 
 function TermSection({
-  opts, setOpt, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs, kbdFull, onKbdFull,
+  opts, setOpt, card, onCard, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs, kbdFull, onKbdFull,
   keyStyle, onKeyStyle, popupClear, onPopupClear, holdRate, onHoldRate,
+  enterSend, onEnterSend, live, onLive,
   heals, state, fontSize, onFont, scheme, onScheme, toast,
 }: {
   opts: TermOpts
   setOpt: (k: keyof TermOpts, v: boolean) => void
+  card: boolean
+  onCard: (v: boolean) => void
   dot: boolean
   onDot: (v: boolean) => void
   os: boolean
@@ -193,6 +207,12 @@ function TermSection({
   /** 方向键按住不放的连发速度（次/秒） */
   holdRate: HoldRate
   onHoldRate: (v: HoldRate) => void
+  /** 发件箱：回车是投稿还是换行 */
+  enterSend: boolean
+  onEnterSend: (v: boolean) => void
+  /** 发件箱：双向同步 */
+  live: boolean
+  onLive: (v: boolean) => void
   toast: (m: string) => void
   heals: number
   state?: State | null
@@ -329,6 +349,47 @@ function TermSection({
         <span className="text-xs text-faint">次/秒（左快右慢）。按住约 0.4 秒开始连发，只有 ↑↓←→ 和 PgUp/PgDn 有</span>
       </div>
 
+      {/* 发件箱那两件。发件箱现在是**一行**（输入框 + 一个投稿键），原来那一排控件
+          （投给谁 / 拉回 / 图 / 双向）全没了 —— 里面只有这两件是「设一次就不再动」的
+          开关，所以搬到这儿；拉回成了能放上顶栏的一件事（动作库里的「拉回」），
+          传图本来就在顶栏上有一个。见 components/Compose.tsx 那段注释。 */}
+      <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-line pt-3 text-[13px]">
+        发件箱回车
+        <div className="flex overflow-hidden rounded-md border border-line">
+          <Button
+            size="tiny" on={enterSend} title="按回车就投出去（默认）。要换行用 ⇧↵"
+            className="rounded-none border-0 border-r border-line"
+            onClick={() => onEnterSend(true)}
+          >
+            投稿
+          </Button>
+          <Button
+            size="tiny" on={!enterSend} title="回车是换行，投稿走 ⌘↵ / Ctrl↵"
+            className="rounded-none border-0"
+            onClick={() => onEnterSend(false)}
+          >
+            换行
+          </Button>
+        </div>
+        <span className="text-xs text-faint">
+          「投稿」那一档：软键盘上的、快捷键条上的 ↵ 都算，换行用 ⇧↵；⌘↵ 两档都是投稿
+        </span>
+      </div>
+
+      {/* 双向同步。**默认关**，而且是这一整套里唯一会往远端输入框写字的东西 ——
+          开着的时候别同时在那个 pane 里手敲字（本地→远端这个方向本质上是在跟字节流
+          抢缓冲区，见 docs/dev/OUTBOX.md） */}
+      <label className="mt-2 flex cursor-pointer items-start gap-2.5 rounded-md py-1 transition-colors hover:text-fg">
+        <span className="pt-px"><Checkbox checked={live} onCheckedChange={(v) => onLive(!!v)} /></span>
+        <span className="text-[13px]/relaxed">
+          发件箱双向同步（本地草稿推回远端输入框，不回车）
+          <span className="mt-0.5 block text-xs text-faint">
+            只对 claude / codex 这种有真输入框的 pane 生效 —— 普通 pane 里跑的可能是 vim，
+            那里的字符是<b>命令</b>不是文本。开着时别同时在那个 pane 里手敲字
+          </span>
+        </span>
+      </label>
+
       {/* 「点 switch 开面板一览」和上面那串终端行为不是一类：它改的是「点 herdr 那个按钮会
           发生什么」。和下面那个红点一样是「这类设备上顺手不顺手」的偏好（跟着排布那一套走，
           见 lib/prefs.ts），所以并在同一条线下面。 */}
@@ -347,14 +408,50 @@ function TermSection({
         </span>
       </label>
 
-      {/* 提示那一条**不属于**「终端」，但设置面板只有三页（终端 / 快捷键条 / 设备），
-          为一个开关单开一页不值当。用一条分隔线隔开，别混进上面那串终端行为里去。 */}
+      {/* 提示那几条**不属于**「终端」，但设置面板只有三页（终端 / 快捷键条 / 设备），
+          为几个开关单开一页不值当。和上面那条「点 switch 开面板一览」一样，都是
+          「这类设备上顺手不顺手」的偏好 —— 并在同一条分隔线下面。 */}
+
+      {/* **默认关**：那几张卡浮在终端右上角，盖住的正是 agent 刚写的那几行，而它是自己
+          冒出来的（主动打断）。不打断的两条路一直开着 —— 红点和面板一览里那列「几分钟前」。
+          要被叫一下的人自己开。关掉只是不画卡，红点 / 系统通知 / 轮询一个不受影响。 */}
       <label className="mt-1 flex cursor-pointer items-start gap-2.5 rounded-md py-1 transition-colors hover:text-fg">
+        <span className="pt-px"><Checkbox checked={card} onCheckedChange={(v) => onCard(!!v)} /></span>
+        <span className="text-[13px]/relaxed">
+          右上角弹提示卡（等你回答 / 刚跑完）
+          <span className="mt-0.5 block text-xs text-faint">
+            默认关 —— 它盖住的是终端右上角那几行。不弹也知道「谁在等你」：顶栏 ▦ 上的红点、面板一览里那列「几分钟前」
+          </span>
+        </span>
+      </label>
+
+      {/* 卡片停留多久，是上面那个开关的**下挂项**（关着的时候这一行不画 —— 一个点了不
+          起作用的控件比没有更糟）。「等你回答」那种不受它管：它是真的停在那儿等你，
+          自己飘走就又回到「不知道谁在等」了 */}
+      {card && (
+        <div className="mt-1 mb-1 flex flex-wrap items-center gap-2 pl-7">
+          <span className="text-xs text-muted">停留</span>
+          <Select
+            value={String(cardMs)}
+            onChange={(e) => onCardMs(Number(e.target.value))}
+            aria-label="提示卡停留多久"
+          >
+            <option value="5000">5 秒</option>
+            <option value="12000">12 秒</option>
+            <option value="30000">30 秒</option>
+            <option value="60000">1 分钟</option>
+            <option value="0">一直挂着</option>
+          </Select>
+          <span className="text-xs text-faint">「等你回答」那种一直挂着，不受这个管</span>
+        </div>
+      )}
+
+      <label className="flex cursor-pointer items-start gap-2.5 rounded-md py-1 transition-colors hover:text-fg">
         <span className="pt-px"><Checkbox checked={dot} onCheckedChange={(v) => onDot(!!v)} /></span>
         <span className="text-[13px]/relaxed">
           面板图标上的红点（有还没看的：等你回答 / 刚跑完）
           <span className="mt-0.5 block text-xs text-faint">
-            看过的 pane 不再算数，都看过了就灭；关掉只是不画这个点，右上角的提示卡照常出。整套提示要关是服务端那侧的
+            看过的 pane 不再算数，都看过了就灭；关掉只是不画这个点，别的照旧。整套提示要关（连轮询一起停）是服务端那侧的
             <code className="mx-1 rounded border border-line bg-ctl px-1 py-px font-mono text-[11px]">HERDR_WEB_NOTICE_MS=0</code>
           </span>
         </span>
@@ -408,26 +505,8 @@ function TermSection({
         </label>
       </div>
 
-      {/* 卡片停留多久。「等你回答」那种不受这个管 —— 它是真的停在那儿等你，
-          自己飘走就又回到「不知道谁在等」了 */}
-      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-3">
-        <span className="text-[13px]">提示卡停留</span>
-        <Select
-          value={String(cardMs)}
-          onChange={(e) => onCardMs(Number(e.target.value))}
-          aria-label="提示卡停留多久"
-        >
-          <option value="5000">5 秒</option>
-          <option value="12000">12 秒</option>
-          <option value="30000">30 秒</option>
-          <option value="60000">1 分钟</option>
-          <option value="0">一直挂着</option>
-        </Select>
-        <span className="text-xs text-faint">「等你回答」那种一直挂着，不受这个管</span>
-      </div>
-
       {heals > 0 && (
-        <p className="text-xs/relaxed text-muted">
+        <p className="mt-3 text-xs/relaxed text-muted">
           同步输出补过 {heals} 次收尾：herdr 的 2026 帧没等到 ESU，重绘被攒住了
           （缓冲区没坏，只是没画上）。频繁出现就把上面的同步输出关掉。
         </p>

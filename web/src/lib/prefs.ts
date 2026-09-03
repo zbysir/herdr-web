@@ -28,9 +28,10 @@ export const PREF_KEYS = [
   'fontSize', 'scheme',
   'kitty', 'meta', 'copyOnSelect', 'sync2026', 'switchPanel',
   'kbdFull',
-  'noticeDot', 'noticeOS', 'noticeOSFg', 'noticeCardMs',
+  'noticeDot', 'noticeCard', 'noticeOS', 'noticeOSFg', 'noticeCardMs',
   'keyStyle', 'popupClear', 'holdRate',
   'diffWrap',
+  'composeEnter', 'composeLive',
 ] as const
 export type PrefKey = (typeof PREF_KEYS)[number]
 
@@ -120,6 +121,21 @@ export const holdRate = (): HoldRate => {
   const n = Number(localStorage.getItem('holdRate'))
   return (HOLD_RATES as readonly number[]).includes(n) ? (n as HoldRate) : 16
 }
+
+/**
+ * 发件箱里**回车是投稿还是换行**。默认投稿。
+ *
+ * 发件箱缩成一行之后这一档才成立：一行的框本来就不适合写多行，而语音口述最常见的一句
+ * 就是一句 —— 说完按一下回车（软键盘上的、快捷键条上的 ↵、真键盘上的都算）比去点按钮
+ * 顺手得多。要写多行的用 ⇧↵，或者在这儿换成「换行」那一档（那时投稿走 ⌘↵ / Ctrl↵，
+ * 也就是这次改动之前的行为）。
+ *
+ * 跟着**这一套排布**走：手机上多半要「回车就投」，接着物理键盘的桌面上多半要「换行」。
+ *
+ * 和 keyStyle / holdRate 一样**同步读镜像**（见上面那段）—— 快捷键条上那个 ↵ 是在点下去
+ * 那一刻现读的（要判断「这一下该投稿还是往 pane 里发个回车」），绕一圈 React state 不值当。
+ */
+export const composeEnter = () => localStorage.getItem('composeEnter') !== 'newline'
 
 /**
  * 看 diff 时长行折不折。**默认折**（这个面板本来就是为手机做的：不折的话每行都要横滑，

@@ -3,6 +3,9 @@
 export { Keyboard, Pencil, Command, AArrowDown, AArrowUp, Image, Maximize, Minimize } from 'lucide-react'
 // 顶栏可配置之后多出来的三个（系统键盘 / 取剪贴板 / 粘到终端），见 components/topbarItems.tsx
 export { Type as Ime, ClipboardCopy as ClipGet, ClipboardPaste as ClipPut } from 'lucide-react'
+// 拉回：把远端输入框里那份**拽下来**。用「向下到线」而不是刷新那两个圈 —— 这件事有方向
+// （远端 → 这儿），圈圈看着像「重新读一遍列表」
+export { ArrowDownToLine as Pull } from 'lucide-react'
 export { LayoutGrid as Panes } from 'lucide-react'
 export { FolderOpen as Files } from 'lucide-react'
 export { Settings as Gear } from 'lucide-react'

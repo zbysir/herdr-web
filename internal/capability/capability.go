@@ -51,6 +51,7 @@ var All = []Cap{
 	{ID: "img", Topbar: true, Key: true},
 	{ID: "clip", Topbar: true, Key: true},
 	{ID: "paste", Topbar: true, Key: true},
+	{ID: "pull", Topbar: true, Key: true},
 	{ID: "font-", Topbar: true},
 	{ID: "font+", Topbar: true},
 	{ID: "theme", Topbar: true},

@@ -18,7 +18,6 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
   // 服务端在盯 agent 状态变化没有。盯着才有「3 分钟前」那一列（herdr 不给时间戳）
   const [watching, setWatching] = useState(false)
   const [presets, setPresets] = useState<PresetGroup[]>([])
-  const [sel, setSel] = useState<string>(() => localStorage.getItem('composeTarget') || FOLLOW)
   const [info, setInfo] = useState('')
   const [bad, setBad] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -45,6 +44,11 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
   /**
    * 这段草稿到底该投给谁。
    *
+   * 只有两种答案：**herdr 里此刻激活的那个**（哨兵值 FOLLOW，服务端在投的那一刻解析），
+   * 或者**草稿锁定的那个**。发件箱缩成一行之后那个「投给哪个 pane」的下拉没了 —— 它的
+   * 默认值本来就是 FOLLOW，而换目标去「面板一览」里点一下 pane 更实在：那边切的是 herdr
+   * 自己的焦点，屏幕跟着一起过去，不像这边记一个目标那样和眼前看到的东西对不上。
+   *
    * 「跟随焦点」不能一路跟到按下按钮那一刻：你为 A 写了一段话，中途焦点漂到了 B
    * （herdr 自己会因为 agent 状态变化换焦点），投出去就落到 B 了。所以**自己改过的
    * 草稿**会把目标锁定在当初瞄准的 pane 上，框空了才重新跟随。
@@ -53,10 +57,7 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
    * pane 就该跟着换成新 pane 的内容。用「有没有字」当判据的话，只要框里有东西目标
    * 就被钉死，切 pane 后 input 再也不更新。
    */
-  const aimed = useCallback(() => {
-    if (sel !== FOLLOW) return sel
-    return pinned.current && own.current ? pinned.current : FOLLOW
-  }, [sel])
+  const aimed = useCallback(() => (pinned.current && own.current ? pinned.current : FOLLOW), [])
 
   const label = useCallback((r: SyncResult | SayResult | DraftResult) => {
     const cached = panes.find((p) => p.id === r.target)
@@ -129,7 +130,7 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
     }
     const switched = r.target !== resolved.current
     resolved.current = r.target
-    const pinNote = target === FOLLOW ? '' : ' · 草稿已锁定这个 pane'
+    const pinNote = target === FOLLOW ? '' : ' · 草稿锁在这个 pane 上'
     // 认不出输入框时框里是空的，得说清是「没认出来」而不是「远端把框清空了」——
     // 不然看起来像自动拉回坏了。shell pane 单独说：那边本来就读不到输入行，
     // 但投稿走的是「盲打 + 回车」，照样能用，别让提示看起来像坏了。
@@ -139,7 +140,7 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
 
     if (switched) {
       // 焦点换了 pane：框里是远端来的就直接换成新 pane 的内容，是自己写的就留着
-      if (own.current) say2(`${label(r)} · 本地有草稿，没自动拉回（点「拉回」覆盖）`)
+      if (own.current) say2(`${label(r)} · 本地有草稿，没自动拉回（清空框就跟回来）`)
       else { adopt(r.text ?? '', r.target); say2(`${label(r)}${boxNote}`) }
       return
     }
@@ -312,14 +313,8 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
     onChangeText(cur + (cur && !/\s$/.test(cur) ? ' ' : '') + chunk)
   }, [onChangeText])
 
-  const selectTarget = useCallback((v: string) => {
-    setSel(v)
-    localStorage.setItem('composeTarget', v)
-    resolved.current = ''   // 逼下一拍当成「切了 pane」处理
-  }, [])
-
   return {
-    text, setText: onChangeText, panes, watching, presets, sel, selectTarget,
+    text, setText: onChangeText, panes, watching, presets,
     info, bad, busy, aimed,
     loadPanes, loadSoftkeyPresets, tick, pull, submit, recall, attach, upload, append, jump,
   }
