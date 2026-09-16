@@ -226,6 +226,15 @@ func (o *Outbox) Goto(target string, zoom bool) (*GotoResult, error) {
 	if zoom {
 		mode = "on"
 	}
+	// 先 focus 再 zoom：带动画面的是 focus 那一跳，zoom 只管放大。herdr 0.9.0 起
+	// `pane.zoom` 改得动全局焦点、却带不动已经 attach 的客户端的视图（见
+	// herdr.PaneFocus 的注释），少了这一跳的表现是「点一下，herdr 那边真切了，
+	// 屏幕上却没动，刷新页面反而对」。顺序反过来其实也成立（herdr 判的是「这一次
+	// 调用之后焦点在不在目标上」，不要求它真的改变了什么），先 focus 只是和
+	// 「跳过去 + 全屏」的说法对得上。
+	if err := o.C.PaneFocus(target); err != nil {
+		return nil, err
+	}
 	z, err := o.C.PaneZoom(target, mode)
 	if err != nil {
 		return nil, err

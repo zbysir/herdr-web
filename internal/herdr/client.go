@@ -296,6 +296,28 @@ func (c *Client) PaneZoom(id, mode string) (*Zoom, error) {
 	return w.Zoom, nil
 }
 
+// PaneFocus 把焦点切到某个 pane，**并且把所有连着的客户端的视图一起带过去**。
+//
+// 为什么 PaneZoom 之外还得有这一跳：herdr 0.9.0 把「我在看哪个 tab」改成了每个客户端
+// 自己的状态（release notes 里那条 "Multiple clients can now view different workspaces
+// and tabs independently"，#3526）。从此 socket 上只有三个方法会把已经 attach 的客户端
+// 拉到新焦点上 —— `workspace.focus` / `tab.focus` / `pane.focus`（herdr 源码里
+// `explicit_public_focus_target` 那张表，src/server/headless/client_views.rs）。
+//
+// **`pane.zoom` 不在那张表里**，而它照旧会改 herdr 那边的全局焦点 —— 所以这个失败是
+// **半静默**的：调用成功、`focus_changed` 也是 true、`pane.current` 问出来确实换人了，
+// 只有屏幕上一动不动。表现是「点面板一览切 pane，内容不变；刷新一下网页反而对了」
+// （刷新 = 新客户端，它没有自己的视图状态，按全局焦点初始化）。0.9.0 之前一个 server
+// 只有一个视图，`pane.zoom` 顺带就把画面带过去了，所以这条是升上 0.9.0 才现形的。
+//
+// 代价要知道：herdr 只给了「拉所有客户端」这一个口子，没有「只拉我这一个」的公开方法
+// （`focus_shell_client_on_tab` 要 client_id，只在客户端自己那条 socket 上认）。所以
+// 手机上点一下，桌面上那个 herdr 窗口也跟着跳过去 —— 这正是 0.9.0 之前的行为。
+func (c *Client) PaneFocus(id string) error {
+	var w paneWrap
+	return c.Call("pane.focus", map[string]any{"pane_id": id}, &w)
+}
+
 // ReadText 拿一屏**纯文本**（转义序列已经剥掉）。lines <= 0 = 不限。
 //
 // `source` 只有 `visible` / `recent` / `recent_unwrapped` / `detection`，而在 agent pane 上

@@ -75,8 +75,12 @@ dev:
 dev-server:
 	@set -a; [ -f "$(ENVFILE)" ] && . "$(ENVFILE)"; set +a; exec go run ./cmd/herdr-web
 
+# 测试跑在**清掉 HERDR_WEB_* 的环境**里。config 那几条断言的是「什么都不配时是什么样」
+# （默认只服务本地网络、没有公网入口），而 README 又建议把部署配置 export 进 shell 的 rc
+# —— 两条凑在一起，谁照做谁的 `make test` 就开始红，且报的是 config 的断言，看不出跟
+# 自己的 shell 有关。t.Setenv 只管得住它自己设的那几个，管不住继承来的。
 test:
-	go test ./...
+	env $(shell env | grep -oE '^HERDR_WEB_[A-Z0-9_]+' | sed 's/^/-u /' | tr '\n' ' ') go test ./...
 	npm --prefix web run typecheck
 # 前端就这一处要「拿真机量出来的几何钉住」（终端里折行的路径拼回来，静默坏过两次）。
 # node 直接跑那个 .ts，不引测试框架 —— 理由写在 web/src/term/paths.test.ts 开头

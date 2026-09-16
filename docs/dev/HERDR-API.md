@@ -80,11 +80,37 @@ w(d["schemas"]["request"]); print(len(out))'
 
 | 事实 | 怎么验的 |
 |---|---|
-| **带 `pane_id` 一次跨 workspace + tab + pane** | 对另一个 workspace 里的 pane 发 `mode:"on"`，回 `focus_changed:true`，`pane.current` / `workspace.list` 都跟着切过去了 —— **不用**先 `workspace.focus` 再 `tab.focus`。「面板一览」点一行就是这一个调用 |
+| **带 `pane_id` 一次跨 workspace + tab + pane** | 对另一个 workspace 里的 pane 发 `mode:"on"`，回 `focus_changed:true`，`pane.current` / `workspace.list` 都跟着切过去了 —— **不用**先 `workspace.focus` 再 `tab.focus`。但从 herdr 0.9.0 起**光这一个调用不够了**，见下面那段 |
 | **zoom 是 tab 级的开关，放大的永远是当前焦点 pane** | `pane.layout` 和 `layout.export` 里只有 tab 级的 `zoomed` + `focused_pane_id`，**没有** per-pane 的 zoom 字段；而且 `layout.panes[].rect` 给的是未放大的分屏几何（放大时两个 pane 都还是 120×58），所以「谁被放大了」只能由焦点推 |
 | 同 tab 内换 pane 回 `zoom_changed:false` + `reason:"already_zoomed"` 而 `focus_changed:true` | **那不是失败**：放大的对象跟着焦点换了，不需要 off 再 on |
 | 单 pane 的 tab 回 `zoomed:false` + `reason:"single_pane"` | 那个 pane 本来就占满整个 tab，焦点已经切过去了。别当失败报错 —— 前端要单独说一句，不然用户以为按钮没生效 |
 | `mode` 默认是 `toggle` | 所以「跳到某个 pane 并铺满」必须显式传 `"on"`，不能省。快捷键条上绑的 zoom 键走的是默认 toggle，那条路只能二选一 |
+
+### herdr 0.9.0 起：`pane.zoom` 带不动已经连着的客户端
+
+**表现是「点面板一览切 pane，屏幕一动不动；刷新一下网页反而对了」**，而且是**半静默**的 ——
+调用成功、`focus_changed` 回 true、`pane.current` 问出来确实换人了，只有画面没动。
+
+0.9.0 把「我在看哪个 tab」从 server 的一个全局状态改成了**每个客户端自己的**
+（release notes: "Multiple clients can now view different workspaces and tabs independently"，
+#3526）。从此 socket 上只有三个方法会把已经 attach 的客户端拉到新焦点上：
+
+    workspace.focus / tab.focus / pane.focus
+
+判据在 herdr 源码 `src/server/headless/client_views.rs` 的 `explicit_public_focus_target`：
+命中了才调 `focus_all_shell_clients_on_default_target()`。**`pane.zoom` 不在那张表里**，
+而它照旧改 server 的全局焦点 —— 全局焦点和客户端视图就此分了家。
+
+刷新页面之所以对，是因为那是**新**客户端：`reconcile_client_shell_locations()` 里
+客户端的视图是 `get_or_insert_with`，没有才按全局焦点填，已有的只做失效清理、不跟随。
+
+所以 `Outbox.Goto` 是**先 `pane.focus` 再 `pane.zoom`** 两跳：focus 那跳负责把画面带过去，
+zoom 只管放大。顺序反过来也成立（herdr 判的是「这次调用之后焦点在不在目标上」，不要求
+它真的改变了什么）。`pane.focus` 从 v0.7.3 就有，补这一跳不会让没升级的人炸。
+
+代价要知道：herdr 只给了「拉**所有**客户端」这一个口子（`focus_shell_client_on_tab` 要
+client_id，只在客户端自己那条 socket 上认）。所以手机上点一下，桌面那个 herdr 窗口也跟着
+跳过去 —— 这正好是 0.9.0 之前的行为。
 
 ## 100ms 的坎：请求必须和 connect 同一瞬间发出
 
