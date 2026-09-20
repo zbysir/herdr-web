@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>连不上 · herdr-web</title>
+<!--
+  离线兜底页。service worker 在 install 时把它缓存下来，只有**导航请求真的发不出去**
+  （飞行模式 / 后端没跑 / 隧道断了）时才会看到它。
+
+  三条限制决定了它长这样，别改坏：
+  ① **不能有任何脚本** —— 服务端的 CSP 是 `default-src 'self'`，没给 script-src 开
+     'unsafe-inline'，内联 <script> 和 onclick 都会被自己的 CSP 挡掉，而表现是
+     「按钮点了没反应」。所以「重试」就是一个 <a href="/">，交给浏览器重新导航。
+  ② **不能引任何外部文件** —— 离线时 /icon-192.png、/assets/*.css 一个都取不到，
+     引了就是一堆裂图。样式内联，图形用内联 SVG。
+  ③ 图形是手写的简化版（窗口 + 三个点），**没有搬羊的那条描图路径** —— 那条 1800+
+     字符的路径归 assets/make-logo.py 管，复制一份到这里就等于多了一处要同步的地方，
+     而这页的作用只是「让人知道是网络断了，不是应用坏了」。
+-->
+<style>
+  :root {
+    color-scheme: dark light;
+    --bg: #121212; --bar: #1a1a1a; --line: #2e2e2e;
+    --fg: #ededed; --muted: #9a9a9a; --brand: #3ecf8e;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f4f4f4; --bar: #fff; --line: #dcdcdc; --fg: #1c1c1c; --muted: #6b6b6b; }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px calc(16px + env(safe-area-inset-left)) 24px calc(16px + env(safe-area-inset-right));
+    background: var(--bg); color: var(--fg);
+    font: 13px/1.7 ui-sans-serif, -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  main { width: 100%; max-width: 380px; text-align: center; }
+  svg { width: 64px; height: 64px; opacity: .85; }
+  h1 { margin: 18px 0 8px; font-size: 17px; font-weight: 600; letter-spacing: .01em; }
+  p { margin: 0 0 6px; color: var(--muted); }
+  ul { margin: 16px 0 0; padding: 12px 16px; text-align: left; list-style: none;
+       background: var(--bar); border: 1px solid var(--line); border-radius: 12px; color: var(--muted); }
+  li { padding: 3px 0; }
+  li::before { content: "·"; color: var(--brand); margin-right: 8px; }
+  a {
+    display: inline-block; margin-top: 18px; padding: 8px 20px;
+    border: 1px solid var(--brand); border-radius: 6px;
+    color: var(--brand); text-decoration: none; font-size: 13px;
+  }
+</style>
+</head>
+<body>
+<main>
+  <svg viewBox="0 0 64 64" role="img" aria-label="herdr-web">
+    <rect width="64" height="64" rx="14" fill="#2b2b2b"/>
+    <path d="M0 12.5 H64 V50 A14 14 0 0 1 50 64 H14 A14 14 0 0 1 0 50 Z" fill="#191919"/>
+    <circle cx="11" cy="6.4" r="2.1" fill="#ededed" opacity=".3"/>
+    <circle cx="18" cy="6.4" r="2.1" fill="#ededed" opacity=".3"/>
+    <circle cx="25" cy="6.4" r="2.1" fill="#3ecf8e"/>
+    <path d="M17 30 l7 6 -7 6" fill="none" stroke="#ededed" stroke-width="3.2"
+          stroke-linecap="round" stroke-linejoin="round" opacity=".75"/>
+    <path d="M30 44 h17" fill="none" stroke="#ededed" stroke-width="3.2"
+          stroke-linecap="round" opacity=".75"/>
+  </svg>
+  <h1>连不上 herdr-web</h1>
+  <p>这台设备现在到不了服务端。终端和 pane 都在跑 herdr 的那台机器上，没有丢。</p>
+  <ul>
+    <li>手机 / 平板断网了？</li>
+    <li>那台机器上的 herdr-web 停了？</li>
+    <li>走隧道进来的话，隧道断了？</li>
+    <li>换过地址？从新地址重新打开一次</li>
+  </ul>
+  <a href="/">重试</a>
+</main>
+</body>
+</html>

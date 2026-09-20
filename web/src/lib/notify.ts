@@ -10,6 +10,8 @@
 //      `registration.showNotification()` —— 所以这里统一走 service worker 那条路。
 // 另外权限申请必须在**用户手势**里（设置里点那一下），定时器里偷偷申请一律被拒。
 
+import { registerSW } from './sw'
+
 /** 'unsupported' 浏览器没有；'insecure' 不是安全上下文（http 且非 localhost）；其余是权限状态 */
 export type NotifyState = 'unsupported' | 'insecure' | 'default' | 'granted' | 'denied'
 
@@ -20,15 +22,10 @@ export function notifyState(): NotifyState {
   return Notification.permission as NotifyState
 }
 
-/** 注册 SW（按需，不打开这个开关的人身上不会有）。返回 null = 这个环境用不了 */
-async function reg(): Promise<ServiceWorkerRegistration | null> {
-  if (!('serviceWorker' in navigator) || !window.isSecureContext) return null
-  try {
-    return await navigator.serviceWorker.register('/sw.js', { scope: '/' })
-  } catch {
-    return null // 注册失败（http、SW 被禁用）就当没有，界面上按 unsupported 说
-  }
-}
+// SW 的注册挪去了 lib/sw.ts：它现在**进页面就注册**（PWA 的「安装」那一档要求页面上
+// 有一个带 fetch 处理器的 SW，按需注册的话绝大多数人身上没有）。这里只是取那一份，
+// 所以开通知时 `reg()` 通常是立刻返回的。
+const reg = registerSW
 
 /**
  * 开通知：注册 SW + 申请权限。**必须在用户手势里调**（设置面板里点那一下）。

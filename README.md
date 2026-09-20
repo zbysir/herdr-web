@@ -266,6 +266,35 @@ arranged on a phone do not follow you to the desktop, while the definitions stay
 → Why the gestures are split this way, how the keyboard is handled, copy and paste on a phone, the
 details of the dock and the top bar: [MOBILE.md](docs/dev/MOBILE.md)
 
+### Install it as an app (PWA)
+
+You get a **standalone window**: no address bar or toolbar (several free terminal rows), its own
+icon on the desktop or home screen, a separate entry in the task switcher, and some of the keys the
+browser normally eats (`⌘W`, `Ctrl+W`) come back.
+
+| Platform | How |
+|---|---|
+| Android (Chrome / Edge) | Menu → **Install**. The menu offers two entries; **"Create shortcut" is not it** — that one is just a bookmark that opens the browser |
+| Desktop Chrome / Edge | The install icon at the right of the address bar, or Menu → Install herdr-web |
+| iPhone / iPad | Share → **Add to Home Screen** (Safari has no "install") |
+
+**It requires HTTPS with a valid certificate**, which is where this usually gets stuck:
+
+- ✅ A domain with a real certificate (setups 3 and 4 below, `HERDR_WEB_TLS=acme` or `proxy`).
+- ✅ `http://localhost` / `http://127.0.0.1` — browsers treat the local machine as a secure context.
+- ❌ **A self-signed certificate** (`HERDR_WEB_TLS=auto`, the LAN-direct path) — clicking through the
+  warning is not enough: the site works and can store passwords, but the browser **will not install
+  it**, leaving only "Create shortcut". To install it over the LAN, import the local CA from
+  `~/.herdr-web/` into the phone's system trust store.
+- ❌ A plain `http://` LAN address — same, and system notifications are gone too.
+
+On iOS, order matters: **add to the home screen first, then pair from inside it** (a home-screen web
+app has its own storage container; credentials set up in Safari do not carry over). Notifications
+likewise only work when opened from the home screen.
+
+Not working offline is expected — this is a terminal, and there is nothing to show without the
+server. When it cannot connect you get a short page explaining where it broke, not the dinosaur.
+
 ### Settings panel
 
 The ⚙ at the right end of the top bar, in four pages: **Terminal** (font size / light-dark, kitty

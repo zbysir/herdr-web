@@ -4,6 +4,7 @@ import { AArrowDown, AArrowUp, CircleHalf } from '@/icons'
 import type { ProfilesResponse, SoftkeysConfig, State } from '@/lib/api'
 import { HOLD_RATES, POPUP_CLEARS, type HoldRate, type KeyStyle, type PopupClear } from '@/lib/prefs'
 import { enableNotify, notifyState, testNotify, type NotifyState } from '@/lib/notify'
+import { installState, onInstallChange, promptInstall, type InstallState } from '@/lib/install'
 import { Panel } from './ui/panel'
 import { Button } from './ui/button'
 import { Checkbox } from './ui/checkbox'
@@ -37,6 +38,15 @@ const NOTIFY_HINT: Record<NotifyState, string> = {
   denied: '被拒过。手机上到「设置 → 通知」或浏览器的网站设置里把这个站的通知改成允许，再回来点',
   insecure: '这个地址不是安全上下文（要 https，或者 localhost），浏览器不给通知权限',
   unsupported: 'iPhone / iPad：Safari 标签页里拿不到通知权限，要先「添加到主屏幕」再从主屏打开（iOS 16.4+）。桌面上换 Chrome / Firefox / Safari',
+}
+
+// 装不了时**必须说清是哪一种**：这条路上真正会卡住的是证书（自签点过「继续访问」也不给装），
+// 而 Safari 压根没有「安装」这个说法，只能走菜单。混成一句「不支持」的话，前者会一直以为是
+// 浏览器的问题，去翻半天设置。
+const INSTALL_HINT: Record<InstallState, string> = {
+  installed: '已经装好了 —— 你现在就是从独立窗口打开的',
+  ready: '装完是独立窗口：没有地址栏，多好几行终端，⌘W / Ctrl+W 这类键也能拿回一部分',
+  no: 'iPhone / iPad：Safari 的「分享 → 添加到主屏幕」。Chrome / Edge 上没出现多半是证书 —— 自签证书点过「继续访问」也不给装，要有效的 https（或 localhost）',
 }
 
 export type TermOpts = { kitty: boolean; meta: boolean; copyOnSelect: boolean; sync2026: boolean; switchPanel: boolean }
@@ -226,6 +236,11 @@ function TermSection({
   // 浏览器那侧的通知权限。面板一开就问一次真实值（用户可能在浏览器设置里撤掉过）
   const [perm, setPerm] = useState<NotifyState>(notifyState)
   useEffect(() => { setPerm(notifyState()) }, [])
+
+  // 「装成 app」那一行。订阅而不是只读一次：beforeinstallprompt 可能在面板已经开着的时候
+  // 才到（页面刚加载就点开设置），而且点完之后那一份就作废了，两头都要让界面跟着改口
+  const [inst, setInst] = useState<InstallState>(installState)
+  useEffect(() => onInstallChange(() => setInst(installState())), [])
 
   // 打开的那一下**必须**是用户手势 —— 浏览器只在手势里给权限弹窗（定时器里申请一律静默拒绝）
   const flipOS = async (v: boolean) => {
@@ -503,6 +518,33 @@ function TermSection({
           <Checkbox checked={osFg} onCheckedChange={(v) => onOSFg(!!v)} />
           我正看着这一页时也弹
         </label>
+      </div>
+
+      {/* 装成 app。放在通知旁边是因为它们是同一类东西 —— 浏览器 / 操作系统那侧的能力，
+          不是终端的开关（见 TUI-VS-GUI.md 的第 ④ 条）。装好之后这一行只剩一句话，
+          不再留一个按不动的按钮占位。 */}
+      <div className="mt-3 border-t border-line pt-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[13px]">装成 app</span>
+          {inst === 'ready' && (
+            <Button
+              size="tiny"
+              onClick={() => {
+                void (async () => {
+                  // 这一下是用户手势 —— 浏览器只在手势里让弹这个对话框
+                  const r = await promptInstall()
+                  if (r === 'accepted') toast('装好了。下次从桌面 / 主屏那个图标打开')
+                  else if (r === 'dismissed') toast('取消了。想再装的话刷新一下页面，按钮会回来')
+                  else toast('这一份已经用掉了，刷新一下页面再点')
+                })()
+              }}
+            >
+              安装到主屏幕
+            </Button>
+          )}
+          {inst === 'installed' && <span className="text-xs text-brand">✔ 已安装</span>}
+        </div>
+        <p className="mt-1 text-xs/relaxed text-faint">{INSTALL_HINT[inst]}</p>
       </div>
 
       {heals > 0 && (

@@ -7,6 +7,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no, interactive-widget=resizes-content">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
+  <!-- iOS 从主屏打开时的状态栏。**别改成 black-translucent** —— 那会让页面钻到刘海
+       底下，而这个布局只有底部 Dock 用了 safe-area-inset，顶栏没有，改了就是顶栏
+       被状态栏盖掉一截。black 是纯黑底白字，不动布局，正好配深色的 theme-color。 -->
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="theme-color" content="#1a1a1a">
   <!-- 图标是 assets/make-logo.py 生成的（herdr 的羊关在浏览器窗口里，见那个脚本的注释）。
        svg 当 favicon，png 给 iOS 的「添加到主屏幕」—— iOS 不认 svg 的 apple-touch-icon。

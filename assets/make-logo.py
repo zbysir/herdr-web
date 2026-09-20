@@ -6,7 +6,13 @@
 为什么要个脚本而不是手改 SVG：羊的剪影是从 herdr 的 assets/logo.svg 里复用过来的
 一条 1800 多字符的描图路径（potrace 输出），手工改它不现实；而同一份图形要出
 圆角版（favicon / 页面里）、方角版（iOS 和 Android 会自己套圆角遮罩，自己再圆
-一次会露出两层圆角）和三种尺寸的 png，只有生成靠得住。
+一次会露出两层圆角）、maskable 版（见下）和几种尺寸的 png，只有生成靠得住。
+
+maskable 是**第三份**，不是方角版换个名字：Android 装成 PWA 之后会拿自己的遮罩
+（圆 / 方圆 / 水滴，各家 ROM 不一样）去裁图标，规范只保证**中心直径 80% 的圆**不
+被裁掉。方角版是塞满的，直接声明成 maskable 就会被啃掉边角和羊的下巴；所以这份
+把整幅缩到 72% 居中、四周补同色底 —— 底铺满整个画布，任何形状的遮罩下都是完整
+一块，不会露出透明角。
 
 图形本身：herdr 的羊关在一个浏览器窗口里 —— 产品就是这一句「浏览器里的 herdr」。
 羊脸上那个 >_ 是 herdr 原本就挖空的，这里在剪影**底下**垫一块品牌绿，挖空处就自然
@@ -70,6 +76,18 @@ def icon(chrome, page, ink, rx, uid, s=1.6, tx=-13.0, ty=1.0):
     )
 
 
+def maskable(body, pad=0.72):
+    """把满幅那份缩到中间，四周补底色 —— 给 Android 的遮罩留安全区（见模块注释）。
+
+    外面那块 rect 是承重的：遮罩裁出来的形状之外必须也是实色，不然圆角外面是透明的。
+    """
+    off = 64 * (1 - pad) / 2
+    return (
+        f'  <rect width="64" height="64" fill="#2b2b2b"/>\n'
+        f'  <g transform="translate({off:.2f} {off:.2f}) scale({pad})">\n{body}\n  </g>'
+    )
+
+
 def write(path, body, note=True):
     open(path, "w").write(
         '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" '
@@ -86,24 +104,29 @@ def main():
         write(os.path.join(d, "logo.svg"), dark)
         write(os.path.join(d, "logo-light.svg"), light)
 
+    sq = icon("#2b2b2b", "#191919", SNOW, 0, "sq", s=1.72, tx=-14, ty=-2)
     square = os.path.join(HERE, ".square.svg")  # 只是 png 的中间产物
-    write(square, icon("#2b2b2b", "#191919", SNOW, 0, "sq", s=1.72, tx=-14, ty=-2), note=False)
+    write(square, sq, note=False)
+    mask = os.path.join(HERE, ".maskable.svg")
+    write(mask, maskable(sq), note=False)
     try:
-        for name, size, out in [
-            ("apple-touch-icon.png", 180, PUB),
-            ("icon-192.png", 192, PUB),
-            ("icon-512.png", 512, PUB),
-            ("logo.png", 512, HERE),
+        for name, size, out, src in [
+            ("apple-touch-icon.png", 180, PUB, square),
+            ("icon-192.png", 192, PUB, square),
+            ("icon-512.png", 512, PUB, square),
+            ("icon-maskable-512.png", 512, PUB, mask),
+            ("logo.png", 512, HERE, square),
         ]:
             subprocess.run(
-                ["rsvg-convert", "-w", str(size), "-h", str(size), square, "-o", os.path.join(out, name)],
+                ["rsvg-convert", "-w", str(size), "-h", str(size), src, "-o", os.path.join(out, name)],
                 check=True,
             )
             print("→", os.path.relpath(os.path.join(out, name), REPO))
     except (FileNotFoundError, subprocess.CalledProcessError) as e:
         print("png 没出（需要 rsvg-convert：brew install librsvg）：", e)
     finally:
-        os.path.exists(square) and os.remove(square)
+        for t in (square, mask):
+            os.path.exists(t) and os.remove(t)
 
 
 if __name__ == "__main__":
