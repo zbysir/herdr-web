@@ -217,6 +217,12 @@
   直径 80% 的圆），由 `assets/make-logo.py` 出，别手改 png。**`fetch` 监听器删掉是完全
   静默的**：页面一切正常，只是「安装」那一档当场消失。验的时候记住 `beforeinstallprompt`
   在加载早期就触发，**事后挂 listener 抓不到**，会得出「不可安装」这个错结论。
+  还有一条跟着来的：**装成 app 之后「呼出键盘自动全屏」要自己停用**（`enterFull` 的 `auto`
+  参数 + `install.isStandalone()`）—— standalone 下地址栏本来就没有，再请求全屏一格都拿不回来，
+  赔的却是每弹一次键盘一次重排 + Android 那条系统提示。闸开在 `enterFull` 里而不是三个调用点上：
+  那三条路读的东西不一样（两条读 state，`onKeyboardChange` 直接读 localStorage 镜像），拦不齐。
+  **顶栏那个全屏按钮不受影响**（standalone 下它还能吃掉状态栏），而设置里那一档必须**显式
+  disabled 并说明**，光在底下悄悄不执行就是「开关点了没反应」。
 - passkey 那条路上有一条**静默**的：**`NotAllowedError` 不等于「用户取消了」**。WebAuthn
   规范故意让几乎所有失败都报同一个错（不让网页试探「这台设备上有没有某把 passkey」），
   所以「人划掉了」和「浏览器因为这个页面证书被跳过过而不肯做」在错误对象上一模一样 ——

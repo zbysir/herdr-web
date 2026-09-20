@@ -12,6 +12,7 @@ import { useNotices } from '@/hooks/useNotices'
 import { useGitDirty } from '@/hooks/useGitDirty'
 import { useLanDirect } from '@/hooks/useLanDirect'
 import { away, onNotifyClick, showNotify } from '@/lib/notify'
+import { isStandalone } from '@/lib/install'
 import { usePhone } from '@/hooks/usePhone'
 import { useKeyboardUp } from '@/hooks/useKeyboardUp'
 import { useArm } from '@/hooks/useArm'
@@ -860,13 +861,21 @@ export default function App() {
   /**
    * 进全屏。已经在全屏里就什么都不做。
    *
-   * quiet：键盘那条路会**反复**走到这儿（每弹一次键盘一次），失败提示只说一次就够了 ——
-   * 每弹一次键盘吐一条 toast 比不全屏烦得多。但也不能一声不吭：静默失败正是「点了没反应」
-   * 那类查不出来的毛病。
+   * `auto` = 这一下不是人点的全屏按钮，是**键盘那条路**自动来的（三个入口：点输入框的
+   * pointerdown、⌨ 键的 onKeyboardChange、「视口被压矮了」那个兜底）。它管两件事：
+   *
+   * ① **装成 app（standalone）之后这条路整个不走** —— 地址栏和工具条本来就没有，
+   *    `requestFullscreen` 再要一次一格高度都拿不回来，赔进去的却是实打实的：一次重排
+   *    （清画布 + SIGWINCH + herdr 清屏重画，见「改尺寸会闪一下全黑」那条）、Android 上
+   *    那条「已进入全屏」的系统提示，以及从此多一个「怎么退出全屏」的问题。**只挡自动
+   *    这条**：顶栏那个全屏按钮照旧能用 —— standalone 下它还能再吃掉状态栏那一条。
+   * ② 失败提示只说一次：这条路每弹一次键盘走一遍，反复吐 toast 比不全屏烦得多。
+   *    但也不能一声不吭 —— 静默失败正是「点了没反应」那类查不出来的毛病。
    */
-  const enterFull = (quiet = false) => {
+  const enterFull = (auto = false) => {
     const d = document as FsDoc
     const el = document.documentElement as FsEl
+    if (auto && isStandalone()) return
     if (d.fullscreenElement ?? d.webkitFullscreenElement) return
     // 同一下手势会从两条路进来（点输入框的 pointerdown + 键盘状态回调），而
     // `fullscreenElement` 要等请求真的落地才有值 —— 不挡住第二次的话，浏览器会拒掉它，
@@ -875,7 +884,7 @@ export default function App() {
     fullPending.current = true
     const say = (m: string) => {
       localStorage.setItem('kbdFullErr', m) // 原因留着给设置面板显示（手机上没有控制台）
-      if (quiet && fullWarned.current) return
+      if (auto && fullWarned.current) return
       fullWarned.current = true
       toast(m)
     }

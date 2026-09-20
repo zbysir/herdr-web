@@ -285,16 +285,35 @@ function TermSection({
       {row('sync2026', '同步输出 DEC 2026（防画面撕裂；留一块空白画不上来时关它）')}
 
       {/* 手机上打字那一下最缺高度：键盘吃掉半屏，地址栏和工具条又占一截。
-          **收键盘不退出**是刻意的 —— 每打一次字闪进闪出一次全屏，比不全屏还难受。 */}
-      <label className="flex cursor-pointer items-start gap-2.5 rounded-md py-1 transition-colors hover:text-fg">
-        <span className="pt-px"><Checkbox checked={kbdFull} onCheckedChange={(v) => onKbdFull(!!v)} /></span>
+          **收键盘不退出**是刻意的 —— 每打一次字闪进闪出一次全屏，比不全屏还难受。
+
+          装成 app 之后这一档**自动停用**（App 的 enterFull 里挡的）：地址栏本来就没有了，
+          再请求全屏一格高度都拿不回来，只赔上一次重排和一条系统提示。这里必须**把话说
+          出来** —— 光在底下悄悄不执行，就是「开关点了没反应」那类查不出来的毛病。 */}
+      <label className={'flex items-start gap-2.5 rounded-md py-1 transition-colors ' +
+        (inst === 'installed' ? 'cursor-default opacity-60' : 'cursor-pointer hover:text-fg')}>
+        <span className="pt-px">
+          <Checkbox
+            checked={kbdFull && inst !== 'installed'}
+            disabled={inst === 'installed'}
+            onCheckedChange={(v) => onKbdFull(!!v)}
+          />
+        </span>
         <span className="text-[13px]/relaxed">
           呼出键盘时自动全屏
-          <span className="mt-0.5 block text-xs text-faint">
-            收起键盘<b>不</b>退出（退出用顶栏那个按钮）。键盘吃掉半屏时，地址栏那一截最值钱
-          </span>
+          {inst === 'installed' ? (
+            <span className="mt-0.5 block text-xs text-faint">
+              装成 app 之后用不上了 —— 地址栏和工具条本来就没有，再请求全屏拿不回高度
+            </span>
+          ) : (
+            <span className="mt-0.5 block text-xs text-faint">
+              收起键盘<b>不</b>退出（退出用顶栏那个按钮）。键盘吃掉半屏时，地址栏那一截最值钱
+            </span>
+          )}
           {/* 手机上没有控制台，「为什么没全屏」只能靠这一句。成功一次就自己消失 */}
-          {kbdErr && <span className="mt-0.5 block text-xs text-bad">上次没成功：{kbdErr}</span>}
+          {kbdErr && inst !== 'installed' && (
+            <span className="mt-0.5 block text-xs text-bad">上次没成功：{kbdErr}</span>
+          )}
         </span>
       </label>
 

@@ -21,14 +21,23 @@ let deferred: Prompt | null = null
 const subs = new Set<() => void>()
 const emit = () => subs.forEach((f) => f())
 
-/** 已经从主屏 / 独立窗口打开了？iOS Safari 只有 `navigator.standalone` 这一个判据 */
-function standalone(): boolean {
+/**
+ * 已经从主屏 / 独立窗口打开了？iOS Safari 只有 `navigator.standalone` 这一个判据。
+ *
+ * 导出是因为**「呼出键盘自动全屏」那条路要拿它当闸**：装成 app 之后地址栏和工具条本来
+ * 就没有，`requestFullscreen` 再要一次拿不回任何高度，只会赔上一次重排（清画布 +
+ * SIGWINCH + herdr 清屏重画）和 Android 上那条「已进入全屏」的系统提示。见 App 的 enterFull。
+ *
+ * 一个 document 活着的时候这个值不会变（装完 app 之后，当前这个标签页仍然是 browser
+ * 模式，人得从图标重新打开），所以读一次就够，没上 matchMedia 的 change 监听。
+ */
+export function isStandalone(): boolean {
   if (typeof matchMedia === 'function' && matchMedia('(display-mode: standalone)').matches) return true
   return (navigator as unknown as { standalone?: boolean }).standalone === true
 }
 
 export function installState(): InstallState {
-  if (standalone()) return 'installed'
+  if (isStandalone()) return 'installed'
   return deferred ? 'ready' : 'no'
 }
 
