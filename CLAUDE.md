@@ -34,12 +34,22 @@
 
 所以下面这几条是硬规矩，不是建议：
 
-1. **常驻那份服务是用户自己手动跑的（`make run`），别替他起、别重启、更别杀。**
+1. **常驻那份服务默认别碰 —— 别替他起、别重启、更别杀。**
    他在平板上说话投稿走的就是这个进程 —— 它一停，人连「给你发下一条消息」的路都没了，
    而你在这边一点症状都看不到。所以编完就说一句「编好了，你重启一下」，别自己去起。
    要在真机上验改动，另起一个调试实例（下面第 3 条），**验完按 pid 杀**（起的时候记下来）：
    `pkill -f herdr-web` 这类按名字匹配的一律不许用 —— 它会把常驻那份一起带走（真踩过一次，
    把用户的投稿路掐了十几分钟）。
+
+   **它现在是 launchd 托管的**（`~/Library/LaunchAgents/io.github.zbysir.herdr-web.plist`，
+   `KeepAlive=true`），跑的是 **npm 全局装的那个二进制**，配置在 plist 的
+   `EnvironmentVariables` 里（**不读仓库的 `.env`**），日志在 `~/.herdr-web/logs/herdr-web.log`。
+   早先是用户自己 `make run` 的，2026-09-20 核实已经不是了。由此来的两条：
+   ① **`npm i -g` 会就地换掉正在跑的那个文件**，而进程还用着旧 inode —— 「装完了」不等于
+   「跑的是新版」，`herdr-web version` 报的是**文件**的版本，不是那个进程的；
+   ② `KeepAlive=true` 意味着 `kill` 掉它 launchd 立刻拉起来。用户**明确要求**更新版本时才重启，
+   用 `launchctl kickstart -k gui/$(id -u)/io.github.zbysir.herdr-web`（原地重启，配对设备和
+   passkey 都在 `~/.herdr-web/` 里，不会丢）。
 2. **不要为了省事关掉鉴权。** 一个「反正只有本机能连，先把鉴权关了调一下」的临时状态，
    在这台机器上等于把一个登录 shell 挂在公网上，只要那段时间有人扫到就完了。
    要免配对就 `HERDR_WEB_TRUST_LOOPBACK=1`（它只在主口生效，公网口不认），
@@ -47,9 +57,13 @@
 3. **起本地实例要给自己一套独立的端口和目录**，别抢默认口：
    ```bash
    HERDR_WEB_PORT=7811 HERDR_WEB_DIR=/tmp/herdr-web-dev HERDR_WEB_UPDATE_CHECK=false \
-   HERDR_WEB_TRUST_LOOPBACK=1 go run ./cmd/herdr-web
+   HERDR_WEB_TRUST_LOOPBACK=1 HERDR_WEB_PUBLIC_PORT=0 HERDR_WEB_LAN_PORT=0 \
+   HERDR_WEB_TLS=off go run ./cmd/herdr-web
    ```
-   （`HERDR_WEB_DIR` 另给一个的理由：设备凭据和锁文件不要和常驻服务那份打架。）
+   （`HERDR_WEB_DIR` 另给一个的理由：设备凭据和锁文件不要和常驻服务那份打架。后面那三个
+   得**显式关掉**：`.env` 里配着公网口 27788 和局域网口 7790，而常驻那份正占着它们 ——
+   不关的话调试实例在「端口已被占用」上直接起不来，而报错里说的是那两个口，跟你改的东西
+   看着毫无关系。）
 4. **公网只走公网口。** 主口（`HERDR_WEB_PORT`，默认 7788）在代码里就只服务本地网络：
    对端不是本机 / 私网 / 链路本地 / CGNAT 一律 403（`server.PrivateListener`）。要暴露就
    配 `HERDR_WEB_PUBLIC_PORT`，隧道的 `localPort` 指那个口。**不要把隧道改回指主口**，
