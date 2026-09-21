@@ -1648,9 +1648,17 @@ export default function App() {
                 ),
             )}
           />
-          <span className="truncate text-xs text-muted tabular-nums max-phone:hidden">
-            {chatOpen ? (chatOK === false ? '对话读不到' : '对话') : `终端 ${status.text}`}
-          </span>
+          {/*
+            **chat 模式下只留那颗点，不写字**（用户点名去掉的）。理由是那两个字不带信息：
+            点的颜色已经说了「读得到 / 读不到」，细节在 title 里，而读不到时面板里还有
+            一条自己的细带。而**非 chat 那一档要留**：那行是「终端 120×34」，尺寸是真信息。
+            竖屏两档都收掉（`max-phone:hidden`）—— 手机上那点宽度要留给右边那排图标。
+          */}
+          {!chatOpen && (
+            <span className="truncate text-xs text-muted tabular-nums max-phone:hidden">
+              终端 {status.text}
+            </span>
+          )}
           {/* 哪个 herdr session。手机上状态文字会收掉，这个标签留着 —— 「我这会儿在哪个
               session」比「120×34」重要得多：命名 session 是**另一个 herdr**，pane 列表
               和投稿目标全是另一套。 */}
