@@ -32,6 +32,12 @@ import { CAP_BY_ID, TOPBAR_DEFAULT, type CapId, type PanelId } from '@/capabilit
 const LS_CHAT = 'chatOpen'
 
 /**
+ * 对话区字号夹在这个范围里，出厂 13（原来写死的那个值）。
+ * 再小了手机上读不了，再大了一条消息占半屏 —— 而它和终端字号不共享，见 App 里那段注释。
+ */
+const clampChat = (n: number) => Math.min(24, Math.max(11, n > 0 ? n : 13))
+
+/**
  * 抢跑那个焦点提示最多活多久（见 focusHint 的收尾 effect ②）。
  *
  * 它要盖住的只是 goto + 重拉列表那两次往返（实测一百多毫秒），2 秒是足够宽的余量；
@@ -149,6 +155,14 @@ export default function App() {
   const [brand, setBrand] = useState<BrandId>(brandId)
   const [fontSize, setFontSize] = useState(
     () => Number(localStorage.getItem('fontSize')) || (matchMedia('(pointer: coarse)').matches ? 11 : 13),
+  )
+  /**
+   * 对话区的字号，**和上面那个终端字号是两回事**（用户点名要分开）：那个管 xterm 的
+   * 等宽网格（改了要重算行列、触发 SIGWINCH），这个只是 chat 那几个气泡的 CSS 字号。
+   * 出厂 13px（原来写死的那个值），手机上也一样 —— 它不像终端那样受列宽挤压。
+   */
+  const [chatFont, setChatFont] = useState(
+    () => clampChat(Number(localStorage.getItem('chatFont'))),
   )
   const [opts, setOpts] = useState<TermOpts>({
     // 这五个**整组**跟着 profile 走（见 lib/prefs.ts）。前三个原来压根没落盘 ——
@@ -914,6 +928,7 @@ export default function App() {
     setBrand(brandId())
     const fs = Number(localStorage.getItem('fontSize'))
     if (fs > 0) setFontSize(sess.current?.setFontSize(fs) ?? fs)
+    setChatFont(clampChat(Number(localStorage.getItem('chatFont'))))
   }
 
   /**
@@ -1203,6 +1218,14 @@ export default function App() {
    */
   const refocusTerm = () => { if (kbdUp || finePointer()) sess.current?.focus() }
 
+  /** 对话字号加减。夹在 11..24：再小了手机上读不了，再大了一条消息占半屏 */
+  const bumpChatFont = (d: number) => {
+    const n = clampChat(chatFont + d)
+    setChatFont(n)
+    localStorage.setItem('chatFont', String(n))
+    pushPref(profile.id, 'chatFont', String(n), toast)
+  }
+
   const bumpFont = (d: number) => {
     const n = sess.current?.setFontSize(fontSize + d) ?? fontSize
     setFontSize(n)
@@ -1311,6 +1334,18 @@ export default function App() {
    * 跳完**不改键盘的开合**（见 refocusTerm）：刚跳过去多半是要看，不是要打字，而本来收着的
    * 键盘被跳转顶出来最烦 —— 那时候屏幕只剩一半，还得先把它收掉才能看清跳到哪儿了。
    */
+  /**
+   * 这个 pane **给人看的名字**：tab 标签 + agent（和 chat 头上那份一致）。
+   *
+   * toast 里原来直接印 pane id（`对话已切到 w7:p1Y`）—— 那串东西对人没有意义
+   * （用户报的）。id 只在列表里对不上号时才有用，所以拿不到标签才退回它。
+   */
+  const paneName = (id: string) => {
+    const p = compose.panes.find((x) => x.id === id)
+    if (!p) return id
+    return (p.tab || p.id) + (p.agent ? ` · ${p.agent}` : '')
+  }
+
   const gotoPane = async (id: string, zoom: boolean) => {
     // 浮层照旧收掉（挑完了就该让路）。**chat 不在这个槽里，所以不受影响** ——
     // 它是个模式，切 pane 不该退出（用户报过两次）。
@@ -1326,7 +1361,7 @@ export default function App() {
     if (r.target !== id) {
       // herdr 说焦点在别处 —— 跟它的说法，别让 chat 停在我们以为的那个上
       setFocusHint(r.target)
-      toast(`没跳到 ${id}：herdr 说焦点在 ${r.target}`)
+      toast(`没跳到 ${paneName(id)}：herdr 说焦点在 ${paneName(r.target)}`)
       void compose.loadPanes(true) // 列表可能已经过期了（那个 pane 被关掉之类的）
       return
     }
@@ -1343,14 +1378,14 @@ export default function App() {
       和左上角那个状态点、那个「连接」按钮同一类毛病：给终端写的话漏进了 chat 模式。
     */
     if (chatOpen) {
-      toast(`对话已切到 ${r.target}`)
+      toast(`对话已切到 ${paneName(r.target)}`)
       return
     }
     const offline = status.cls !== 'on'
     toast(
       (r.singlePane
-        ? `已跳到 ${r.target}（这个 tab 只有一个 pane）`
-        : `已跳到 ${r.target}${r.zoomed ? ' · 全屏' : ' · 已退出全屏'}`)
+        ? `已跳到 ${paneName(r.target)}（这个 tab 只有一个 pane）`
+        : `已跳到 ${paneName(r.target)}${r.zoomed ? ' · 全屏' : ' · 已退出全屏'}`)
       + (offline ? '。终端这会儿没连上，画面是旧的 —— 连上就跟过来了' : ''),
     )
   }
@@ -1810,6 +1845,7 @@ export default function App() {
             onOpenPath={(p) => void openPath(p)}
             onHealth={setChatOK}
             focus={focusHint}
+            chatFont={chatFont}
           />
         )}
         {/* 「正在打开…」那一屏：和查看器同层（z-20），它一出来就换成查看器 */}
@@ -1864,6 +1900,8 @@ export default function App() {
             state={state}
             fontSize={fontSize}
             onFont={bumpFont}
+            chatFont={chatFont}
+            onChatFont={bumpChatFont}
             scheme={scheme}
             onScheme={flipScheme}
             brand={brand}
