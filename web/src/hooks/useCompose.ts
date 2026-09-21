@@ -12,6 +12,17 @@ const HIST_MAX = 30
 
 export interface ComposeCfg { poll: number; push: number }
 
+/** 刚投出去还没在转录里露面的那一条（chat 模式的乐观回显） */
+export interface SentEcho {
+  /** 服务端解析出来的真实 pane —— 「跟随焦点」那一档下它和你以为的不一定是同一个 */
+  target: string
+  text: string
+  at: number
+}
+
+/** 最多留几条回显。同时挂着好几条「投递中」本身就说明出问题了，留多了只是噪音 */
+const SENT_MAX = 8
+
 export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toast: (m: string) => void) {
   const [text, setText] = useState('')
   const [panes, setPanes] = useState<Pane[]>([])
@@ -128,6 +139,10 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
       say2('herdr：' + (e as Error).message, true)
       return
     }
+    // first：这是**开页后的第一拍**（还没解析过任何 pane）。它必然满足下面那个 switched，
+    // 而那会儿列表刚拉过（openChat / 恢复那个 effect 里），所以不算「切换」——
+    // 不分的话每次开页白拉一次 /herdr/panes（几十个 pane，在跑着 agent 那台机器上）。
+    const first = !resolved.current
     const switched = r.target !== resolved.current
     resolved.current = r.target
     const pinNote = target === FOLLOW ? '' : ' · 草稿锁在这个 pane 上'
@@ -139,6 +154,22 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
                 : ' · shell pane 读不到输入行（投稿照常可用）'
 
     if (switched) {
+      /*
+        **焦点换了就把 pane 列表一起刷新。**
+
+        这一拍是整个前端唯一每拍都现问 herdr「焦点在哪」的地方（服务端 `resolve` 走
+        `pane.current`）；而 `panes` 那份列表只在**事件**时才重拉（开 chat / 开面板 /
+        自己点 goto）。人在**别的终端里**用 herdr 切了 pane 时一个事件都没有，于是两边
+        对不上：发件箱这儿跟过去了，而 chat 用的是列表里那个旧的 `focused` 标记，头上
+        还挂着上一个项目的对话（用户报的）。
+
+        这不只是显示不一致 —— 投稿跟的是**这儿**解析出来的焦点，而人读的是 chat 那一屏，
+        于是「看着 A 的对话，话发给了 B」。所以必须让两边同源。
+
+        放在 `switched` 里面而不是每拍都拉：切 pane 是偶发的，而 `/herdr/panes` 是在跑着
+        agent 的那台机器上问几十个 pane（实测 55 个），每拍白拉一次不值当。
+      */
+      if (!first) void loadPanes(true)
       // 焦点换了 pane：框里是远端来的就直接换成新 pane 的内容，是自己写的就留着
       if (own.current) say2(`${label(r)} · 本地有草稿，没自动拉回（清空框就跟回来）`)
       else { adopt(r.text ?? '', r.target); say2(`${label(r)}${boxNote}`) }
@@ -150,7 +181,7 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
       return
     }
     say2(`${label(r)}${own.current ? ' · 本地草稿未投' : ''}${pinNote}${boxNote}`)
-  }, [aimed, adopt, label, say2, visible])
+  }, [aimed, adopt, label, loadPanes, say2, visible])
 
   // 自动拉回的心跳。用自排队的 setTimeout 而不是 setInterval：一拍要打 3 次 socket
   // 调用，间隔调小或者网络一慢，setInterval 会把请求叠起来。
@@ -232,9 +263,57 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
     }
   }, [aimed, adopt, label, say2])
 
-  const submit = useCallback(async () => {
-    const body = textRef.current
-    if (!body.trim()) { toast('框里是空的'); return }
+  /**
+   * 刚投出去的那几条（**给 chat 模式做乐观回显用的**）。
+   *
+   * 为什么要这个：投稿到它出现在 chat 里之间有几秒空窗 —— 投稿走 `agent.prompt`，agent 收到
+   * 之后才把那一行写进转录，而我们是 3 秒轮一次。那几秒里对话流上一点动静都没有，
+   * 看着像没投出去（用户报的）。所以投成功就先在本地摆一条「投递中」的气泡，
+   * 等真的那一条从转录里读回来再撤掉。
+   *
+   * 存的是**投给了哪个 pane**（`target`，服务端解析后的真实 pane）+ 原文 + 时间：
+   * chat 那边只回显「投给当前看着这个 pane」的，不然会在 A 的对话里看到投给 B 的话。
+   */
+  const [sent, setSent] = useState<SentEcho[]>([])
+
+  /**
+   * 已经挂上的图。**路径不进输入框，投稿那一刻才拼到文本末尾。**
+   *
+   * 为什么：那条路径实测 52 个字符（`~/.herdr-web/uploads/20260921-151443-3ad6ae.jpg`），
+   * 而手机上那一行输入框大概只放得下二十几个 —— 传一张图就把整行吃光，人想说的话没地方写
+   * （用户报的）。而路径**必须**出现在投给 agent 的文本里（API 里没有图片通道，agent 是去读
+   * 磁盘的），所以它只能从「显示」里挪走，不能从「投出去的内容」里挪走。
+   *
+   * chip 放在**那一行里面**（输入框左边）而不是另起一行：发件箱**不能长高** ——
+   * 高度一变就是 Dock 变高 → 终端重排 → SIGWINCH + 冻帧（见 CLAUDE.md）。
+   */
+  const [atts, setAtts] = useState<UploadResult[]>([])
+  const attsRef = useRef<UploadResult[]>([])
+  attsRef.current = atts
+
+  /** 挂上几张图（发件箱传图和顶栏传图都走这儿） */
+  const hold = useCallback((rs: UploadResult[]) => {
+    if (rs.length) setAtts((a) => [...a, ...rs])
+  }, [])
+
+  /** 去掉最后挂上的那一张（chip 上那个 ×，再点一下再少一张） */
+  const dropAtt = useCallback(() => setAtts((a) => a.slice(0, -1)), [])
+
+  /**
+   * 投稿。
+   *
+   * `override` 是**富输入框自己拼好的那段**（图片 chip 就地展开成路径，见 ComposeRich 的
+   * `read`）—— 那一版里 chip 住在 DOM 里，这个 hook 手上没有它们。纯 textarea 那一版
+   * 不传，照旧用「说的话 + 挂着那几张图的路径」。
+   */
+  const submit = useCallback(async (override?: string) => {
+    // **投出去的内容 = 说的话 + 那几张图的路径。**
+    // 路径必须在文本里（agent 是去读磁盘的），只是不在输入框里显示成 52 个字符。
+    const said = textRef.current.trim()
+    const paths = attsRef.current.map((a) => a.path)
+    const body = override !== undefined ? override.trim() : [said, ...paths].filter(Boolean).join(' ')
+    // 只挂了图、一个字没写也算数（「看这张图」这种）—— 所以判空要连附件一起看
+    if (!body) { toast('框里是空的'); return }
     clearTimeout(pushTimer.current)
     setBusy(true)
     inFlight.current = true
@@ -246,10 +325,26 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
       localStorage.setItem(HIST_KEY, JSON.stringify(hist.current))
       setText('')                                      // 发完就清空，不做增量同步
       textRef.current = ''
+      setAtts([])                                      // 附件跟着一起清
       synced.current = ''
       own.current = false
       pinned.current = ''                              // 框空了，重新跟随焦点
       resolved.current = r.target
+      // 乐观回显：记下「投给了哪个 pane + 原文」，chat 那边先摆一条「投递中」。
+      //
+      // **投给没有 agent 的 pane 不记**（`r.agent` 空 = 普通 shell）。用户报的就是这条：
+      // 他在终端里敲 `claude` 去**启动** agent —— 那是一条 shell 命令，不是发给 agent 的话，
+      // 永远不会出现在 agent 的转录里，于是那条回显一直挂着。更坏的是连带：
+      // 「认不出原文就丢最老那条」那个兜底（见 dropSent）会在下一句**真话**到达时把这条
+      // `claude` 弹掉，于是真正那句反过来一直显示成「投递中」。
+      //
+      // 判据就是「这段字有没有进 agent 的输入框」—— 没进去的话转录里注定没有它，
+      // 那就不该拿转录去等它。
+      if (r.agent) {
+        // **只留最近几条**，而且 60 秒没被真的那条顶掉就自己消失 —— 同时挂着好几条
+        // 「投递中」本身就说明出问题了，一直挂着比没有更让人不放心。
+        setSent((old) => [...old, { target: r.target, text: body, at: Date.now() }].slice(-SENT_MAX))
+      }
       say2(`已投给 ${r.target}[${r.agent || 'shell'}] · ${r.chars} 字`)
     } catch (e) {
       say2('投稿失败：' + (e as Error).message, true)
@@ -259,6 +354,38 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
       setBusy(false)
     }
   }, [aimed, say2, toast])
+
+  /**
+   * chat 那边读到一条人话了，把对应的回显撤掉。
+   *
+   * # 为什么不能只靠「原文一样」
+   *
+   * 第一版是 `x.text !== text` —— 屏幕上照旧出现两条（用户报的，两张截图）。原因是投出去的
+   * 原文和转录里记下来的**不保证逐字相同**：claude 把投稿当粘贴处理，包一层
+   * `<pasted_content …>` 还前后加空行（实测 `'\n\n<pasted_content id="8e39">\n…\n</pasted_content …>\n'`），
+   * 服务端剥壳 + TrimSpace 之后**通常**就对上了，但只要哪一头多一个空白就认不出 ——
+   * 而认不出的表现正好是「同一句话显示两遍」，看着像 bug 里最蠢的那种。
+   *
+   * 所以判据分两层：
+   *
+   *	trim 之后相等   正路，能精确对上哪一条
+   *	对不上          按**先进先出**丢掉这个 pane 最老那条回显
+   *
+   * 第二层站得住是因为 **chat 这边只有发件箱一条发言路**：既然这个 pane 冒出了一条人话，
+   * 我们挂着的那条「投递中」就是落地了（哪怕被规范化得认不出来）。`fifo` 只在**增量**那种
+   * 批次里给真 —— 整份重读那次会一次带回几十条历史人话，那时候按 FIFO 丢就是把还没落地的
+   * 回显误撤掉。
+   */
+  const dropSent = useCallback((target: string, text: string, fifo = false) => {
+    setSent((old) => {
+      const t = text.trim()
+      const i = old.findIndex((x) => x.target === target && x.text.trim() === t)
+      if (i >= 0) return old.filter((_, j) => j !== i)
+      if (!fifo) return old
+      const j = old.findIndex((x) => x.target === target)
+      return j >= 0 ? old.filter((_, k) => k !== j) : old
+    })
+  }, [])
 
   const recall = useCallback((dir: number) => {
     if (!hist.current.length) return
@@ -299,13 +426,14 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
   }, [say2, toast])
 
   /** 发件箱里的传图：把路径插在光标处 */
-  const attach = useCallback((files: FileList | File[], insertAt: () => number) =>
-    upload(files, (r) => {
-      const at = insertAt()
-      const before = textRef.current.slice(0, at)
-      const chunk = (before && !/\s$/.test(before) ? ' ' : '') + r.path + ' '
-      onChangeText(before + chunk + textRef.current.slice(at))
-    }), [upload, onChangeText])
+  /**
+   * 发件箱里的传图：**挂成附件，不往输入框里插字**。
+   *
+   * 原来是把路径插在光标处 —— 那是 52 个字符，一行输入框当场没了（见 atts 的注释）。
+   */
+  const attach = useCallback(async (files: FileList | File[]) => {
+    hold(await upload(files))
+  }, [upload, hold])
 
   /** 往草稿末尾接一段（顶栏传图 / 全页粘贴用，那两处没有光标可言） */
   const append = useCallback((chunk: string) => {
@@ -317,6 +445,8 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
     text, setText: onChangeText, panes, watching, presets,
     info, bad, busy, aimed,
     loadPanes, loadSoftkeyPresets, tick, pull, submit, recall, attach, upload, append, jump,
+    sent, dropSent,
+    atts, hold, dropAtt,
   }
 }
 

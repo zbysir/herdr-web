@@ -1,5 +1,6 @@
 import { useRef } from 'react'
 import { CornerDownLeft } from 'lucide-react'
+import { Image } from '@/icons'
 import { Button } from './ui/button'
 import { Textarea } from './ui/textarea'
 import { cn } from '@/lib/utils'
@@ -38,7 +39,7 @@ import { cn } from '@/lib/utils'
  * 和左右宽度。
  */
 export function Compose({
-  text, onChangeText, info, bad, busy, enterSend, onSubmit, onAttach, onRecall,
+  text, onChangeText, info, bad, busy, enterSend, onSubmit, onAttach, onRecall, atts, onDropAtt,
 }: {
   text: string
   onChangeText: (v: string) => void
@@ -49,11 +50,17 @@ export function Compose({
   /** 回车就投（设置里那一档）。关着的时候回车是换行，投稿走 ⌘↵ / Ctrl↵ */
   enterSend: boolean
   onSubmit: () => void
-  onAttach: (files: FileList | File[], at: () => number) => void
+  onAttach: (files: FileList | File[]) => void
   onRecall: (dir: number) => void
+  /**
+   * 挂着的图有几张（路径不在输入框里，投稿时才拼上 —— 见 useCompose 的 atts）。
+   * 0 张时这枚 chip 整个不画。
+   */
+  atts?: number
+  /** 去掉最后挂上的那一张 */
+  onDropAtt?: () => void
 }) {
   const ta = useRef<HTMLTextAreaElement>(null)
-  const caret = () => ta.current?.selectionStart ?? text.length
 
   return (
     <section
@@ -63,9 +70,29 @@ export function Compose({
       onDrop={(e) => {
         if (![...e.dataTransfer.types].includes('Files')) return
         e.preventDefault()
-        onAttach(e.dataTransfer.files, caret)
+        onAttach(e.dataTransfer.files)
       }}
     >
+      {/*
+        挂着的图：**在这一行里面**占一小块，不另起一行 —— 发件箱不能长高（高度一变就是
+        Dock 变高 → 终端重排 → SIGWINCH + 冻帧，见 CLAUDE.md）。
+        路径本身不在输入框里（52 个字符会把整行吃光），投稿那一刻才拼到文本末尾。
+      */}
+      {!!atts && atts > 0 && (
+        <button
+          type="button"
+          onClick={onDropAtt}
+          title={`带了 ${atts} 张图 · 点一下去掉最后一张（路径投出去时自动拼上）`}
+          aria-label={`带了 ${atts} 张图，点一下去掉最后一张`}
+          className="flex h-8 shrink-0 items-center gap-1 rounded-md border border-brand/40 bg-brand/12
+                     px-1.5 text-xs text-brand"
+        >
+          <Image className="size-3.5" />
+          {atts > 1 && <span className="font-mono text-[11px]">{atts}</span>}
+          <span className="text-faint">×</span>
+        </button>
+      )}
+
       {/* 一行高（h-8 = 快捷键条上一个键的高度）：行高 22px + 上下各 4px + 两道边 = 32px。
           resize-none —— 右下角那个拖角在这个高度上正好压在文字上，而拖高了也只是把终端
           挤掉一截（要挪地方是拖 Dock 的把手，不是拖这个框） */}
@@ -88,7 +115,7 @@ export function Compose({
         onChange={(e) => onChangeText(e.target.value)}
         onPaste={(e) => {
           const files = [...(e.clipboardData?.files ?? [])]
-          if (files.length) { e.preventDefault(); onAttach(files, caret) }
+          if (files.length) { e.preventDefault(); onAttach(files) }
         }}
         onKeyDown={(e) => {
           // Esc 不在这儿处理：它由 App 的 document 级兜底统一转给终端（不管焦点在哪）。

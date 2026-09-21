@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { AArrowDown, AArrowUp, CircleHalf, ClipGet, ClipPut, Diff, Files, Gear, Ime, Image, Keyboard, Maximize, Panes, Pencil, Pull } from '@/icons'
+import { AArrowDown, AArrowUp, Chat, CircleHalf, ClipGet, ClipPut, Diff, Files, Gear, Ime, Image, Keyboard, Maximize, Panes, Pencil, Pull } from '@/icons'
 
 /**
  * 「这个版本能做哪几件事」—— 前端这一半的**唯一一份清单**（图标、名字、一句说明）。
@@ -30,7 +30,12 @@ export interface Cap {
   id: string
   /** 能当快捷键条按键的 `act`（不是所有事都能 —— 见 KeyAct） */
   key?: true
-  /** 点开是一块浮层（面板一览 / 文件 / 设置）—— App 的 panel 状态从这儿推 */
+  /**
+   * 点开是一块**浮层**（面板一览 / 文件 / 设置）—— App 的 panel 状态从这儿推。
+   *
+   * 浮层是**互斥的单槽**：开一个挤掉另一个。所以「模式」那种东西不该打这个标记
+   * （chat 就没打）—— 住在单槽里的后果是「开面板一览换个 agent 就把它挤没了」。
+   */
   panel?: true
   /** 编辑器里那个小方块上的名字（顶栏上只有图标） */
   label: string
@@ -43,6 +48,7 @@ export const CAPS = [
   { id: 'panes', key: true, panel: true, label: '面板一览', hint: '跳到某个 pane（顺带全屏）；有 agent 等你时挂红点', icon: <Panes className="size-4" /> },
   { id: 'files', key: true, panel: true, label: '文件', hint: '看 agent 生成的图 / 翻目录', icon: <Files className="size-4" /> },
   { id: 'diff', key: true, panel: true, label: '改动', hint: '看 git diff（折行、按词高亮 —— 终端里那份在手机上读不了）', icon: <Diff className="size-4" /> },
+  { id: 'chat', key: true, label: '对话', hint: '把 agent 的对话读成一条流（读它自己写的会话记录，不是读屏）', icon: <Chat className="size-4" /> },
   { id: 'compose', label: '发件箱', hint: '语音投稿（说话打字 → 投进 agent pane）', icon: <Pencil className="size-4" /> },
   { id: 'keys', label: '快捷键条', hint: '显示 / 收起快捷键条（Ctrl / Esc / 方向键）', icon: <Keyboard className="size-4" /> },
   { id: 'kbd', key: true, label: '系统键盘', hint: '呼出 / 收起系统输入法（手机上呼键盘只有这条路和快捷键条上的 ⌨）', icon: <Ime className="size-4" /> },

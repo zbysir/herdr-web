@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Maximize, Minimize } from './icons'
 import { api, deviceKind, filesApi, libMap, resolveRows, SESSION, topbarKeyRef, UNAUTHED, type ClipResult, type FileStat, type Notice, type ProfilesResponse, type RowSegments, type SoftKey, type SoftkeysConfig, type SoftkeysResponse, type State, type TopbarResponse, type UnauthedDetail, type WhoAmI } from '@/lib/api'
-import { applyBrand, applyPrefs, brandId, composeEnter, holdRate, keyStyle, popupClear, pushPref, type BrandId, type HoldRate, type KeyStyle, type PopupClear } from '@/lib/prefs'
+import { applyBrand, applyPrefs, brandId, composeEnter, composeRich, holdRate, keyStyle, popupClear, pushPref, type BrandId, type HoldRate, type KeyStyle, type PopupClear } from '@/lib/prefs'
 import { cacheLayout, readLayoutCache } from '@/lib/layoutcache'
 import { readClipboard, writeClipboard } from '@/lib/clipboard'
 import { Session } from '@/term/session'
@@ -27,9 +27,23 @@ import { Compose } from '@/components/Compose'
 import { SettingsPanel, type SettingsTab, type TermOpts } from '@/components/SettingsPanel'
 import { PaneSwitcher, paneZoomPref } from '@/components/PaneSwitcher'
 import { CAP_BY_ID, TOPBAR_DEFAULT, type CapId, type PanelId } from '@/capabilities'
+
+/** chat 模式开着没有（localStorage）。模式熬不过刷新就不叫模式 */
+const LS_CHAT = 'chatOpen'
+
+/**
+ * 抢跑那个焦点提示最多活多久（见 focusHint 的收尾 effect ②）。
+ *
+ * 它要盖住的只是 goto + 重拉列表那两次往返（实测一百多毫秒），2 秒是足够宽的余量；
+ * 它的作用是**保证这个提示不可能卡住**，所以宁可宽一点也不能没有。
+ */
+const HINT_CAP = 2000
 import { AUTO_MS_DEFAULT, Notices } from '@/components/Notices'
 import { FilesPanel } from '@/components/FilesPanel'
 import { DiffPanel } from '@/components/DiffPanel'
+import { ChatPanel } from '@/components/ChatPanel'
+import { Opening } from '@/components/Opening'
+import { ComposeRich, type RichHandle } from '@/components/ComposeRich'
 import { FileViewer } from '@/components/FileViewer'
 import { Pairing } from '@/components/Pairing'
 import { CopyPrompt } from '@/components/CopyPrompt'
@@ -159,11 +173,84 @@ export default function App() {
    * 面板一览（panes）在手机上是换 pane 唯一走得通的路，见 PaneSwitcher。
    */
   // 哪块浮层开着。类型从那份清单推（`PanelId`）—— 以前这儿手写第三份枚举
+  /**
+   * 哪块浮层开着。类型从那份清单推（`PanelId`）—— 以前这儿手写第三份枚举。
+   *
+   * **chat 那一档开着的话从 localStorage 恢复**：它是个模式不是弹窗，人要的是「常驻」，
+   * 而一个模式熬不过刷新就不叫模式（和 DiffPanel 那个 `diffMode` 同一个做法：
+   * 本地存一个小开关，不占服务端那份 prefs 白名单）。
+   * 别的面板**不恢复** —— 那几个是「挑一个东西」用的，开着不动就是挡着终端。
+   */
   const [panel, setPanel] = useState<PanelId | null>(null)
+  /**
+   * chat 模式开着没有。**刻意不住在 `panel` 那个槽里。**
+   *
+   * `panel` 是浮层的单槽（开一个挤掉另一个），而 chat 是个模式：铺满终端那块、切 pane 不关、
+   * 刷新还在。住在单槽里的后果用户报过两次 —— 「开面板一览换个 agent 就把 chat 挤没了」，
+   * 而换 agent 恰恰是在 chat 里最常做的事。
+   *
+   * 层级上它在**未连接那张遮罩之上、浮层之下**：chat 走 HTTP，终端没连上也该能看对话
+   * （那时候人最想知道的正是「agent 干到哪儿了」）。
+   */
+  /**
+   * 「焦点刚切到这个 pane」—— 给 chat 抢跑用的。
+   *
+   * # 为什么要它
+   *
+   * 切 agent 实测要 ~2 秒（用户报的），而**服务端只占 13–22ms** —— 那 2 秒全是**三次串行
+   * 往返**（5G + 隧道，一次两三百毫秒）：
+   *
+   *	① POST /herdr/goto      让 herdr 切焦点
+   *	② GET  /herdr/panes     重拉列表，才知道 focused 标记变了
+   *	③ GET  /chat/log?pane=… chat 这才开始读
+   *
+   * 而 **chat 是按 pane id 读的，不按焦点读** —— 点那一行时 id 就在手上，那份已经拿到的
+   * pane 列表里也已经有它的 agent 和 cwd。所以 ①② 那两次等待压根不必要：点下去就把这个
+   * 提示放上，chat 立刻切过去、它那一拍和 goto **并行**跑。三次往返变一次。
+   *
+   * 生命周期只有一件事要守住：**别让它卡住**。所以 pane 列表一旦确认焦点就是它，这个提示
+   * 立刻清掉（下面那个 effect）；goto 失败就收回，herdr 说焦点在别处就跟它的说法。
+   */
+  const [focusHint, setFocusHint] = useState<string | null>(null)
+
+  /**
+   * chat 这一拍读到没读到（null = 还不知道 / chat 没开）。
+   *
+   * **它和终端那条连接是两回事**：chat 走 HTTP 轮询，终端走 WebSocket。左上角那个点原来
+   * 只说终端，于是在 chat 模式下看着像「整个 app 掉线了」（用户报的），而那会儿 chat
+   * 明明好好的。
+   */
+  const [chatOK, setChatOK] = useState<boolean | null>(null)
+
+  /** 正在打开哪条路径（null = 没在开）。见 openPath / components/Opening.tsx */
+  const [opening, setOpening] = useState<string | null>(null)
+  /** 「这是第几次打开」—— 取消或者又点了别的之后，迟到的结果靠它丢掉 */
+  const openSeq = useRef(0)
+
+  const [chatMode, setChatMode] = useState(() => {
+    try {
+      return localStorage.getItem(LS_CHAT) === '1'
+    } catch {
+      return false // 隐私模式 / 禁了 site data：当没开过（见 CLAUDE.md 那条 localStorage 规矩）
+    }
+  })
   const settings = panel === 'settings'
   const panesOpen = panel === 'panes'
   const filesOpen = panel === 'files'
   const diffOpen = panel === 'diff'
+  const chatOpen = chatMode
+  // 开合都写一笔：模式要熬得过刷新
+  useEffect(() => {
+    try {
+      if (chatOpen) localStorage.setItem(LS_CHAT, '1')
+      else localStorage.removeItem(LS_CHAT)
+    } catch { /* 存不进去就算了，只是下次刷新回到关着 */ }
+  }, [chatOpen])
+  // 恢复出来的那一次要自己去拉一遍 pane 列表（正常开是 openChat 里拉的）
+  useEffect(() => {
+    if (chatOpen) void compose.loadPanes(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   /**
    * 文件浏览的两块东西：
    *   panel === 'files'  兜底的目录浏览面板（filesAt 是「打开时定位到哪儿」）
@@ -204,6 +291,13 @@ export default function App() {
    */
   const [live, setLive] = useState(() => lsBool('composeLive', false))
   const [enterSend, setEnterSend] = useState(composeEnter)
+  /**
+   * 发件箱用富输入框（图片 chip 住在输入框里）还是纯 textarea。
+   * **那一档是退路**：富的那版没在真机的输入法上验过语音，见 lib/prefs.ts 的 composeRich。
+   */
+  const [rich, setRich] = useState(composeRich)
+  /** 富输入框是**不受控**的，所以外面只能通过它下命令（插 chip / 清空 / 取历史） */
+  const richRef = useRef<RichHandle>(null)
   /**
    * 右上角那几张提示卡弹不弹。**默认关**（用户要的）。
    *
@@ -445,6 +539,16 @@ export default function App() {
   }, [compose.loadPanes, gitDirty.markSeen])
 
   /**
+   * 开 chat 模式。顺手刷一次 pane 列表 —— 「看哪个 pane」的候选就是从它来的，
+   * 而 agent 的增删和焦点随时在变（和改动面板 / 面板一览同一条）。
+   */
+  const openChat = useCallback(() => {
+    blurInput()
+    setChatMode(true)
+    void compose.loadPanes(true)
+  }, [compose.loadPanes])
+
+  /**
    * 打开一条路径 —— 终端里点的、面板里点的，都走这儿。
    *
    * 给的是**屏幕上的原样**（可能是相对的、可能带 `~`），解析交给服务端
@@ -460,16 +564,64 @@ export default function App() {
    * 失败只出一条 toast，不弹壳：这条路最常见的失败就是终端里那行路径被折断 / 被 `…`
    * 截断了，那时候摊一个空弹窗还得再关一次。
    */
+  /**
+   * 打开一条路径（终端里点的、chat 里点的、面板里点的，都走这儿）。
+   *
+   * **先给反馈，再去 stat。** 那一步可以很久 —— macOS 第一次访问 `~/Downloads` /
+   * `~/Desktop` / `~/Documents` 会弹系统授权框，而那次读**阻塞在对话框上**（没人点就永远
+   * 不回）；慢盘、大目录、隧道慢也一样。之前这段时间屏幕上一点动静都没有，表现就是
+   * 「点了没反应」（用户报的，而且他先怀疑的是链接坏了）。
+   *
+   * 两条跟着来的：
+   *
+   *   - **那一屏能取消**（× / Esc）。promise 永远不回的情况真会出现，没有出口就是真卡死。
+   *   - **取消之后迟到的结果要丢掉**（`openSeq`）—— 不然人已经走开了，过一会儿突然弹出一个
+   *     查看器，而他压根不知道那是刚才那一下。
+   */
   const openPath = useCallback(async (raw: string) => {
     blurInput() // 终端里点路径那条路（触屏那层不让浏览器改焦点，键盘会一直挂着）
+    const seq = ++openSeq.current
+    setOpening(raw)
     try {
       const s = await filesApi.stat(raw, cwdRef.current || undefined)
+      if (seq !== openSeq.current) return // 取消过了 / 又点了别的
+      setOpening(null)
       if (s.info.dir) openFiles(s.info.path)
       else setViewing(s)
     } catch (e) {
+      if (seq !== openSeq.current) return
+      setOpening(null)
       toast((e as Error).message)
     }
   }, [openFiles, toast])
+
+  /**
+   * 抢跑那个提示的收尾。两条**都要**：
+   *
+   * ① pane 列表确认焦点就是它了 → 活儿干完，立刻清掉。
+   * ② **兜底时限。** 它是个「抢跑」（盖住两次往返的那 100-200ms），不是一份状态 ——
+   *    而只按①清的话它会卡住：herdr 的焦点落在**第三个** pane 上时（人在别的终端里
+   *    自己切了），①那个相等永远不成立，于是这个提示把 chat 永久钉在我们以为的那个
+   *    pane 上，而发件箱早就跟着真焦点走了。两边对不上的后果不是显示难看，是
+   *    **看着 A 的对话把话发给了 B**（用户报的）。
+   *    时限一到就交还给列表里那个 `focused`，那是 herdr 的说法。
+   */
+  useEffect(() => {
+    if (!focusHint) return
+    if (compose.panes.find((p) => p.focused)?.id === focusHint) {
+      setFocusHint(null)
+      return
+    }
+    const t = window.setTimeout(() => setFocusHint(null), HINT_CAP)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusHint, compose.panes])
+
+  /** 取消「正在打开」：连 seq 一起推掉，迟到的结果就不算了 */
+  const cancelOpen = useCallback(() => {
+    openSeq.current++
+    setOpening(null)
+  }, [])
 
   /* --------------------------------------------------------- 终端生命周期 */
   //
@@ -601,6 +753,14 @@ export default function App() {
       // 按注册顺序跑，而这一条是挂载时就注册的、永远在前面 —— 从文件浏览面板里点开一张
       // 图时，第一下 Esc 被下面那块（filesOpen）吃掉了，第二下才轮到图。所有浮层的
       // Esc 都收在这儿按「谁在上面谁先关」排，比每层各挂一个监听靠顺序碰运气可靠。
+      // 「正在打开…」压在查看器同一层且更靠后出现，所以**它第一个吃 Esc** ——
+      // stat 卡在系统授权框上时这是唯一的出口。
+      if (opening) {
+        cancelOpen()
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
       if (viewing) {
         setViewing(null)
         e.preventDefault()
@@ -613,6 +773,9 @@ export default function App() {
         e.stopPropagation()
         return
       }
+      // **chat 模式不吃 Esc。** 它是个模式不是浮层 —— 退出只有顶栏那个按钮和它自己那个 ×
+      // 两条明路。而 Esc 在 chat 开着时照旧要能发到终端去：一键作答那条路之外，人还会用
+      // 快捷键条上的 Esc 去取消对面那个选择框。
       // 终端自己聚焦时什么都不做，让 xterm 走它的正常编码路径，别重复发一次
       if (sess.current?.keyboardUp()) return
       e.preventDefault()
@@ -622,7 +785,9 @@ export default function App() {
     // 挂 bubble 的话终端一聚焦就收不到事件了（「面板开着按 Esc 却发给了终端」就是这么来的）。
     addEventListener('keydown', onKey, true)
     return () => removeEventListener('keydown', onKey, true)
-  }, [panel, viewing])
+    // opening / cancelOpen 少一个，这个闭包就会拿着旧值 —— 表现是「正在打开」那一屏
+    // 按 Esc 没反应，而那正是 stat 卡在系统授权框上时唯一的出口。
+  }, [panel, viewing, opening, cancelOpen])
 
   // 布局变化（快捷键条 / 发件箱开合、顶栏收放）都要重排终端
   useEffect(() => { sess.current?.relayout() }, [showCompose, showKeys, peek])
@@ -738,6 +903,7 @@ export default function App() {
     setHoldRateS(holdRate())
     setLive(lsBool('composeLive', false))
     setEnterSend(composeEnter())
+    setRich(composeRich())
     setNoticeCard(lsBool('noticeCard', false))
     setNoticeDot(lsBool('noticeDot', true))
     setNoticeOS(lsBool('noticeOS', false))
@@ -812,16 +978,19 @@ export default function App() {
   const putImages = useCallback(async (files: FileList | File[]) => {
     const done = await compose.upload(files)
     if (!done.length) return
-    const chunk = done.map((r) => r.path).join(' ') + ' '
     if (showCompose) {
-      compose.append(chunk)
-      toast(`已插入 ${done.length} 张的路径到发件箱`)
+      // 发件箱开着：**挂成附件**，不往输入框里塞路径（52 个字符会把那一行吃光）。
+      // 富输入框那版是插一枚 chip 进框里，纯 textarea 那版是挂在框外面 —— 两处都不是「塞字」。
+      if (rich) done.forEach((r) => richRef.current?.insertChip(r))
+      else compose.hold(done)
+      toast(`已挂上 ${done.length} 张图 · 投稿时自动带上路径`)
     } else {
-      sess.current?.send(chunk)
+      // 发件箱关着：只能把路径敲进终端（那是给 TUI 自己的输入框用的，没有「附件」这回事）
+      sess.current?.send(done.map((r) => r.path).join(' ') + ' ')
       toast(`已把 ${done.length} 张的路径敲进终端`)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showCompose, toast, compose.upload, compose.append])
+  }, [showCompose, toast, compose.upload, compose.hold, rich])
 
   const picker = useRef<HTMLInputElement>(null)
 
@@ -1143,20 +1312,40 @@ export default function App() {
    * 键盘被跳转顶出来最烦 —— 那时候屏幕只剩一半，还得先把它收掉才能看清跳到哪儿了。
    */
   const gotoPane = async (id: string, zoom: boolean) => {
+    // 浮层照旧收掉（挑完了就该让路）。**chat 不在这个槽里，所以不受影响** ——
+    // 它是个模式，切 pane 不该退出（用户报过两次）。
     setPanel(null)
+    // **抢跑**：chat 按 pane id 读，不用等 goto 和 pane 列表这两次往返（见 focusHint）
+    setFocusHint(id)
     const r = await compose.jump(id, zoom)
-    if (!r) return
+    if (!r) { setFocusHint(null); return } // 跳失败：把提前切过去的收回来
     refocusTerm()
     // **herdr 回的是它自己认的焦点 pane**（`focused_pane_id`），不是我们请求的那个。两者
     // 不一样就是没跳成，这时候绝不能报「已跳到」—— 屏幕上还在老 pane、弹窗却说成功，是最
     // 难查的一种：用户以为是画面没刷新，而实际上焦点真的没动（用户报过）。
     if (r.target !== id) {
+      // herdr 说焦点在别处 —— 跟它的说法，别让 chat 停在我们以为的那个上
+      setFocusHint(r.target)
       toast(`没跳到 ${id}：herdr 说焦点在 ${r.target}`)
       void compose.loadPanes(true) // 列表可能已经过期了（那个 pane 被关掉之类的）
       return
     }
     // 终端这条连接断着 / 正在重连时，跳转本身是走 HTTP 的，照样成功 —— 但画面是冻住的旧帧，
     // 看起来就是「点了没反应，多点几次也一样」。这时候必须说清是画面旧了，不是没跳过去。
+    /*
+      这条提示是写给「你正看着终端」的，所以 **chat 模式下要换一套说法**：
+
+        · 「全屏 / 退出全屏」说的是 herdr 里那个 pane 的布局 —— chat 模式下你看不见它，
+          说了只是噪音；你关心的是「chat 跟过去了没有」。
+        · 「终端没连上，画面是旧的」在 chat 里**是错的**：chat 走的是 HTTP 轮询，
+          终端那条 WebSocket 断着它照旧是活的（用户报的）。
+
+      和左上角那个状态点、那个「连接」按钮同一类毛病：给终端写的话漏进了 chat 模式。
+    */
+    if (chatOpen) {
+      toast(`对话已切到 ${r.target}`)
+      return
+    }
     const offline = status.cls !== 'on'
     toast(
       (r.singlePane
@@ -1248,6 +1437,9 @@ export default function App() {
         ? `改动：${gitDirty.files} 个文件${gitDirty.fresh ? '（有新的）' : ''}`
         : undefined,
     },
+    // chat 模式同样能在服务端关掉（HERDR_WEB_CHAT=0，或者这台机器上压根没有 claude /
+    // codex 的会话目录）—— 那时候连按钮都不画（和文件浏览 / 改动同一条）
+    chat: { on: chatOpen, run: () => (chatOpen ? setChatMode(false) : openChat()), hide: state?.chat === false },
     compose: { on: showCompose, run: () => toggleCompose(!showCompose) },
     keys: { on: showKeys, run: () => toggleKeys(!showKeys) },
     // 这一下是用户手势，正好在这儿进全屏（键盘那条路见 kbdFull 的注释）
@@ -1428,17 +1620,37 @@ export default function App() {
           折成两行就白吃掉 ~36px（约三行终端），而这三个都是一次调完的东西。 */}
       {!barHidden && (
       <header className="flex shrink-0 flex-wrap items-center gap-2.5 border-b border-line bg-bar px-3 py-2 select-none max-md:gap-1.5 max-md:px-2">
+        {/*
+          左上角这个点说的是**哪条连接**，得分清楚：
+
+            终端    WebSocket（`/pty`），锁屏 / 网络抖一下就断，会自己重连
+            GUI     纯 HTTP —— chat 3 秒一拍轮询，面板一览 / 文件 / 改动 / 提示都是请求
+
+          所以「终端断了」≠「这个 app 不能用」。原来这儿只反映终端，而手机上又只剩一个点
+          （文字收进 title 了），于是在 chat 模式下看着像整个掉线了（用户报的）。
+
+          现在：**chat 模式下这个点说 chat**（那是你正在看的东西），终端的状态并到 title 里
+          一起说；不在 chat 模式时照旧说终端。文字也一律带上「终端」两个字，免得再有歧义。
+        */}
         <div className="flex min-w-0 flex-1 items-center gap-[7px] max-phone:flex-none">
           <span
-            title={status.text}
+            title={chatOpen
+              ? `${chatOK === false ? '对话读不到' : '对话正常（每 3 秒一拍，走 HTTP）'} · 终端：${status.text}`
+              : `终端：${status.text}`}
             className={cn(
               'size-2 shrink-0 rounded-full',
-              status.cls === 'on' && 'bg-ok shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-ok)_22%,transparent)]',
-              status.cls === 'err' && 'bg-bad',
-              status.cls === '' && 'bg-muted',
+              chatOpen
+                ? (chatOK === false ? 'bg-bad' : 'bg-ok shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-ok)_22%,transparent)]')
+                : cn(
+                  status.cls === 'on' && 'bg-ok shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-ok)_22%,transparent)]',
+                  status.cls === 'err' && 'bg-bad',
+                  status.cls === '' && 'bg-muted',
+                ),
             )}
           />
-          <span className="truncate text-xs text-muted tabular-nums max-phone:hidden">{status.text}</span>
+          <span className="truncate text-xs text-muted tabular-nums max-phone:hidden">
+            {chatOpen ? (chatOK === false ? '对话读不到' : '对话') : `终端 ${status.text}`}
+          </span>
           {/* 哪个 herdr session。手机上状态文字会收掉，这个标签留着 —— 「我这会儿在哪个
               session」比「120×34」重要得多：命名 session 是**另一个 herdr**，pane 列表
               和投稿目标全是另一套。 */}
@@ -1457,7 +1669,10 @@ export default function App() {
         <div className="flex shrink-0 items-center gap-1.5">
           {/* 连上之后「连接」没用了（真断了会弹遮罩，那上面有自己的连接按钮），
               手机上这 54px 让给别的 */}
-          {(status.cls !== 'on' || !phone) && <Button onClick={connect}>连接</Button>}
+          {/* **chat 模式下不画这个按钮**：它连的是终端，而你这会儿看的不是终端 ——
+              在那儿摆一个「连接」等于说「这个 app 没连上」，而 chat 明明好好的。
+              退出 chat 之后终端那张遮罩上有它自己的连接按钮，而且终端本来会自己重连 */}
+          {!chatOpen && (status.cls !== 'on' || !phone) && <Button onClick={connect}>连接</Button>}
         </div>
 
         {/* 顶栏那排按钮：**放哪几个、什么顺序**是配置（设置 →「顶栏」页里拖，存服务端）。
@@ -1558,6 +1773,26 @@ export default function App() {
             toast={toast}
           />
         )}
+        {/* chat 模式：铺在终端和浮层之间（z-6）。浮层（面板一览 / 文件 / 改动 / 设置）是
+            z-10，所以开面板一览换 agent 时它浮在 chat **上面**，挑完面板一收，chat 还在 */}
+        {chatOpen && (
+          <ChatPanel
+            panes={compose.panes}
+            // 刚投出去还没在转录里露面的那几条：先在 chat 里本地回显，真的那条读回来再撤掉
+            // （投稿 → agent 写进转录 → 我们轮到，中间有几秒空窗，用户报过「投了但 chat 里没有」）
+            sent={compose.sent}
+            onDropSent={compose.dropSent}
+            onClose={() => setChatMode(false)}
+            onToast={toast}
+            // 对话里点一条本地路径 = 终端里点一条路径，同一个动作（先 stat 再决定开图 /
+            // 开文本 / 开目录）。agent 给的「下载图片」那种 markdown 链接走的就是这条
+            onOpenPath={(p) => void openPath(p)}
+            onHealth={setChatOK}
+            focus={focusHint}
+          />
+        )}
+        {/* 「正在打开…」那一屏：和查看器同层（z-20），它一出来就换成查看器 */}
+        {opening && <Opening path={opening} onCancel={cancelOpen} />}
         {/* 查看器盖在最上面（面板也盖住）：从面板里点开一张图之后，退出来还该回到
             那个目录，所以这里**不关**面板，只是压在它上面 */}
         {viewing && (
@@ -1596,6 +1831,8 @@ export default function App() {
             onHoldRate={(v) => { setHoldRateS(v); pushPref(profile.id, 'holdRate', String(v), toast) }}
             enterSend={enterSend}
             onEnterSend={(v) => { setEnterSend(v); pushPref(profile.id, 'composeEnter', v ? 'send' : 'newline', toast) }}
+            rich={rich}
+            onRich={(v) => { setRich(v); pushPref(profile.id, 'composeRich', v ? 'rich' : 'plain', toast) }}
             live={live}
             onLive={(v) => { setLive(v); pushPref(profile.id, 'composeLive', v ? '1' : '0', toast) }}
             heals={heals}
@@ -1667,19 +1904,40 @@ export default function App() {
             />
           ) : null}
         >
-          {showCompose && (
-            <Compose
-              text={compose.text}
-              onChangeText={compose.setText}
-              info={compose.info}
-              bad={compose.bad}
-              busy={compose.busy}
-              enterSend={enterSend}
-              onSubmit={compose.submit}
-              onAttach={compose.attach}
-              onRecall={compose.recall}
-            />
-          )}
+          {showCompose && (rich ? (
+              /* 富输入框：图片 chip 住在输入框里（退格整块删、点一下预览）。
+                 出问题就在设置 →「终端」里切回纯 textarea —— 见 lib/prefs.ts 的 composeRich */
+              <ComposeRich
+                ref={richRef}
+                text={compose.text}
+                onChangeText={compose.setText}
+                info={compose.info}
+                bad={compose.bad}
+                busy={compose.busy}
+                enterSend={enterSend}
+                // 富的那版自己拼「话 + 路径」（chip 在 DOM 里，hook 手上没有）
+                onSubmit={() => void compose.submit(richRef.current?.value())}
+                onAttach={(files) => void compose.upload(files).then((rs) => {
+                  rs.forEach((r) => richRef.current?.insertChip(r))
+                })}
+                onRecall={compose.recall}
+                onPreview={(p) => void openPath(p)}
+              />
+            ) : (
+              <Compose
+                text={compose.text}
+                onChangeText={compose.setText}
+                info={compose.info}
+                bad={compose.bad}
+                busy={compose.busy}
+                enterSend={enterSend}
+                onSubmit={() => void compose.submit()}
+                onAttach={compose.attach}
+                atts={compose.atts.length}
+                onDropAtt={compose.dropAtt}
+                onRecall={compose.recall}
+              />
+            ))}
         </Dock>
       )}
     </div>

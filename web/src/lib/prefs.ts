@@ -31,7 +31,7 @@ export const PREF_KEYS = [
   'noticeDot', 'noticeCard', 'noticeOS', 'noticeOSFg', 'noticeCardMs',
   'keyStyle', 'popupClear', 'holdRate',
   'diffWrap',
-  'composeEnter', 'composeLive',
+  'composeEnter', 'composeLive', 'composeRich',
 ] as const
 export type PrefKey = (typeof PREF_KEYS)[number]
 
@@ -136,6 +136,18 @@ export const holdRate = (): HoldRate => {
  * 那一刻现读的（要判断「这一下该投稿还是往 pane 里发个回车」），绕一圈 React state 不值当。
  */
 export const composeEnter = () => localStorage.getItem('composeEnter') !== 'newline'
+
+/**
+ * 发件箱的输入框用**富输入框**（`contenteditable`）还是纯 `textarea`。
+ *
+ * 富的那版能把图片 chip 放进输入框里（退格能整块删掉、点一下预览），代价是它**没在那台
+ * 手机 + 那套输入法（小米 / 讯飞）上验过语音输入**，而 OUTBOX.md 里那条「必须有真
+ * textarea」的根因正是输入法。所以这一档是**退路**：万一语音或候选词在富输入框里出问题，
+ * 切回去就好 —— 输入框坏了的话人在平板上连「说这件事」的路都没有。
+ *
+ * 默认富的（用户定的）。
+ */
+export const composeRich = () => localStorage.getItem('composeRich') !== 'plain'
 
 /**
  * 看 diff 时长行折不折。**默认折**（这个面板本来就是为手机做的：不折的话每行都要横滑，

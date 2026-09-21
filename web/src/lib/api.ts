@@ -116,13 +116,38 @@ const CSRF = { 'x-herdr-web': '1' }
 export const UNAUTHED = 'hw-unauthed'
 export type UnauthedDetail = { need?: 'passkey' }
 
+/**
+ * 带上原始响应的错误。
+ *
+ * 为什么要它：有些口除了一句话还会给一个**机器判据**（chat 那个 409 的 `reason`：
+ * 是「hook 还没装」还是「同一个目录好几个 agent pane」）—— 两种的下一步完全不同，
+ * 界面上要说的话也不一样。光抛 `new Error(msg)` 的话那个字段在这儿就丢了，而按错误
+ * **文案**去 `includes()` 判断是最脆的一种耦合（改一个字就静默失效）。
+ *
+ * 老代码一律当普通 Error 用（`.message` 没变），所以加这个不影响任何现有调用点。
+ */
+export class ApiError extends Error {
+  status: number
+  /** 服务端给的机器判据（如 chat 的 'need_install' / 'ambiguous'） */
+  reason?: string
+  constructor(msg: string, status: number, reason?: string) {
+    super(msg)
+    this.name = 'ApiError'
+    this.status = status
+    this.reason = reason
+  }
+}
+
 async function handle<T>(r: Response): Promise<T> {
   const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }))
   if (r.status === 401) {
     const need = (j as { need?: 'passkey' }).need
     dispatchEvent(new CustomEvent<UnauthedDetail>(UNAUTHED, { detail: { need } }))
   }
-  if (!r.ok) throw new Error((j as { error?: string }).error ?? `HTTP ${r.status}`)
+  if (!r.ok) {
+    const b = j as { error?: string; reason?: string }
+    throw new ApiError(b.error ?? `HTTP ${r.status}`, r.status, b.reason)
+  }
   return j as T
 }
 
@@ -210,6 +235,8 @@ export interface State {
   files?: boolean
   /** 看 diff 那条路开着没有（这台机器上没有 git / HERDR_WEB_GIT=0 时为 false）。同上 */
   git?: boolean
+  /** chat 模式开着没有（这台机器上没有 claude / codex 的会话目录 / HERDR_WEB_CHAT=0 时为 false）。同上 */
+  chat?: boolean
   /**
    * 局域网直连的候选（缺失 = 这个部署没开这条路，见 HERDR_WEB_LAN_PORT）。
    * origins 是**服务端每次现报**的 —— 局域网 IP 会变，前端不能缓存它。
@@ -505,6 +532,151 @@ export const gitApi = {
       + (q.context ? `&context=${q.context}` : '')
       + (q.limit ? `&limit=${q.limit}` : ''),
     ),
+}
+
+/** chat 模式：一条对话流。服务端那份在 internal/transcript（`Msg` / `Log`） */
+export type ChatKind = 'human' | 'agent' | 'think' | 'tool' | 'notice'
+
+/** agent 在问你一个带选项的问题（claude 的 AskUserQuestion）。字段跟着那个工具的输入走 */
+export interface ChatAsk {
+  questions: {
+    /** 问题上面那一行短标签 */
+    header?: string
+    question: string
+    /** 多选。**能不能一键作答看它** —— 多选在 TUI 里是空格勾选再回车，按键序列不一样 */
+    multi?: boolean
+    options: { label: string; description?: string }[]
+    /** 人当时选了哪个（选项的 label）。空 = 还没答 */
+    picked?: string
+  }[]
+}
+
+export interface ChatMsg {
+  id: string
+  kind: ChatKind
+  text?: string
+  /** 工具名（kind === 'tool'） */
+  tool?: string
+  /** 工具的一行摘要（跑的命令 / 改的文件 / 搜的词）—— 服务端已经压成一行、掐过长度 */
+  meta?: string
+  /** 工具成没成。**undefined = 还不知道**（结果还没落盘）→ 画「正在跑」 */
+  ok?: boolean
+  /** 生成时刻。**只用来显示，不用来排序** —— 服务端按文件行序给，见 internal/transcript */
+  at?: string
+  /** 这条工具调用的 id（claude 的 `tool_use_id`）。**结果到了之后靠它认回来**，见 ChatLog.updates */
+  ref?: string
+  /**
+   * 这条工具调用是「agent 在问你」。**只有这一种工具带完整负载**，别的只有 meta 那一行 ——
+   * 因为被问住时人缺的恰恰是「有几个选项、第二个是什么」。
+   */
+  ask?: ChatAsk
+}
+
+export interface ChatLog {
+  msgs: ChatMsg[]
+  /** 这条会话的身份。**变了就是换了会话**（/clear、/resume、压缩），手上那份要整份丢掉 */
+  sig: string
+  /** 下次从这个字节偏移接着读。**往前翻的那种响应里这个值不能采纳**（见 chatApi.earlier） */
+  next: number
+  /** 这一批是从哪个字节偏移读起的。**往上翻更早的就拿它当 `before`** */
+  start: number
+  /** 上面还有更早的 */
+  more?: boolean
+  /**
+   * **前面某几条的结果到了。**
+   *
+   * 工具成没成、提问选了哪个，这些是「结果那一行」带来的，而那一行常常落在**下一批**里
+   * （流式过程中就是这样）。服务端只在同一批里能回填，所以跨批的靠这些补丁：拿 `ref`
+   * 在自己手上那份里认回那条，打上去。
+   *
+   * 不打的表现是**显示的状态和事实相反**：工具永远「正在跑」、提问那张卡永远「没选」，
+   * 只有刷新页面才对（用户报的）。
+   */
+  updates?: { ref: string; ok?: boolean; answers?: Record<string, string> }[]
+  agent: string
+  /** 转录文件名（只有文件名） */
+  file: string
+  /**
+   * 这个 pane 此刻的 agent 状态（herdr 的 `agent_status`：idle / working / blocked / done）。
+   *
+   * **跟对话同一拍给**，不是另一条轮询 —— 服务端那个口本来就调了 `pane.get`。
+   * 它是 chat 模式里唯一能说出「agent 正在干活」的东西：转录按「一次 API 请求」flush，
+   * agent 想事情时文件一个字节都不动（实测 15.58 秒），那段时间对话流完全静止。
+   */
+  status?: string
+  /** 服务端把 pane id 回一遍：换 pane 时上一拍的响应可能后到，靠它认出来丢掉 */
+  pane?: string
+  /**
+   * 这一轮跑了多久 / 多少 token / 什么思考档。**只在 status 是 working 时有。**
+   *
+   * `secs` 是**服务端算出来的秒数**，不是时间戳 —— 转录里的时间戳是跑 agent 那台机器写的，
+   * 而看页面的是手机，两边时钟差几分钟是常事，在前端减出来就是个看着像真的错数字。
+   * 前端只负责把它往前走（见 ChatPanel 的 useTick）。
+   */
+  turn?: {
+    /** 到**现在**跑了多久（秒）。在跑时看它 */
+    secs?: number
+    /** 这一轮从人说话到 agent 最后一次落笔用了多久（秒）。**跑完之后看它** */
+    ran?: number
+    /** agent 最后一次落笔的时刻（RFC3339）。按**本机时区**格式化成 `14:41` */
+    doneAt?: string
+    tokens?: number
+    effort?: string
+    model?: string
+  }
+  /** 这个会话里还有几个后台任务在跑（claude 那条状态行最后那截） */
+  shells?: number
+}
+
+export const chatApi = {
+  /**
+   * 读某个 pane 的对话。`from` 是上一拍的 `next`（0 / 省略 = 整份重来，只给尾部那些）。
+   *
+   * 读不出来时抛 `ApiError`，`reason` 是机器判据（'need_install' / 'ambiguous'）——
+   * 别按文案判断，见 ApiError 的注释。
+   */
+  log: (pane: string, from = 0, sig = '') =>
+    api.get<ChatLog>(
+      `/chat/log?pane=${encodeURIComponent(pane)}`
+      + (from > 0 ? `&from=${from}` : '')
+      // sig 是**手上那份的会话身份**：服务端拿它核一下，对不上就把偏移丢掉。
+      // 不带的话 `/clear` 之后那一拍会拿旧文件的偏移去读新文件（从中间某处开始，
+      // 前面那一截永远读不到，而且不报错）。
+      + (sig ? `&sig=${encodeURIComponent(sig)}` : ''),
+    ),
+
+  /**
+   * 往上翻更早的那一段：拿手上这批的 `start` 当 `before`。
+   *
+   * **响应里的 `next` 不能采纳** —— 那一批是往前翻出来的，而 `next` 指的是文件尾；
+   * 拿它去盖手上那个「下次从哪儿接着读」，增量就会从中间某处重读一大段
+   * （表现是消息成片重复）。这儿只取 `msgs` / `start` / `more`。
+   */
+  /**
+   * 替人答那个选择框：**传选项序号，不传按键**。
+   *
+   * 键序列（↓ ×n + ↵）是服务端按序号算的 —— 这个口发不出别的任何东西。服务端还会先从
+   * 转录里核一遍「此刻真有一个没答的提问」（不是看 `agent_status`，那个实测不可靠），
+   * 核不过回 409 + `reason: 'not_pending'`。详见 internal/server/chatapi.go 的注释。
+   */
+  answer: (pane: string, index: number) =>
+    api.post<{ pane: string; picked: string; keys: number }>('/chat/answer', { pane, index }),
+
+  /**
+   * 在一个**没有 agent 的** pane 里开一个 agent（往那个 pane 里敲命令名 + 回车）。
+   *
+   * `agent` 只认服务端那张白名单（现在是 claude / codex）—— 这个口发不出别的命令，
+   * 要别的就在快捷键条上配一个 `text:xxx enter` 的键。
+   *
+   * **走的是 herdr 的 `pane.send_input`，不是终端那条 WebSocket** ——
+   * chat 在终端断着时照旧能用，这个按钮不该跟着终端连接一起失效。
+   * pane 里已经有 agent 时回 409 + `reason: 'has_agent'`（前端那份 pane 列表最多 3 秒旧）。
+   */
+  start: (pane: string, agent: 'claude' | 'codex') =>
+    api.post<{ pane: string; agent: string }>('/chat/start', { pane, agent }),
+
+  earlier: (pane: string, before: number) =>
+    api.get<ChatLog>(`/chat/log?pane=${encodeURIComponent(pane)}&before=${before}`),
 }
 
 export interface SoftKey {

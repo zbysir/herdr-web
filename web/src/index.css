@@ -252,3 +252,15 @@ body {
      气泡一弹出来手指底下的键就等于按不动了 */
   button { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
 }
+
+/*
+  富输入框（`contenteditable`）的占位字。它没有 `placeholder`，只能靠 `:empty` 画。
+  **判据是 `:empty`，不是「内容等于空串」**：框里插了一枚图片 chip（没有文字）时它就不空了，
+  那时候不该再显示「说话打字…」—— 而 `:empty` 正好认这个。
+  `pointer-events:none` 是必须的：不然点占位字那一下落在伪元素上，光标进不去。
+*/
+.compose-ph:empty::before {
+  content: attr(data-ph);
+  color: var(--color-faint);
+  pointer-events: none;
+}

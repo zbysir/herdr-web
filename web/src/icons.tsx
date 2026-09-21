@@ -14,3 +14,6 @@ export { Smartphone as Devices } from 'lucide-react'
 // 看 diff。挑「文件上带 +/-」这个而不是 GitCompare 那两根箭头：16px 上箭头糊成一团，
 // 而 +/- 是 diff 这件事本身的记号
 export { FileDiff as Diff } from 'lucide-react'
+// chat 模式。挑「两个叠着的气泡」而不是单个气泡：单个气泡在 16px 上和「提示」那类
+// 通知图标分不开，而这件事是**一来一回的对话**
+export { MessagesSquare as Chat } from 'lucide-react'

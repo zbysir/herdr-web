@@ -83,11 +83,13 @@ test:
 	env $(shell env | grep -oE '^HERDR_WEB_[A-Z0-9_]+' | sed 's/^/-u /' | tr '\n' ' ') go test ./...
 	npm --prefix web run typecheck
 # 前端这几处要「拿真机量出来的东西钉住」，坏了都是静默的：终端里折行的路径拼回来
-# （静默坏过两次）、结尾那个回车要不要拖后发（codex 会把它当粘贴里的换行），以及主题色
-# 那份清单两边对得上（对不上是「色块是个洞」或者「点了没反应」）。
+# （静默坏过两次）、结尾那个回车要不要拖后发（codex 会把它当粘贴里的换行）、chat 正文里
+# 的路径要变成可点的（坏了就是「路径照旧是普通文字」，不报错也没下划线），以及主题色那份
+# 清单两边对得上（对不上是「色块是个洞」或者「点了没反应」）。
 # node 直接跑这几个 .ts，不引测试框架 —— 理由写在 web/src/term/paths.test.ts 开头
 	node web/src/term/paths.test.ts
 	node web/src/term/keysend.test.ts
+	node web/src/lib/mdpaths.test.ts
 	node web/src/lib/brand.test.ts
 
 ## release-dry —— 本地把整条发版链跑一遍，不推任何东西

@@ -362,6 +362,7 @@ export HERDR_WEB_TLS=auto
 | `HERDR_WEB_DIR` | `~/.herdr-web` | 数据目录，分两层：配置和文件（`softkeys.json` / `tls/` / `uploads/`）在根上，**内部数据**（设备凭据、passkey 公钥）在 `data/` 里 —— 那两个用户不该手改，被改了会在终端告警。**路径别太深**：里面要开一个 unix socket（`ctl.sock`），全长超过 ~100 字节就 bind 不上，子命令会用不了 |
 | `HERDR_WEB_FILES` | 开 | `=0` 关掉文件浏览：`/api/files/*` 和 `/_f/` 全部 404，顶栏那个 📁 也不画（点开一片 404 比没有入口更糟） |
 | `HERDR_WEB_GIT` | 开 | `=0` 关掉「看 diff」那个面板：`/api/git/*` 全部 404，顶栏那个按钮也不画。**它还压在 `HERDR_WEB_FILES` 底下** —— 一份 diff 就是文件内容，文件浏览关着却还能看 diff 的话，那个开关就是假的。这台机器上没有 `git` 时同样不画 |
+| `HERDR_WEB_CHAT` | 开 | `=0` 关掉「对话」那个面板（chat 模式）：`/api/chat/*` 全部 404，顶栏那个按钮也不画。它读的是 **agent 自己写的会话记录**（claude 的 `~/.claude/projects/**.jsonl`、codex 的 rollout），所以这台机器上既没有 claude 也没有 codex 时同样不画。**它不压在 `HERDR_WEB_FILES` 底下** —— 转录在 `~/.claude` / `~/.codex` 下，而 `FILE_ROOTS` 一配就把它们挡在外面，那样这个面板在配了白名单的部署上永远打不开。边界由它自己钉（只认那两个根 + 会话 id 过正则 + 必须 `.jsonl`），见 [CHAT.md](docs/dev/CHAT.md) §9.4 |
 | `HERDR_WEB_FILE_ROOTS` | 空 | 逗号分隔的目录，配了就是**真白名单**（jail），只有这几棵树看得到。**空 = 不设边界**，理由见[文件浏览](#文件浏览)。展开 `~`，非绝对路径直接扔掉（相对谁？留着只会让前缀检查在意想不到的地方通过） |
 
 ### 发件箱 / 和 herdr 对接

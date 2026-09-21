@@ -45,6 +45,11 @@ var All = []Cap{
 	{ID: "panes", Topbar: true, Key: true, Panel: true},
 	{ID: "files", Topbar: true, Key: true, Panel: true},
 	{ID: "diff", Topbar: true, Key: true, Panel: true},
+	// chat **不是浮层**（所以没有 Panel）：它是一个模式 —— 铺满终端那块区域、切 pane 不关、
+	// 刷新还在。`Panel` 那一档的语义是「点开是一块浮层」，而浮层是**互斥的单槽**
+	// （开一个挤掉另一个）；chat 住在那个槽里的后果是「开面板一览换 agent 就把 chat 挤没了」，
+	// 而换 agent 恰恰是在 chat 里最常做的事（用户报的）。
+	{ID: "chat", Topbar: true, Key: true},
 	{ID: "compose", Topbar: true},
 	{ID: "keys", Topbar: true},
 	{ID: "kbd", Topbar: true, Key: true},

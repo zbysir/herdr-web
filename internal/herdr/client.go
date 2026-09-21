@@ -102,6 +102,24 @@ type Pane struct {
 	Agent       string `json:"agent"`
 	AgentStatus string `json:"agent_status"`
 	Title       string `json:"terminal_title_stripped"`
+	// AgentSession 这个 pane 里那个 agent 的会话身份，chat 模式（internal/transcript）
+	// 靠它定位磁盘上的转录文件。**只有装了 herdr 的 integration 才有值**
+	// （`herdr integration install claude|codex` 装的 hook 在 SessionStart 那一下调
+	// `pane.report_agent_session`），没装时整个字段是 null —— 实测这台机器上 19 个
+	// agent pane 全是空的。为什么不能靠 cwd 猜，见 internal/transcript 的包注释。
+	AgentSession *AgentSession `json:"agent_session"`
+}
+
+// AgentSession 是 herdr 存着的那条会话引用。
+//
+// **Kind 只有 `id` 和 `path` 两档**，而实测 claude 给的是 `id`（虽然那个 hook 把
+// transcript_path 也一起报了）—— 所以 id → 文件路径这一步只能消费方自己做，
+// 见 internal/transcript/locate.go。
+type AgentSession struct {
+	Source string `json:"source"` // 谁报的，如 "herdr:claude"
+	Agent  string `json:"agent"`
+	Kind   string `json:"kind"` // "id" / "path"
+	Value  string `json:"value"`
 }
 
 type paneWrap struct {

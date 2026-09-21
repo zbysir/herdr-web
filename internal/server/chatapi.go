@@ -1,0 +1,417 @@
+package server
+
+import (
+	"errors"
+	"fmt"
+	"net/http"
+	"strconv"
+
+	"github.com/zbysir/herdr-web/internal/transcript"
+)
+
+// chat 模式那条路的 HTTP 层。数据从哪儿来、为什么是读文件而不是读屏，都在
+// internal/transcript 的包注释和 docs/dev/CHAT.md 里，这儿只讲路由和「读不出来时怎么说」。
+//
+// **读那个口（`log`）是只读的，另外两个口各只发一件形状固定的事**：`answer` 只发
+// 「↓ ×n + ↵」，`start` 只发那张白名单里的一个命令名 + ↵。**这儿刻意不做「往 pane 里发任意
+// 文本」的通道** —— 发言走的是现成的发件箱（`/api/herdr/say` → `agent.prompt`），那条路上
+// 那几个坑（清空要 2N−1 次、`text:…enter` 的回车要隔 200ms、回车发送必须挡输入法）全是拿
+// 真机换来的，另开一条通道就是把它们再踩一遍。
+//
+// 审批也**没有**在这儿留入口：会改状态的事留在终端里（docs/dev/TUI-VS-GUI.md §2）。
+
+func (s *Server) apiChat(w http.ResponseWriter, r *http.Request, seg []string) {
+	if s.Chat == nil || !s.Chat.Enabled() {
+		fail(w, http.StatusNotFound, errf("这台机器上没找到 agent 的会话记录，或者 chat 被关掉了（HERDR_WEB_CHAT=0）"))
+		return
+	}
+	if len(seg) < 2 {
+		fail(w, http.StatusNotFound, errf("没有这个接口"))
+		return
+	}
+	if seg[1] == "answer" && r.Method == http.MethodPost {
+		s.chatAnswer(w, r)
+		return
+	}
+	if seg[1] == "start" && r.Method == http.MethodPost {
+		s.chatStart(w, r)
+		return
+	}
+	if seg[1] != "log" || r.Method != http.MethodGet {
+		fail(w, http.StatusNotFound, errf("没有这个接口"))
+		return
+	}
+	q := r.URL.Query()
+	name, err := sessionOf(r)
+	if err != nil {
+		fail(w, 400, err)
+		return
+	}
+	sess, err := s.live(name)
+	if err != nil {
+		fail(w, 400, err)
+		return
+	}
+	pane := q.Get("pane")
+	if pane == "" {
+		fail(w, 400, errf("要带上 pane"))
+		return
+	}
+
+	ref, status, err := s.chatRef(sess, pane)
+	if err != nil {
+		chatFail(w, err)
+		return
+	}
+	src, err := s.Chat.Find(ref)
+	if err != nil {
+		chatFail(w, err)
+		return
+	}
+	// from / before 都是字节偏移。**解析失败一律当 0**（整份重来）而不是报错 —— 前端手上
+	// 那个值可能来自上一个版本的响应，为这个把面板打不开不值当。
+	from, _ := strconv.ParseInt(q.Get("from"), 10, 64)
+	if from < 0 {
+		from = 0
+	}
+	before, _ := strconv.ParseInt(q.Get("before"), 10, 64)
+
+	// **偏移只在同一条会话里有意义。** 前端把手上那份的 sig 一起带上，对不上就把偏移丢掉
+	// （当整份重来）—— `/clear` 之后 claude 写的是**另一个**文件，把上一份的字节偏移套在
+	// 新文件上就是从中间某处开始读：前面那一截永远读不到，而且一个字都不报。
+	// 带不带这个参数都行（老前端不带），不带就照旧信 from。
+	if want := q.Get("sig"); want != "" && want != src.Sig {
+		from, before = 0, 0
+	}
+
+	var log *transcript.Log
+	if before > 0 {
+		// 往上翻更早的那一段。前端拿上一批的 `start` 当 before。
+		log, err = transcript.ReadBefore(src, before)
+	} else {
+		log, err = transcript.Read(src, from)
+	}
+	if err != nil {
+		chatFail(w, err)
+		return
+	}
+	// Msgs 为 nil 时编出来是 `null`，前端 `for of` 直接抛 —— 和提示那条路同一个坑。
+	if log.Msgs == nil {
+		log.Msgs = []transcript.Msg{}
+	}
+	// **状态跟这一拍一起给**，不让前端另外去问一次：这个口每拍本来就调了 `pane.get`，
+	// `agent_status` 就在手上。另开一条轮询就是在跑着 agent 的那台机器上多敲一遍 herdr，
+	// 而且两条轮询的节奏不一样，会出现「对话更新了但状态还是上一拍的」。
+	// 「这一轮跑了多久 / 多少 token / 什么时候完的」—— 一次有界的回扫（见 transcript.TurnStat）。
+	//
+	// 原来只在 `working` 时算，后来「跑完了 3m 52s · 14:41」那一行也要这些数，所以一律算。
+	// 代价可以接受：chat 一次只盯**一个** pane（不是那几十个），而这个口只在面板开着时被轮。
+	// 算不出来就是不显示（`TurnStat` 会给 nil）—— 「空着比编一个数好」，和「几分钟前」
+	// 那一列同一条规矩。
+	var turn *transcript.Turn
+	if t, err := transcript.TurnStat(src); err == nil {
+		turn = t
+	}
+	writeJSON(w, 200, chatOut{
+		Log: log, Status: status, Pane: pane, Turn: turn,
+		Shells: s.Chat.Shells(src),
+	})
+}
+
+// chatOut = 一份对话 + 这个 pane 此刻的 agent 状态。
+//
+// 嵌一个指针进来，JSON 里那些字段会摊平到同一层（前端就一个对象）。
+type chatOut struct {
+	*transcript.Log
+	// Status herdr 的 `agent_status`（实测 `idle` / `working` / `blocked` / `done`）。
+	//
+	// **它是 chat 模式里唯一能说出「agent 正在干活」的东西** —— 转录的落盘粒度是一次 API
+	// 请求，agent 想事情的时候文件一个字节都不动（实测能 15.58 秒），那段时间里对话流是
+	// 完全静止的，没有这一档的话看着像卡住了。
+	Status string `json:"status,omitempty"`
+	// Pane 把 pane id 回一遍：前端换 pane 时上一拍的响应可能后到，靠它认出来丢掉。
+	Pane string `json:"pane,omitempty"`
+	// Turn 这一轮跑了多久 / 多少 token / 什么思考档（只在 Status 是 working 时有）。
+	// 时间是**服务端算的秒数**，不是时间戳 —— 手机和这台机器的时钟能差几分钟，
+	// 在前端拿 Date.now() 减出来的是个看着像真的错数字。
+	Turn *transcript.Turn `json:"turn,omitempty"`
+	// Shells 这个会话里还有几个后台任务在跑（claude 自己那条状态行最后那截）。
+	// 判据在 transcript/shells.go —— 转录里两头都记着，不用读屏。
+	Shells int `json:"shells,omitempty"`
+}
+
+// chatRef 从 herdr 那边把这个 pane 的会话身份问出来。
+//
+// **`Siblings` 只有在「没报过会话」时才有意义**，所以只在那种情况下才去 `pane.list`
+// 数一遍 —— 装了 hook 的正常情况下一次 `pane.get` 就够了，而这是在跑着 agent 的那台
+// 机器上按秒问的东西（轮询），能省一次调用就省一次。
+func (s *Server) chatRef(sess *live, pane string) (transcript.Ref, string, error) {
+	p, err := sess.outbox.C.PaneGet(pane)
+	if err != nil {
+		return transcript.Ref{}, "", err
+	}
+	if p.Agent == "" {
+		return transcript.Ref{}, "", errNoAgent
+	}
+	ref := transcript.Ref{Agent: p.Agent, CWD: p.CWD}
+	if as := p.AgentSession; as != nil && as.Value != "" {
+		ref.Kind, ref.Value = as.Kind, as.Value
+		return ref, p.AgentStatus, nil
+	}
+	// 没报过：数一下同一个 cwd 下还有几个跑着同一个 agent 的 pane。>1 就一律不猜
+	// （transcript.ErrAmbiguous）—— 猜错的表现是「显示的是隔壁那个 pane 的对话」，
+	// 而两边都在同一个项目里干活，屏幕上看着完全正常。
+	if list, err := sess.outbox.C.PaneList(); err == nil {
+		for _, x := range list {
+			if x.Agent == p.Agent && x.CWD == p.CWD {
+				ref.Siblings++
+			}
+		}
+	}
+	return ref, p.AgentStatus, nil
+}
+
+/*
+chatAnswer：**替人答那个选择框**（`AskUserQuestion`），发 ↓ ×n + ↵。
+
+这是这条路上唯一一个会改状态的口，所以先说清它为什么长这样。
+
+# 它只发得出 ↓ 和 ↵
+
+请求里给的是**选项序号**，不是按键 —— 键序列在服务端按序号算出来。这样即使前端被人改了、
+或者这个口被别的东西调，它也只可能发出 n 个 ↓ 加一个 ↵，发不出别的任何东西。
+（前端传一串按键过来是最自然的写法，但那就等于开了一个「往任意 pane 打任意按键」的口。）
+
+# 按 pane 寻址，不走焦点
+
+用 `pane.send_input` 指名那个 pane，**不是**把字节打进当前终端的 PTY。后者依赖「herdr 此刻
+焦点在哪儿」，而 chat 面板看的 pane 和 herdr 的焦点完全可以不是同一个 —— 那种错发是
+「替你在另一个 pane 里选了一个选项」，而两边屏幕上都看不出来。
+
+# 「选择框真的开着吗」用**数据**判，不读屏
+
+判据是：**最后一条工具调用是 `AskUserQuestion` 而且还没有结果**。它成立 ⟺ agent 发出了提问、
+人还没答 —— 这是转录里记着的事实，不是猜的。
+
+为什么不能用 `agent_status`：实测过一个**正在显示选择器**的 pane 报的是 `idle`，另一次同样
+的对话框又报 `blocked`（见 docs/dev/COMPOSER.md 和 HERDR-API.md 那张表）。拿它当闸门就是
+静默地往一个没有选择框的 pane 里打 ↵ —— 而那一下会把输入框里的草稿提交出去。
+
+# 还剩一条挡不住的，UI 上要说出来
+
+↓ ×n 假设**高亮此刻停在第一个选项上**。人要是先在终端里按过方向键，这个前提就不成立，
+于是会选到另一个选项上。所以界面上那一下是**二次确认**（举起来再点一下才发，和快捷键条上
+危险键那套 useArm 一致），而且只在单选、单个问题时才给点 —— 多选在 TUI 里是空格勾选再回车，
+多个问题要一题一题走，按键序列都不一样。
+*/
+func (s *Server) chatAnswer(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		Pane  string
+		Index int
+	}
+	if err := readJSON(r, &b); err != nil {
+		fail(w, 400, err)
+		return
+	}
+	if b.Pane == "" {
+		fail(w, 400, errf("要带上 pane"))
+		return
+	}
+	if b.Index < 0 {
+		fail(w, 400, errf("选项序号不能是负的"))
+		return
+	}
+	name, err := sessionOf(r)
+	if err != nil {
+		fail(w, 400, err)
+		return
+	}
+	sess, err := s.live(name)
+	if err != nil {
+		fail(w, 400, err)
+		return
+	}
+	ref, _, err := s.chatRef(sess, b.Pane)
+	if err != nil {
+		chatFail(w, err)
+		return
+	}
+	src, err := s.Chat.Find(ref)
+	if err != nil {
+		chatFail(w, err)
+		return
+	}
+	log, err := transcript.Read(src, 0)
+	if err != nil {
+		chatFail(w, err)
+		return
+	}
+	ask, err := pendingAsk(log.Msgs)
+	if err != nil {
+		// 409：这不是参数错，是「此刻不该发这个」。前端据此说「问题已经被答过了 / 变了，
+		// 刷新一下看看」，而不是报一个像 bug 的错。
+		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "reason": "not_pending"})
+		return
+	}
+	q := ask.Questions[0]
+	if b.Index >= len(q.Options) {
+		fail(w, 400, fmt.Errorf("只有 %d 个选项，给的是第 %d 个", len(q.Options), b.Index+1))
+		return
+	}
+
+	// 键序列在这儿算：n 个 ↓ 然后一个 ↵。**这个口发不出别的东西。**
+	keys := make([]string, 0, b.Index+1)
+	for i := 0; i < b.Index; i++ {
+		keys = append(keys, "down")
+	}
+	keys = append(keys, "enter")
+	if err := sess.outbox.C.SendKeys(b.Pane, keys); err != nil {
+		fail(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"pane": b.Pane, "picked": q.Options[b.Index].Label, "keys": len(keys)})
+}
+
+// pendingAsk 认「此刻真有一个没答的选择框」。
+//
+// 判据是**最后一条工具调用**是 `AskUserQuestion` 且没有结果（`OK == nil`）。一定要是最后
+// 那条：中间那些早就答过了，而「有没有结果」这件事只有在整份读的那一遍里才回填得到
+// （见 transcript 的 state.tool 注释）—— 所以这儿一律 `Read(src, 0)`，不走增量。
+//
+// 只支持**单个问题 + 单选**：多个问题要在 TUI 里一题一题走，多选是空格勾选再回车，
+// 两种的按键序列都和「↓ ×n + ↵」不一样。宁可不给点，别替人选错。
+func pendingAsk(msgs []transcript.Msg) (*transcript.Ask, error) {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		m := msgs[i]
+		if m.Kind != transcript.KindTool {
+			continue
+		}
+		if m.Ask == nil || m.OK != nil {
+			return nil, errf("这个 pane 此刻没有在等你选（最后一条工具调用不是没答的提问）")
+		}
+		if len(m.Ask.Questions) != 1 {
+			return nil, fmt.Errorf("这次问了 %d 个问题，一键作答只支持一个 —— 回终端答", len(m.Ask.Questions))
+		}
+		if m.Ask.Questions[0].Multi {
+			return nil, errf("这是多选，一键作答只支持单选 —— 回终端答")
+		}
+		return m.Ask, nil
+	}
+	return nil, errf("这个 pane 此刻没有在等你选")
+}
+
+var errNoAgent = errors.New("这个 pane 里没有 agent")
+
+// chatFail 把读不出来的原因分开报。
+//
+// **这几种的处理方式完全不同**，混成一句「打不开」的话，最常见那种（hook 还没装 / agent
+// 是装之前起来的）就永远查不出来：
+//
+//	409 + need_install   herdr 还没拿到会话身份 → 界面上要说「装 integration / 重开这个 agent」
+//	409 + ambiguous      同一个目录好几个 agent pane → 说清为什么不猜
+//	404                  这个 agent 的格式还不支持（只有 claude / codex）
+//	400                  这个 pane 里压根没有 agent
+func chatFail(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errNoAgent):
+		fail(w, 400, err)
+	case errors.Is(err, transcript.ErrUnsupported):
+		fail(w, 404, err)
+	case errors.Is(err, transcript.ErrAmbiguous):
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":  err.Error(),
+			"reason": "ambiguous",
+		})
+	case errors.Is(err, transcript.ErrNoSession):
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":  err.Error(),
+			"reason": "need_install",
+		})
+	default:
+		fail(w, 400, err)
+	}
+}
+
+// startable 在这个 pane 里开得出来的 agent。**这张表就是这个口能发出去的全部东西。**
+//
+// 写死两个而不是收前端传来的命令行，理由和 `answer` 那个口一样：它往一个**登录 shell**
+// 里敲字并回车，等于远程执行命令。收任意字符串的话这一层就成了第二条 PTY，而那条已经有了
+// （带鉴权、带 Origin 检查、带审计意义上的「人自己在敲」）—— 白送一条更省事的出来不值当。
+//
+// 想要别的命令：快捷键条上配一个 `text:xxx enter` 的键（设置 → 快捷键条 → 我的按键）。
+// 那条路本来就是干这个的，而且带着「回车隔 200ms」那道（见 keysend.ts 的 splitEnter）。
+var startable = map[string]string{
+	"claude": "claude",
+	"codex":  "codex",
+}
+
+// chatStart 在一个**没有 agent 的** pane 里开一个 agent。
+//
+// 为什么这个口存在：chat 看的永远是焦点那个 pane，而焦点落在一个 shell pane 上时那一屏
+// 只能说「这儿没有 agent」+ 一个「回到终端」（用户报的：希望能直接在这儿开一个）。
+//
+// # 两条判据
+//
+// ① **pane 里已经有 agent 就拒**（409 `has_agent`）。不拒的后果不是「白开一个」，而是
+//
+//	把 `claude` 这五个字母**当成一句话投进正在跑的那个 agent 的输入框**。前端只在那一屏
+//	给按钮，但它手上那份 pane 列表最多 3 秒旧 —— 这期间人可能自己在终端里把 agent 开起来了。
+//
+// ② **不走 PTY 那条路**（前端 `sendKeyBytes`），而是 herdr 的 `pane.send_input`：chat 模式
+//
+//	在终端 WebSocket 断着的时候照旧能用（那正是左上角那个状态点要分开说的事），按钮跟着
+//	终端连接一起失效就说不通了。
+//
+// 顺带一条：这儿**不需要**「回车隔 200ms」那道。那道是给 codex 的输入框看的
+// （`paste_burst.rs` 把「连着 3 个字符、间隔 <8ms」当粘贴），而开 agent 这一下敲的对面是
+// **zsh 的提示符**，没有这个启发式。
+func (s *Server) chatStart(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		Pane  string
+		Agent string
+	}
+	if err := readJSON(r, &b); err != nil {
+		fail(w, 400, err)
+		return
+	}
+	if b.Pane == "" {
+		fail(w, 400, errf("要带上 pane"))
+		return
+	}
+	cmd, ok := startable[b.Agent]
+	if !ok {
+		fail(w, 400, fmt.Errorf("开不了 %q —— 这个口只认 claude / codex", b.Agent))
+		return
+	}
+	name, err := sessionOf(r)
+	if err != nil {
+		fail(w, 400, err)
+		return
+	}
+	sess, err := s.live(name)
+	if err != nil {
+		fail(w, 400, err)
+		return
+	}
+
+	// ①：现问一次 herdr，别信前端那份列表（见上）。
+	p, err := sess.outbox.C.PaneGet(b.Pane)
+	if err != nil {
+		fail(w, 400, err)
+		return
+	}
+	if p.Agent != "" {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":  fmt.Sprintf("这个 pane 里已经跑着 %s 了", p.Agent),
+			"reason": "has_agent",
+			"agent":  p.Agent,
+		})
+		return
+	}
+
+	if err := sess.outbox.C.SendText(b.Pane, cmd, []string{"enter"}); err != nil {
+		fail(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"pane": b.Pane, "agent": b.Agent})
+}

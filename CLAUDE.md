@@ -20,6 +20,7 @@
 | 发件箱（`internal/outbox`、`web/src/hooks/useCompose.ts`） | [OUTBOX.md](docs/dev/OUTBOX.md) |
 | 触屏 / 移动端的面板、顶栏、提示（`web/src/term/`、`components/`） | [MOBILE.md](docs/dev/MOBILE.md) |
 | 认证、配对、暴露形态、文件浏览 / 看 diff 那条路 | [SECURITY.md](docs/dev/SECURITY.md) |
+| **chat 模式**（对话流代替那一屏 TUI） | [CHAT.md](docs/dev/CHAT.md) |
 | **要不要在网页这边新做一块界面**（还是留在 TUI / 去扩 herdr） | [TUI-VS-GUI.md](docs/dev/TUI-VS-GUI.md) |
 
 ## ⚠️ 起服务之前：本机的端口不一定只有本机能连
@@ -175,6 +176,41 @@
   没人来更新它，不作废的话切到另一个项目上，角标还在说上一个项目（同 `diffRepo` 那条注释）。
   不是「所有仓库一起盯」：一台机器上开着几十个 pane 是常态（实测 34 个不同 cwd），一拍几十次
   git 换一个小点不值当。
+- **chat 模式**（`internal/transcript` + `internal/server/chatapi.go` +
+  `web/src/components/ChatPanel.tsx`）：内容来自 **agent 自己写在磁盘上的会话记录**，不读屏
+  （读屏是这个项目最贵的一条路）。落盘粒度是**一次 API 请求**不是逐 token，所以体感是几秒
+  冒出一块 —— 想要逐字的回终端。定位靠 herdr 的 `agent_session`（`herdr integration install
+  claude|codex` 装的 hook 报的），八条静默的：① **hook 只在 `SessionStart` 报一次** ——
+  装之前已经跑着的 agent 一律没有（实测 19 个 agent pane 全是 `null`），表现是「装完了还说没有
+  会话」，界面上必须说「把 agent 重开一次」；② herdr 给的 `kind` **实测是 `id` 不是 `path`**
+  （虽然 hook 两个都报了，codex 那个压根不报 path），所以 id → 路径这一步只能自己做；
+  ③ **别照抄 claude 那个目录名变形规则**（`/` 和点号都折成 `-`）—— 规则是别人的，错一个字符
+  就是「chat 永远打不开」，判据用 session id 全机唯一（拼不中就 glob 一层，45 个目录代价可忽略），
+  codex 的 id 就在文件名里；④ **同一个 cwd + 同一个 agent 有多个 pane 就不猜**（`ambiguous`）——
+  猜错是「显示的是隔壁那个 pane 的对话」，而两边都在同一个项目里干活，屏幕上看着完全正常
+  （`herdr-web` 这个目录下就常开着两个）；⑤ 首屏那个尾部窗口，「够不够」的门槛**不能是 200 条**
+  —— 踩过：2.3MB 的转录头一窗出了 181 条判成不够，一路翻倍**把整个文件读完**，正是这个窗口
+  要避免的事（门槛是 30 条）；⑥ 增量的 `next` **只能停在整行的边界** —— 文件正在被写时最后一行
+  可能只落了一半，算进去的话下次从半行中间接着读，**那一条消息从此永远丢了**且不报错；
+  ⑦ codex 读 `event_msg`/`item_completed` **不读 `response_item`**（后者混着 55KB 的 developer
+  系统提示和只有 `encrypted_content` 的 reasoning），而 `AgentMessage` 里 content 的 type 是
+  大写 `Text`、`UserMessage` 里是小写 `text`（**按小写比**，漏了就是 agent 说的话一条都认不出来）；
+  ⑧ **边界这一层自己钉**，不借文件浏览那一处（转录在 `~/.claude` / `~/.codex` 下，`FILE_ROOTS`
+  一配就挡在外面）—— 义务是「id 过正则 + path 必须在根底下 + 必须 `.jsonl`」三条，少了最后那条
+  一个被改过的 hook 报 `~/.claude/.credentials.json` 就能把凭据渲染到页面上。**只读**：发言走
+  现成的发件箱，审批不留入口（会改状态的事留在 TUI）。
+  界面上还有五条都是真机报出来的：⑨ **`more`/`start` 只能从「整份读」那次采纳** —— 增量那次
+  对顶端一无所知，每拍都盖的表现是「看更早的」那个按钮活不过一拍就消失（和「翻不到历史」
+  长得一样）；⑩ **偏移要跟着 `sig` 一起核** —— `/clear` 之后是另一个文件，旧偏移套上去就从
+  中间某处开始读，前面那截永远读不到；⑪ **往前面插内容要把长高的那截补回 `scrollTop`**
+  （Safari 没有 `overflow-anchor`，和 DiffViewer 同一条）；⑫ **容器一变矮要重新贴底**
+  （ResizeObserver）—— 手机呼输入法时 `clientHeight` 变小而 `scrollTop` 不动，那一下
+  **不触发 scroll 事件**，光靠 onScroll 发现不了（用户报的「弹出输入法会导致自动贴底不生效」）；
+  ⑬ **回到底部要瞬时跳不要 smooth** —— 那一跳常常五千多像素，动画期间「贴底了」和 scroll
+  事件算出来的对不上账，药丸会闪。还有 **Markdown 永远不开原始 HTML**（agent 输出在这一层
+  是不可信文本，而这个页面能调 `/api/herdr/say`），中文加粗靠 `remark-cjk-friendly`
+  （CommonMark 的 flanking 规则让紧贴中文标点的 `**` 不算强调符，不接就是满屏星号）。
+  详见 [CHAT.md](docs/dev/CHAT.md) §9。
 - **「我现在在哪个项目」= 焦点 pane 那个工作空间**（`DiffPanel` 的 `dirKey`、`FilesPanel` 的
   `starts`、App 里那个 `diffRepo`）。用户报的是「改动面板打开，看到的是另一个项目的 diff」。
   三处是同一件事：herdr 里同时开着好几个工作空间、几十个 pane 是常态（实测 48 个 pane / 34 个
@@ -451,6 +487,11 @@ internal/
   gitdiff/            看 diff：跑 git（status / diff）+ 把补丁解析成结构 + 按词高亮
                       （parse.go）。**只读**，边界借文件浏览那一处（Files.Check）——
                       跑 git 的那八条「静默出错」在包注释里
+  transcript/         chat 模式的数据源：读 **agent 自己写在磁盘上的会话记录**
+                      （claude 的 JSONL / codex 的 rollout）读成一条对话流。定位靠 herdr 的
+                      `agent_session`（`herdr integration install` 装的 hook 报的），
+                      id → 路径这一步自己做。**边界自己钉**（不借文件浏览那一处，理由见
+                      包注释）。为什么不读屏、两家格式的坑，在 docs/dev/CHAT.md
   clip/               读这台机器的剪贴板（pbpaste / wl-paste / xclip）—— herdr 的复制
                       落在**跑 herdr 那台机器**上，手机要拿到只能由这一侧读出来
   server/             HTTP 路由 + PTY/WebSocket + 静态资源
@@ -459,6 +500,8 @@ internal/
                       session.go 是「一个 URL 一个 herdr session」的分派（每个 session
                       一个 socket、一份发件箱、一条状态订阅）
                       filesapi.go 是文件浏览的口 + /_f/ 那条**不带 cookie**的吐字节路
+                      chatapi.go 是 chat 模式那个**只读**的口（发言走现成的发件箱，
+                      审批一律留在终端）
   webui/              embed 前端产物（dist 由 make build 拷进来）
   qr/                 启动时在终端画二维码
   version/            版本号的唯一出处（goreleaser 用 ldflags 注进来）
@@ -489,6 +532,8 @@ web/                  Vite + React + TS + Tailwind v4 + shadcn 风格组件
                       FilesPanel.tsx 是文件浏览（起点列表：当前工作空间排最前、标「当前」
                       + 目录 + 粘路径的框）
                       FileViewer.tsx 是看一个文件（图 / 文本），铺满整屏
+                      ChatPanel.tsx 是 chat 模式（对话流代替那一屏 TUI）：**不铺满屏**
+                      （底下那行发件箱要还点得到）、候选只给当前工作空间、sig 变了整份丢掉
                       DiffPanel.tsx 是改动清单（仓库从**当前工作空间**那几个 pane 的 cwd 猜），
                       DiffViewer.tsx 是补丁页：**全部文件一条连续的流**（滚到跟前才读、
                       折行 / 词高亮 / 段头粘顶），铺满整屏

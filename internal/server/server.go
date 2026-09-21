@@ -32,6 +32,7 @@ import (
 	"github.com/zbysir/herdr-web/internal/selfupdate"
 	"github.com/zbysir/herdr-web/internal/softkeys"
 	"github.com/zbysir/herdr-web/internal/topbar"
+	"github.com/zbysir/herdr-web/internal/transcript"
 	"github.com/zbysir/herdr-web/internal/uploads"
 )
 
@@ -55,6 +56,12 @@ type Server struct {
 	// Git 看 diff 那条路（内部也用 Files 当唯一的鉴权点，见 internal/gitdiff）。
 	// nil / 没启用 = 这台机器上没有 git，或者被 HERDR_WEB_GIT=0 关掉了。
 	Git *gitdiff.Runner
+
+	// Chat chat 模式那条路：读 agent 自己写的会话转录（internal/transcript）。
+	// nil / 没启用 = 这台机器上既没有 claude 也没有 codex 的转录目录，或者被
+	// HERDR_WEB_CHAT=0 关掉了。**它不借 Files 当鉴权点**（转录在 ~/.claude、~/.codex 下，
+	// 而 FILE_ROOTS 一配就把它们挡在外面）—— 边界由 transcript 自己钉，见那边的包注释。
+	Chat *transcript.Store
 
 	Passkeys *auth.Passkeys
 	// ReauthAfter：注册过 passkey 之后，一份会话在「上次生物验证」之后还能用多久。
@@ -151,6 +158,14 @@ func New(cfg *config.Config, web fs.FS, a *auth.Store, g *auth.Gate, opt Options
 		s.Git = gitdiff.New(s.Files)
 		if !s.Git.Enabled() {
 			log.Printf("看 diff：PATH 上没有 git，这个面板关掉了")
+		}
+	}
+	// chat 模式：读 agent 自己写的转录（internal/transcript）。关掉就干脆不建 Store ——
+	// Enabled() 为假，前端不画那个按钮，那个口一律 404（和 diff 那条同一个做法）。
+	if cfg.Chat {
+		s.Chat = transcript.NewStore()
+		if !s.Chat.Enabled() {
+			log.Printf("chat 模式：这台机器上没有 claude / codex 的会话目录，这个面板关掉了")
 		}
 	}
 	// 签名密钥在这儿生成：一个进程一把、只在内存里，重启就把所有旧链接作废。
@@ -282,6 +297,8 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 		s.apiFiles(w, r, seg)
 	case "git":
 		s.apiGit(w, r, seg)
+	case "chat":
+		s.apiChat(w, r, seg)
 	case "handoff":
 		s.apiHandoff(w, r)
 	default:
@@ -310,7 +327,10 @@ func (s *Server) apiState(w http.ResponseWriter, r *http.Request) {
 		// 文件浏览关掉时（HERDR_WEB_FILES=0）前端得知道，不然顶栏那个按钮点开就是一片 404
 		"files": s.Files != nil && s.Files.Enabled && s.Sign != nil,
 		// 看 diff 也一样：这台机器上没有 git（或者被关掉了）就别画那个按钮
-		"git":         s.Git.Enabled(),
+		"git": s.Git.Enabled(),
+		// chat 模式同上：这台机器上没有 agent 的会话目录（或者被关掉了）就别画那个按钮。
+		// 「点开一片报错比没有这个入口更糟」（docs/dev/TUI-VS-GUI.md §3 第 5 问）
+		"chat":        s.Chat.Enabled(),
 		"session":     name, // 空 = 默认 session
 		"herdrSocket": s.Cfg.SessionSocket(name),
 		"version":     s.versionInfo(),

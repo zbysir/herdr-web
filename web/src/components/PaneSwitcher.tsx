@@ -4,6 +4,7 @@ import type { Pane } from '@/lib/api'
 import { Panel } from './ui/panel'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
+import { STATUS_BUCKET, STATUS_DOT } from '@/lib/agentstatus'
 import { cn } from '@/lib/utils'
 
 /**
@@ -49,26 +50,12 @@ const SORTS: { id: Sort; label: string; hint: string }[] = [
  *
  * 非 agent pane（shell）永远最后 —— 那儿没有状态可言。
  */
-const BUCKET: Record<string, number> = { blocked: 0, done: 1, working: 2, idle: 3 }
-const bucketOf = (p: Pane) => (p.agent ? (BUCKET[p.status] ?? 4) : 5)
+const bucketOf = (p: Pane) => (p.agent ? (STATUS_BUCKET[p.status] ?? 4) : 5)
 
 /** 只给最该被看见的两个状态加字：其余靠那个点的颜色，别把每行都塞满标签 */
 const STATUS_CHIP: Record<string, { text: string; cls: string }> = {
   blocked: { text: '等你', cls: 'border-bad/50 bg-bad/15 text-bad' },
   done: { text: '完成', cls: 'border-brand/40 bg-brand/12 text-brand' },
-}
-
-/**
- * 状态点的颜色：**红 = 等你，绿 = 跑完了，黄 = 在跑**，闲着是灰点。
- *
- * 「在跑」用黄不用绿 —— 和 herdr 自己 agents 栏里那个黄点一致。绿留给「跑完了」（这是
- * 通用约定，一眼就知道是好事）。只有闲着没有颜色：一列点里要是全是彩的，就没有重点了。
- */
-const DOT: Record<string, string> = {
-  working: 'bg-warn',
-  blocked: 'bg-bad',
-  done: 'bg-ok',
-  idle: 'bg-muted',
 }
 
 /** 长路径显示成 ~/…：一行里 cwd 是最认得出 pane 的东西，但绝对路径太占宽度 */
@@ -338,7 +325,7 @@ export function PaneSwitcher({
                 >
                   <span
                     title={p.agent ? `${p.agent} · ${p.status}` : 'shell'}
-                    className={cn('size-1.5 shrink-0 rounded-full', DOT[p.status] ?? 'bg-line-hi')}
+                    className={cn('size-1.5 shrink-0 rounded-full', STATUS_DOT[p.status] ?? 'bg-line-hi')}
                   />
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1.5">

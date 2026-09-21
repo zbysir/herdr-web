@@ -63,7 +63,7 @@ const TABS: { id: SettingsTab; label: string }[] = [
 export function SettingsPanel({
   tab, onTab, onClose, opts, setOpt, card, onCard, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs,
   kbdFull, onKbdFull, keyStyle, onKeyStyle, popupClear, onPopupClear, holdRate, onHoldRate,
-  enterSend, onEnterSend, live, onLive,
+  enterSend, onEnterSend, live, onLive, rich, onRich,
   heals, onSaved, onTopbar, toast, state,
   fontSize, onFont, scheme, onScheme, brand, onBrand, profile, onProfiles,
 }: {
@@ -102,6 +102,9 @@ export function SettingsPanel({
   /** 发件箱里回车是投稿（true）还是换行。同上 */
   enterSend: boolean
   onEnterSend: (v: boolean) => void
+  /** 发件箱的输入框：富的（图片 chip 住在框里）还是纯 textarea。**那一档是退路**，同上 */
+  rich: boolean
+  onRich: (v: boolean) => void
   /** 发件箱的双向同步（本地草稿推回远端输入框）。默认关，同上 */
   live: boolean
   onLive: (v: boolean) => void
@@ -181,6 +184,7 @@ export function SettingsPanel({
           popupClear={popupClear} onPopupClear={onPopupClear}
           holdRate={holdRate} onHoldRate={onHoldRate}
           enterSend={enterSend} onEnterSend={onEnterSend} live={live} onLive={onLive}
+          rich={rich} onRich={onRich}
           osFg={osFg} onOSFg={onOSFg} cardMs={cardMs} onCardMs={onCardMs}
           heals={heals} state={state} toast={toast}
           fontSize={fontSize} onFont={onFont} scheme={scheme} onScheme={onScheme}
@@ -197,7 +201,7 @@ export function SettingsPanel({
 function TermSection({
   opts, setOpt, card, onCard, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs, kbdFull, onKbdFull,
   keyStyle, onKeyStyle, popupClear, onPopupClear, holdRate, onHoldRate,
-  enterSend, onEnterSend, live, onLive,
+  enterSend, onEnterSend, live, onLive, rich, onRich,
   heals, state, fontSize, onFont, scheme, onScheme, brand, onBrand, toast,
 }: {
   opts: TermOpts
@@ -224,6 +228,9 @@ function TermSection({
   /** 发件箱：回车是投稿还是换行 */
   enterSend: boolean
   onEnterSend: (v: boolean) => void
+  /** 发件箱：输入框用富的（图片 chip 住在框里）还是纯 textarea。**那一档是退路** */
+  rich: boolean
+  onRich: (v: boolean) => void
   /** 发件箱：双向同步 */
   live: boolean
   onLive: (v: boolean) => void
@@ -442,6 +449,34 @@ function TermSection({
         </div>
         <span className="text-xs text-faint">
           「投稿」那一档：软键盘上的、快捷键条上的 ↵ 都算，换行用 ⇧↵；⌘↵ 两档都是投稿
+        </span>
+      </div>
+
+      {/* 输入框那一档。**这是个退路**：富的那版（图片 chip 住在输入框里、退格整块删、
+          点一下预览）用的是 contenteditable，而「必须有真 textarea」那条的根因是输入法
+          （见 docs/dev/OUTBOX.md）—— 语音或候选词在富输入框里一出问题，这儿是唯一的
+          退路（输入框坏了人连「说这件事」都没法说）。 */}
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-[13px]">
+        发件箱输入框
+        <div className="flex overflow-hidden rounded-md border border-line">
+          <Button
+            size="tiny" on={rich} title="图片 chip 住在输入框里：退格能整块删掉、点一下预览"
+            className="rounded-none border-0 border-r border-line"
+            onClick={() => onRich(true)}
+          >
+            富文本
+          </Button>
+          <Button
+            size="tiny" on={!rich} title="纯 textarea：图挂在框外面。语音 / 候选词出问题就切到这一档"
+            className="rounded-none border-0"
+            onClick={() => onRich(false)}
+          >
+            纯文本
+          </Button>
+        </div>
+        <span className="text-xs text-faint">
+          语音输入或中文候选词在「富文本」里出问题就切「纯文本」—— 那一档是原来那个真
+          textarea，图挂在框外面
         </span>
       </div>
 
