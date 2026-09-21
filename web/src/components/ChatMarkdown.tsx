@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react'
-import Markdown from 'react-markdown'
+import { createContext, useContext, useMemo, type ComponentPropsWithoutRef, type ReactNode } from 'react'
+import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkCjkFriendly from 'remark-cjk-friendly'
 import { PATH_SCHEME, rehypePaths } from '@/lib/mdpaths'
@@ -63,91 +63,144 @@ const WEB = /^(https?:|mailto:)/i
  */
 const LOCAL = new RegExp(`^(${PATH_SCHEME}|file://|~/|\\.{1,2}/|/)`)
 
-export default function ChatMarkdown({ text, onPath }: {
-  text: string
-  /** 点了一条本地路径。不给的话路径照旧渲染成普通文字（不画成可点的） */
-  onPath?: (p: string) => void
-}) {
-  /** 可点的路径长什么样：和终端里那套一致（品牌色 + 下划线），但它不是 `<a>` */
-  const pathBtn = (p: string, children: ReactNode) => (
+/*
+ * # 这几个组件必须在**模块级**，不能在渲染里现建
+ *
+ * react-markdown 的 `components` 是「标签名 → 组件」，它拿这个值去 `createElement`。
+ * 所以**函数引用一变就是「换了一个组件类型」**，React 会把那棵子树整个卸掉重挂 ——
+ * 而写成 `components={{ a: (p) => …, pre: (p) => … }}` 的话，每次渲染都是新函数。
+ *
+ * 表现是用户报的「chat 每 3 秒整个重绘，表格滚到最后了又跳回开头」：agent 在跑时
+ * `useTick` 让面板每秒重渲染一次，于是**每秒**把所有 `<a>` / `<pre>` / 路径 span 销毁重建，
+ * 里面的 DOM 状态（代码块和表格的横向滚动位置、选中的文字）全丢。真机上量过：
+ * 路径 span 那个节点 4.5 秒内就不是同一个对象了，而默认标签（`table` / `td`）活着 ——
+ * 正好把「只有自定义组件那几棵子树在重挂」这件事分了出来。
+ *
+ * `onPath` 是唯一的动态输入，所以它走 **context** 而不是闭包：这样组件身份永远不变，
+ * 哪怕调用方每次传一个新函数进来也不会触发重挂。
+ */
+
+/** 点了一条本地路径要调的东西。走 context 是为了让下面那几个组件能待在模块级（见上） */
+const PathHit = createContext<((p: string) => void) | undefined>(undefined)
+
+/** 可点的路径长什么样：和终端里那套一致（品牌色 + 下划线），但它不是 `<a>` */
+function PathSpan({ path, children }: { path: string; children: ReactNode }) {
+  const onPath = useContext(PathHit)
+  return (
     <span
       role="button"
       tabIndex={0}
-      title={`打开 ${p}`}
-      onClick={() => onPath?.(p)}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onPath?.(p) }}
+      title={`打开 ${path}`}
+      onClick={() => onPath?.(path)}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onPath?.(path) }}
       className="cursor-pointer text-brand underline decoration-dotted underline-offset-2"
     >
       {children}
     </span>
   )
+}
+
+/**
+ * 链接分两种：
+ *
+ *	外链        真的 `<a>`，新标签打开 + noreferrer（这个页面的 URL 里有 session 名，
+ *	            没必要随着 Referer 漏给 agent 复述出来的那个站）
+ *	本地路径    **不给 href**，点一下走文件浏览那条路（`file://` 浏览器拦死，
+ *	            `/Users/…` 会被当成本站路径去导航 —— 两种都是「点了没反应」）
+ *
+ * `node` 要从透传里摘掉：react-markdown 会把 hast 节点一起传进来，原样 spread 到 `<a>` 上
+ * 是个非法 DOM 属性（React 会一路报 warning）。
+ */
+function Anchor({ children, href, node: _node, ...p }: ComponentPropsWithoutRef<'a'> & { node?: unknown }) {
+  const onPath = useContext(PathHit)
+  const h = String(href ?? '')
+  if (onPath && h && LOCAL.test(h)) {
+    return <PathSpan path={localPath(h)}>{children}</PathSpan>
+  }
+  return <a {...p} href={h || undefined} target="_blank" rel="noopener noreferrer">{children}</a>
+}
+
+/**
+ * 代码块：**横向自己滚，不折行**。
+ *
+ * 折行在这儿是错的 —— 代码的缩进和对齐本身带信息，折过的代码在手机上比横滚更难读
+ * （正文折行是对的，那是 chat 存在的理由之一，两件事别混）。
+ *
+ * `pre` 自己是滚动容器，所以要 `overflow-x-auto` + `whitespace-pre`；里面那个
+ * `code` 得把气泡上那套内联样式清掉（`p-0 bg-transparent`），不然代码块里每一段
+ * 都顶着一个内联代码的小底色。
+ */
+function Pre({ children }: { children?: ReactNode }) {
+  return (
+    <pre className={cn('my-1.5 overflow-x-auto overscroll-x-contain rounded-md border border-line',
+      'bg-bg px-2 py-1.5 text-[11.5px] leading-relaxed',
+      '[&_code]:whitespace-pre [&_code]:bg-transparent [&_code]:p-0')}>
+      {children}
+    </pre>
+  )
+}
+
+/** GFM 的任务列表：去掉那个圆点，让方框顶上去 */
+function TaskBox({ node: _node, ...p }: ComponentPropsWithoutRef<'input'> & { node?: unknown }) {
+  return <input {...p} disabled className="mr-1 align-middle" />
+}
+
+/** 这三个都得是**同一个对象、同一批函数**，理由见上面那段 */
+const COMPONENTS: Components = { a: Anchor, pre: Pre, input: TaskBox }
+const REMARK = [remarkGfm, remarkCjkFriendly]
+const REHYPE = [rehypePaths]
+const NO_PLUGINS: [] = []
+
+/** 本地路径要放进来（`Anchor` 会把它接走），只挡伪协议 */
+const urlOK = (u: string) => (WEB.test(u) || LOCAL.test(u) ? u : '')
+
+export default function ChatMarkdown({ text, onPath }: {
+  text: string
+  /** 点了一条本地路径。不给的话路径照旧渲染成普通文字（不画成可点的） */
+  onPath?: (p: string) => void
+}) {
+  /*
+    **按 `text` memo 住。** 光把组件身份固定下来只治了「重挂」，没治「重算」：面板在
+    agent 跑的时候每秒重渲染一次，而每次渲染 react-markdown 都要把整段正文重新过一遍
+    unified（remark + rehype）。一屏四十个气泡、每秒一遍，手机上是白烧的。
+    正文没变就直接给回上一次那个元素，React 连子树都不用进。
+  */
+  const body = useMemo(() => (
+    <Markdown
+      remarkPlugins={REMARK}
+      rehypePlugins={onPath ? REHYPE : NO_PLUGINS}
+      urlTransform={urlOK}
+      components={COMPONENTS}
+    >
+      {text}
+    </Markdown>
+  ), [text, onPath])
 
   return (
-    <div
-      className="min-w-0 break-words
-                 [&_p]:my-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0
-                 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-4
-                 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5
-                 [&_li]:my-0.5
-                 [&_h1]:my-1.5 [&_h1]:text-[15px] [&_h1]:font-medium
-                 [&_h2]:my-1.5 [&_h2]:text-[14px] [&_h2]:font-medium
-                 [&_h3]:my-1 [&_h3]:text-[13px] [&_h3]:font-medium
-                 [&_a]:text-brand [&_a]:underline [&_a]:underline-offset-2
-                 [&_strong]:font-medium [&_strong]:text-fg
-                 [&_blockquote]:my-1 [&_blockquote]:border-l-2 [&_blockquote]:border-line
-                 [&_blockquote]:pl-2 [&_blockquote]:text-muted
-                 [&_hr]:my-2 [&_hr]:border-line
-                 [&_code]:rounded [&_code]:bg-bg [&_code]:px-1 [&_code]:py-0.5
-                 [&_code]:font-mono [&_code]:text-[11.5px]
-                 [&_table]:my-1 [&_table]:block [&_table]:w-full [&_table]:overflow-x-auto
-                 [&_th]:border [&_th]:border-line [&_th]:px-1.5 [&_th]:py-0.5 [&_th]:text-left [&_th]:font-medium
-                 [&_td]:border [&_td]:border-line [&_td]:px-1.5 [&_td]:py-0.5"
-    >
-      <Markdown
-        remarkPlugins={[remarkGfm, remarkCjkFriendly]}
-        rehypePlugins={onPath ? [rehypePaths] : []}
-        // 本地路径要放进来（下面那个 a 会把它接走），只挡伪协议
-        urlTransform={(u) => (WEB.test(u) || LOCAL.test(u) ? u : '')}
-        components={{
-          /**
-           * 链接分两种：
-           *
-           *	外链        真的 `<a>`，新标签打开 + noreferrer（这个页面的 URL 里有 session 名，
-           *	            没必要随着 Referer 漏给 agent 复述出来的那个站）
-           *	本地路径    **不给 href**，点一下走文件浏览那条路（`file://` 浏览器拦死，
-           *	            `/Users/…` 会被当成本站路径去导航 —— 两种都是「点了没反应」）
-           */
-          a: ({ children, href, ...p }) => {
-            const h = String(href ?? '')
-            if (onPath && h && LOCAL.test(h)) {
-              return pathBtn(localPath(h), children)
-            }
-            return <a {...p} href={h || undefined} target="_blank" rel="noopener noreferrer">{children}</a>
-          },
-          /**
-           * 代码块：**横向自己滚，不折行**。
-           *
-           * 折行在这儿是错的 —— 代码的缩进和对齐本身带信息，折过的代码在手机上比横滚更难读
-           * （正文折行是对的，那是 chat 存在的理由之一，两件事别混）。
-           *
-           * `pre` 自己是滚动容器，所以要 `overflow-x-auto` + `whitespace-pre`；里面那个
-           * `code` 得把气泡上那套内联样式清掉（`p-0 bg-transparent`），不然代码块里每一段
-           * 都顶着一个内联代码的小底色。
-           */
-          pre: ({ children }) => (
-            <pre className={cn('my-1.5 overflow-x-auto overscroll-x-contain rounded-md border border-line',
-              'bg-bg px-2 py-1.5 text-[11.5px] leading-relaxed',
-              '[&_code]:whitespace-pre [&_code]:bg-transparent [&_code]:p-0')}>
-              {children}
-            </pre>
-          ),
-          // GFM 的任务列表：去掉那个圆点，让方框顶上去
-          input: (p) => <input {...p} disabled className="mr-1 align-middle" />,
-        }}
+    <PathHit.Provider value={onPath}>
+      <div
+        className="min-w-0 break-words
+                   [&_p]:my-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0
+                   [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-4
+                   [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5
+                   [&_li]:my-0.5
+                   [&_h1]:my-1.5 [&_h1]:text-[15px] [&_h1]:font-medium
+                   [&_h2]:my-1.5 [&_h2]:text-[14px] [&_h2]:font-medium
+                   [&_h3]:my-1 [&_h3]:text-[13px] [&_h3]:font-medium
+                   [&_a]:text-brand [&_a]:underline [&_a]:underline-offset-2
+                   [&_strong]:font-medium [&_strong]:text-fg
+                   [&_blockquote]:my-1 [&_blockquote]:border-l-2 [&_blockquote]:border-line
+                   [&_blockquote]:pl-2 [&_blockquote]:text-muted
+                   [&_hr]:my-2 [&_hr]:border-line
+                   [&_code]:rounded [&_code]:bg-bg [&_code]:px-1 [&_code]:py-0.5
+                   [&_code]:font-mono [&_code]:text-[11.5px]
+                   [&_table]:my-1 [&_table]:block [&_table]:w-full [&_table]:overflow-x-auto
+                   [&_th]:border [&_th]:border-line [&_th]:px-1.5 [&_th]:py-0.5 [&_th]:text-left [&_th]:font-medium
+                   [&_td]:border [&_td]:border-line [&_td]:px-1.5 [&_td]:py-0.5"
       >
-        {text}
-      </Markdown>
-    </div>
+        {body}
+      </div>
+    </PathHit.Provider>
   )
 }
 
