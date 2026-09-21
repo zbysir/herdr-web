@@ -136,3 +136,72 @@ func TestPTYAnswersProbe(t *testing.T) {
 	}
 	waitFor("p")
 }
+
+// 「结尾那个回车要隔一会儿才写进 PTY」这条（`gap`）。
+//
+// 为什么端到端验、为什么这一段必须等在**服务端**：见 web/src/term/keysend.ts。
+// 简单说，快捷键条上 `text:/clear enter` 那种键，回车和前面那串字挤在一起的话
+// codex 会把它当成粘贴里的换行 —— 命令不提交，而屏幕上一个字都不报（用户报的
+// 「claude 下好好的，codex 按了只换行」）。前端把两帧背靠背发出来，间隔是这一侧
+// 撑开的，所以**这一行 sleep 掉了是完全静默的**：typecheck 过、前端测试过、
+// 只有真在 codex 上按那个键才看得出来。
+func TestPTYGapDelaysInput(t *testing.T) {
+	store, err := auth.New(auth.Config{Dir: t.TempDir(), TrustLoopback: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Cfg: &config.Config{Shell: "/bin/sh"}, Auth: store}
+	srv := httptest.NewServer(http.HandlerFunc(s.handlePTY))
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+"/pty?cols=80&rows=24", nil)
+	if err != nil {
+		t.Fatalf("连不上 /pty：%v", err)
+	}
+	defer conn.Close()
+
+	// 等 ready，顺手把开场那堆输出（提示符）读掉
+	var seen []byte
+	readUntil := func(what byte, limit time.Duration) time.Duration {
+		t.Helper()
+		start := time.Now()
+		_ = conn.SetReadDeadline(time.Now().Add(limit))
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				t.Fatalf("等 %q 回显的时候断了：%v", string(what), err)
+			}
+			seen = append(seen, data...)
+			if bytes.IndexByte(data, what) >= 0 {
+				return time.Since(start)
+			}
+		}
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	for {
+		typ, data, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("等 ready 的时候断了：%v", err)
+		}
+		var m struct{ T string }
+		if typ == websocket.TextMessage && json.Unmarshal(data, &m) == nil && m.T == "ready" {
+			break
+		}
+	}
+
+	// 两帧**背靠背**发出去（前端就是这么发的），间隔完全由服务端撑开
+	const gap = 400 * time.Millisecond
+	for _, f := range []string{`{"t":"i","d":"Q"}`, `{"t":"i","d":"Z","gap":400}`} {
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(f)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// tty 的行规程会把敲进去的字回显出来，拿它当「PTY 收到了」的时刻
+	if d := readUntil('Q', 3*time.Second); d > gap/2 {
+		t.Fatalf("前面那串字也被拖住了（%v）—— gap 不该影响它", d)
+	}
+	if d := readUntil('Z', 3*time.Second); d < gap*3/4 {
+		t.Fatalf("回车只隔了 %v 就写进去了（要 ≥ %v）：gap 没生效，codex 那边会把它当换行", d, gap)
+	}
+}

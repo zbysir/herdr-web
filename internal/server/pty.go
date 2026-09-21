@@ -119,11 +119,18 @@ func logInput(on bool, where string, b []byte) {
 }
 
 type ctrlMsg struct {
-	T    string `json:"t"`
-	D    string `json:"d"`
-	Cols int    `json:"cols"`
-	Rows int    `json:"rows"`
+	T string `json:"t"`
+	D string `json:"d"`
+	// Gap：写进 PTY 之前先等这么多毫秒。只有快捷键条上「敲一串字 + 一个回车」
+	// 那种键会用到（回车那一帧带着它），理由见 web/src/term/keysend.ts
+	Gap  int `json:"gap"`
+	Cols int `json:"cols"`
+	Rows int `json:"rows"`
 }
+
+// gapCap 前端说等多久就等多久，但夹一个上限：这个值是从浏览器来的，
+// 而等待期间这条连接的输入是停着的。
+const gapCap = 1000 * time.Millisecond
 
 func (s *Server) handlePTY(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
@@ -276,6 +283,17 @@ func (s *Server) handlePTY(w http.ResponseWriter, r *http.Request) {
 		}
 		switch m.T {
 		case "i":
+			// 等在**这一侧**是有意的：前端隔开 200ms 发的两帧走同一条 TCP 连接过来，
+			// 第一帧卡在重传里时第二帧会跟在它屁股后面一起到，间隔当场被挤没 ——
+			// 而那个间隔恰恰是给对面那个 TUI 看的（见 web/src/term/keysend.ts）。
+			// 顺带**阻塞读循环**也是有意的：顺序天然对，而队在后面的只有改尺寸和
+			// 探活，晚这么一下没有任何影响。
+			if d := time.Duration(m.Gap) * time.Millisecond; d > 0 {
+				if d > gapCap {
+					d = gapCap
+				}
+				time.Sleep(d)
+			}
 			logInput(s.Cfg.DebugInput, "i", []byte(m.D))
 			_, _ = f.Write([]byte(m.D))
 		case "p":

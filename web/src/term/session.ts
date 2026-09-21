@@ -17,6 +17,7 @@ import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import { writeClipboard } from '@/lib/clipboard'
 import { ptyURL } from '@/lib/api'
+import { ENTER_GAP_MS, splitEnter } from './keysend'
 
 /**
  * 打开终端里的链接（OSC 8 和自动识别出来的 URL）。
@@ -366,6 +367,14 @@ export class Session {
    * ctrl+x）legacy 编码本来就不含歧义，程序两种都认。
    */
   sendKey(bytes: string) {
+    // 「敲一串字 + 一个回车」要把回车拖后再发，不然 codex 那边把它当成粘贴里的
+    // 换行、命令根本不提交。为什么、以及为什么等在服务端，见 keysend.ts
+    const cut = splitEnter(bytes)
+    if (cut) {
+      this.send(cut[0])
+      this.send(cut[1], ENTER_GAP_MS)
+      return
+    }
     this.send(bytes === '\x1b' ? this.escBytes() : bytes)
   }
 
@@ -490,8 +499,11 @@ export class Session {
 
   /* ------------------------------------------------------------- 连接 */
 
-  send(data: string) {
-    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ t: 'i', d: data }))
+  /** `gap`：让**服务端**在写进 PTY 之前先等这么多毫秒（见 keysend.ts） */
+  send(data: string, gap = 0) {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(gap > 0 ? { t: 'i', d: data, gap } : { t: 'i', d: data }))
+    }
   }
 
   /**
