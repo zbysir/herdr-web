@@ -1729,9 +1729,22 @@ export default function App() {
         {/* overflow-hidden：容器一缩（呼输入法）到终端重排完之间，xterm 的画布还是旧的高度，
             不裁的话它会画到发件箱上面去；冻帧那张图也靠这个裁 */}
         <div ref={host} className="term-host absolute inset-0 overflow-hidden pt-1.5 pr-1 pb-1 pl-2" />
-        {overlay && (
-          <div className="absolute inset-0 z-5 grid place-items-center bg-bg/80 p-5 backdrop-blur-sm">
-            <div className="max-w-[440px] text-center">
+        {/*
+          「终端没连上」那张遮罩。两条都是横屏手机上报出来的：
+
+          ① **chat 模式下压根不画。** 它说的是终端那条 WebSocket，而你这会儿看的不是终端 ——
+             摆一张「点连接」在那儿等于说「这个 app 没连上」，而 chat 明明好好的
+             （和顶栏那个「连接」按钮同一条，只是当初只挡了顶栏那个）。
+          ② **内容不许溢出 `<main>`。** 原来是 `grid place-items-center`，内容比容器高时居中
+             会往**上下两头**各溢出一半，而这张遮罩是 `z-5`、Dock 没有 z-index —— 于是那个
+             按钮画到发件箱那一行上面去了（用户报的）。它不只是难看：那一下**会吃掉本该点到
+             投稿键的点击**。实测 `main` 矮于约 190px 就开始溢出，而横屏手机正好是这个高度。
+             所以改成「装得下就居中（`my-auto`）、装不下就自己滚」——
+             注意别用 `items-center` + `overflow`：那个组合下溢出的上半截是滚不到的。
+        */}
+        {overlay && !chatOpen && (
+          <div className="absolute inset-0 z-5 flex justify-center overflow-y-auto overscroll-contain bg-bg/80 p-5 backdrop-blur-sm">
+            <div className="my-auto max-w-[440px] text-center">
               <Logo size={48} className="mx-auto mb-3.5" />
               <h1 className="mb-2 text-[17px] font-medium tracking-tight">herdr in the browser</h1>
               <p className="text-[13px]/relaxed text-muted [&_code]:rounded [&_code]:border [&_code]:border-line
