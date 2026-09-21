@@ -86,10 +86,17 @@ const WAIT_MS = 25_000
 const Markdown = lazy(() => import('./ChatMarkdown'))
 
 export function ChatPanel({
-  panes, sent, onDropSent, onClose, onToast, onOpenPath, onHealth, focus, chatFont,
+  panes, sent, onDropSent, onClose, onToast, onOpenPath, onHealth, focus, chatFont, nudge,
 }: {
   /** 对话区的字号（px）。**和终端那个 fontSize 是两回事**，见列表容器上那段注释 */
   chatFont: number
+  /**
+   * 「刚往 pane 里发过东西，立刻补一拍」的计数器（见 App 的 keyNudge）。
+   *
+   * 按 Esc / `/clear` 这类键是会改对面状态的动作，等 3 秒一拍才看到反应，人会以为
+   * 「没点成功」（用户报的）。它一变就读一次。
+   */
+  nudge?: number
   /** herdr 的 pane 列表。**这就是「看哪个 pane」的候选来源** */
   panes: Pane[]
   /** 刚投出去还没在转录里露面的那几条（见 useCompose 的 sent） */
@@ -249,6 +256,18 @@ export function ChatPanel({
       if (log.updates?.length) {
         setMsgs((old) => patch(old, log.updates!))
       }
+      /*
+        **前面某几条被撤回了** —— 按 id 去掉。
+
+        和上面那条补丁同一个理由：证据在后面那一批里。撤回一条还没被回复的消息在树上的
+        样子是「后面的记录跳过它」（见 internal/transcript 的 onBranch），而那条「跳过它」
+        的记录往往是下一次增量才读到的 —— 这时候被撤的那条早就送到浏览器里了。
+        不按名单去掉的话屏幕上那条一直挂着，只有整份重读才消失（用户报的）。
+      */
+      if (log.gone?.length) {
+        const gone = new Set(log.gone)
+        setMsgs((old) => (old.some((m) => gone.has(m.id)) ? old.filter((m) => !gone.has(m.id)) : old))
+      }
       next.current = log.next
       // `more` / `start` **只从整份那次采纳，增量那次保住手上的**。
       // 写成每拍都盖的后果是：首屏说了「上面还有」，第二拍（增量）把它覆盖成 false，
@@ -324,6 +343,14 @@ export function ChatPanel({
     setMeta(null)
     setFirst(true)
   }, [active])
+
+  // 刚发过键就立刻补一拍（见 nudge）。**不进上面那个轮询的依赖** —— 那会把整条心跳
+  // 重建一次（清掉计时器再从头排），而这儿要的只是「额外读一次」。
+  useEffect(() => {
+    if (!nudge || !active) return
+    void tick(active)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nudge])
 
   // 自排队的 setTimeout，不用 setInterval：网络一慢 setInterval 会把请求叠起来
   // （提示和角标那两条同理）。回到前台立刻补一拍，不等这一轮的计时器。
@@ -725,8 +752,10 @@ export function ChatPanel({
                     看着像另一种东西，而这一条其实就是同一句话、只是还没记进转录。
                     半透明已经把「还没落地」说清了，多一个图标只是噪音。
                   */}
+                  {/* 字号写成 em：这个气泡和真消息长一样，字号也得跟着对话字号走
+                      （漏了就是「调了字号，投递中那条不跟着变」—— 用户报的） */}
                   <div className="max-w-[85%] rounded-card border border-brand/40 bg-brand/12 px-3 py-2
-                                  text-[13px]/relaxed text-fg opacity-50">
+                                  text-[1em]/relaxed text-fg opacity-50">
                     <span className="whitespace-pre-wrap break-words">{x.text}</span>
                   </div>
                 </div>
@@ -851,6 +880,21 @@ function group(msgs: ChatMsg[]): Row[] {
  * 那个时间戳是跑 agent 那台机器写的，手机时钟差几分钟是常事，减出来是个看着像真的错数字。
  * 所以服务端给「已经跑了几秒」，这儿每秒加一，下一拍来了再对齐回去。
  */
+/*
+  「投出去了但这条没被处理」这行字**试过又撤掉了**，记一下免得再做一遍：
+
+  判据本身是能算的（最后一条是人话 ＋ 不在 working ＋ 这一轮 0 token），但它在**正常**
+  情形下也成立：人连投几条、最后一条还没轮到处理时就是这个样子。于是屏幕上多一句
+  「这条还没被处理（按过 Esc 就是被打断了，否则是它还没开始）」—— 用户的反馈是
+  「不明所以」，而且那句话还把两种原因都摊出来，等于没说。
+
+  更根本的是：**投出去又按 Esc，消息本身并没有被撤回**。它以 `type:"user"` 实实在在写进了
+  转录（真机上核过），claude 自己的 TUI 也照旧留着它 —— 所以气泡留着是对的，不需要解释。
+  真·被打断那种（打断在工具调用 / 输出中途）转录里有 `[Request interrupted by user]`，
+  那条我们已经画成一行小字了（见 internal/transcript 的 claudeSay）。
+
+  结论：**空着比编一句好**（和「几分钟前」那列同一条规矩）。
+*/
 function Running({ status, turn, shells }: {
   status: string
   turn?: ChatLog['turn']
