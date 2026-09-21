@@ -25,7 +25,7 @@ import { api } from './api'
  * TestPrefsMatchJS）。
  */
 export const PREF_KEYS = [
-  'fontSize', 'scheme', 'brand',
+  'fontSize', 'chatFont', 'scheme', 'brand',
   'kitty', 'meta', 'copyOnSelect', 'sync2026', 'switchPanel',
   'kbdFull',
   'noticeDot', 'noticeCard', 'noticeOS', 'noticeOSFg', 'noticeCardMs',

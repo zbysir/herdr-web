@@ -133,7 +133,7 @@ function Anchor({ children, href, node: _node, ...p }: ComponentPropsWithoutRef<
 function Pre({ children }: { children?: ReactNode }) {
   return (
     <pre className={cn('my-1.5 overflow-x-auto overscroll-x-contain rounded-md border border-line',
-      'bg-bg px-2 py-1.5 text-[11.5px] leading-relaxed',
+      'bg-bg px-2 py-1.5 text-[0.88em] leading-relaxed',
       '[&_code]:whitespace-pre [&_code]:bg-transparent [&_code]:p-0')}>
       {children}
     </pre>
@@ -184,16 +184,16 @@ export default function ChatMarkdown({ text, onPath }: {
                    [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-4
                    [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5
                    [&_li]:my-0.5
-                   [&_h1]:my-1.5 [&_h1]:text-[15px] [&_h1]:font-medium
-                   [&_h2]:my-1.5 [&_h2]:text-[14px] [&_h2]:font-medium
-                   [&_h3]:my-1 [&_h3]:text-[13px] [&_h3]:font-medium
+                   [&_h1]:my-1.5 [&_h1]:text-[1.15em] [&_h1]:font-medium
+                   [&_h2]:my-1.5 [&_h2]:text-[1.08em] [&_h2]:font-medium
+                   [&_h3]:my-1 [&_h3]:text-[1em] [&_h3]:font-medium
                    [&_a]:text-brand [&_a]:underline [&_a]:underline-offset-2
                    [&_strong]:font-medium [&_strong]:text-fg
                    [&_blockquote]:my-1 [&_blockquote]:border-l-2 [&_blockquote]:border-line
                    [&_blockquote]:pl-2 [&_blockquote]:text-muted
                    [&_hr]:my-2 [&_hr]:border-line
                    [&_code]:rounded [&_code]:bg-bg [&_code]:px-1 [&_code]:py-0.5
-                   [&_code]:font-mono [&_code]:text-[11.5px]
+                   [&_code]:font-mono [&_code]:text-[0.88em]
                    [&_table]:my-1 [&_table]:block [&_table]:w-full [&_table]:overflow-x-auto
                    [&_th]:border [&_th]:border-line [&_th]:px-1.5 [&_th]:py-0.5 [&_th]:text-left [&_th]:font-medium
                    [&_td]:border [&_td]:border-line [&_td]:px-1.5 [&_td]:py-0.5"

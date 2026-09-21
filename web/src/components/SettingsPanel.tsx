@@ -65,7 +65,7 @@ export function SettingsPanel({
   kbdFull, onKbdFull, keyStyle, onKeyStyle, popupClear, onPopupClear, holdRate, onHoldRate,
   enterSend, onEnterSend, live, onLive, rich, onRich,
   heals, onSaved, onTopbar, toast, state,
-  fontSize, onFont, scheme, onScheme, brand, onBrand, profile, onProfiles,
+  fontSize, onFont, chatFont, onChatFont, scheme, onScheme, brand, onBrand, profile, onProfiles,
 }: {
   tab: SettingsTab
   onTab: (t: SettingsTab) => void
@@ -119,6 +119,9 @@ export function SettingsPanel({
   fontSize: number
   /** 字号加减（传 +1 / -1）。手机竖屏顶栏放不下这两个图标，入口在这儿 */
   onFont: (d: number) => void
+  /** 对话区字号（px）+ 加减。**和上面那个终端字号是两个数**，见那一行的注释 */
+  chatFont: number
+  onChatFont: (d: number) => void
   scheme: 'dark' | 'light'
   onScheme: () => void
   /** 主题色（界面上那一点强调色），见 lib/prefs.ts 的 BRANDS */
@@ -187,7 +190,7 @@ export function SettingsPanel({
           rich={rich} onRich={onRich}
           osFg={osFg} onOSFg={onOSFg} cardMs={cardMs} onCardMs={onCardMs}
           heals={heals} state={state} toast={toast}
-          fontSize={fontSize} onFont={onFont} scheme={scheme} onScheme={onScheme}
+          fontSize={fontSize} onFont={onFont} chatFont={chatFont} onChatFont={onChatFont} scheme={scheme} onScheme={onScheme}
           brand={brand} onBrand={onBrand}
         />
       )}
@@ -202,7 +205,7 @@ function TermSection({
   opts, setOpt, card, onCard, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs, kbdFull, onKbdFull,
   keyStyle, onKeyStyle, popupClear, onPopupClear, holdRate, onHoldRate,
   enterSend, onEnterSend, live, onLive, rich, onRich,
-  heals, state, fontSize, onFont, scheme, onScheme, brand, onBrand, toast,
+  heals, state, fontSize, onFont, chatFont, onChatFont, scheme, onScheme, brand, onBrand, toast,
 }: {
   opts: TermOpts
   setOpt: (k: keyof TermOpts, v: boolean) => void
@@ -239,6 +242,8 @@ function TermSection({
   state?: State | null
   fontSize: number
   onFont: (d: number) => void
+  chatFont: number
+  onChatFont: (d: number) => void
   scheme: 'dark' | 'light'
   onScheme: () => void
   brand: BrandId
@@ -283,6 +288,18 @@ function TermSection({
               <AArrowDown className="size-4" />
             </Button>
             <Button size="icon" className="rounded-none border-0" title="放大字号" onClick={() => onFont(1)}>
+              <AArrowUp className="size-4" />
+            </Button>
+          </div>
+          {/* **对话字号是另一个数**：上面那个管终端（xterm 的等宽网格），这个管 chat 那几个
+              气泡（用户点名要分开）。摆在一起是因为两者是同一类事（「字看得清不清」），
+              但标签要写清是哪一个，不然就成了「调了没反应」。 */}
+          <span className="ml-2 text-xs text-muted tabular-nums">对话 {chatFont}px</span>
+          <div className="flex overflow-hidden rounded-md border border-line">
+            <Button size="icon" className="rounded-none border-0 border-r border-line" title="缩小对话字号" onClick={() => onChatFont(-1)}>
+              <AArrowDown className="size-4" />
+            </Button>
+            <Button size="icon" className="rounded-none border-0" title="放大对话字号" onClick={() => onChatFont(1)}>
               <AArrowUp className="size-4" />
             </Button>
           </div>
