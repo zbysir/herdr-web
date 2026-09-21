@@ -42,7 +42,7 @@ function openLink(uri: string) {
   window.open(u.href, '_blank', 'noopener,noreferrer')
 }
 import { linkAtCell, pathLinkProvider } from './paths'
-import { THEMES, type Scheme } from './themes'
+import { THEMES, termTheme, type Scheme } from './themes'
 import { attachTouch } from './touch'
 import { hitsSwitchButton } from './mobilebar'
 
@@ -156,7 +156,7 @@ export class Session {
       rightClickSelectsWord: false,
       scrollback: 2000,
       drawBoldTextInBrightColors: false,
-      theme: THEMES[scheme],
+      theme: termTheme(scheme),
       linkHandler: { activate: (_e, uri) => openLink(uri) },
     })
 
@@ -931,8 +931,18 @@ export class Session {
 
   setScheme(s: Scheme) {
     this.scheme = s
-    this.term.options.theme = THEMES[s]
+    this.term.options.theme = termTheme(s)
     if (this.caps.has('DEC 2031')) this.sendScheme() // 程序订阅过就通知它重绘
+  }
+
+  /**
+   * 主题色换了：光标和选区跟着走（终端里别的颜色一个都不动，见 themes.ts）。
+   *
+   * 不带参数 —— 颜色是 termTheme 从 `<html>` 上现读 CSS 变量的，所以**调它之前
+   * `data-brand` 必须已经落下去了**（App.tsx 那个 effect 里就是这个顺序）。
+   */
+  setBrand() {
+    this.term.options.theme = termTheme(this.scheme)
   }
 
   setFontSize(n: number) {

@@ -13,7 +13,7 @@ import { api } from './api'
  * （pushPref）。镜像还顺手解决了首屏闪一下的问题：字号这种东西要是等请求回来才生效，
  * 终端会先按默认字号画一遍再跳一次。
  *
- * 设置面板「终端」那一页**整页**都在这儿：字号、明暗、五个终端开关、键盘全屏、提示那几个。
+ * 设置面板「终端」那一页**整页**都在这儿：字号、明暗、主题色、五个终端开关、键盘全屏、提示那几个。
  * 通知开关也在 —— 界面上那个勾是「想要」和「给了权限」**与**起来画的，而真弹之前
  * showNotify 还要再问一次权限，所以同步过去不会出现「显示着开着、一条都不弹」。
  *
@@ -25,7 +25,7 @@ import { api } from './api'
  * TestPrefsMatchJS）。
  */
 export const PREF_KEYS = [
-  'fontSize', 'scheme',
+  'fontSize', 'scheme', 'brand',
   'kitty', 'meta', 'copyOnSelect', 'sync2026', 'switchPanel',
   'kbdFull',
   'noticeDot', 'noticeCard', 'noticeOS', 'noticeOSFg', 'noticeCardMs',
@@ -147,3 +147,52 @@ export const composeEnter = () => localStorage.getItem('composeEnter') !== 'newl
  * 和 keyStyle / popupClear 一样**同步读镜像**：查看器每渲染一行都要它。
  */
 export const diffWrap = () => localStorage.getItem('diffWrap') !== '0'
+
+/**
+ * 主题色：界面上那一点强调色（文字 / 图标 / 描边 + 主按钮那一套填充）。
+ *
+ * 为什么要这一档：绿是这个项目的出厂色，但强调色贴的是**用的人**的眼睛 —— 一天盯十个
+ * 小时的界面，颜色不顺眼是个真问题（用户报的「绿色不是所有人都喜欢」）。
+ *
+ * 换的只有 brand 那四个 token，灰阶和 ok/bad/warn 一个都不动 —— 为什么、以及为什么
+ * 内置色里**没有红橙黄**，写在 index.css 那段注释里（一句话：那三个色相是状态语义，
+ * 面板一览一行里同框出现，撞上就分不出来）。
+ *
+ * 跟着**这一套排布**走（手机一套、电脑一套各选各的）。色值全在 CSS 里（`--sw-<id>`
+ * 和 `:root[data-brand=<id>]`），这边只有 id 和名字 —— 两边对不上是**完全静默**的
+ * （色块变透明、选了没反应），`lib/brand.test.ts` 盯着。
+ */
+export const BRANDS = [
+  { id: 'green', name: '绿' },
+  { id: 'blue', name: '蓝' },
+  { id: 'violet', name: '紫' },
+  { id: 'cyan', name: '青' },
+  { id: 'magenta', name: '品红' },
+  { id: 'mono', name: '石墨' },
+] as const
+export type BrandId = (typeof BRANDS)[number]['id']
+
+/**
+ * 这台设备用哪个主题色。**同步读镜像**（见上面那段）—— 它要在**第一帧之前**就落到
+ * `<html>` 上（App 模块作用域里调一次），等一个请求就是「绿闪一下再变紫」。
+ * 认不出来的值退回绿（老文件、或者更新的版本写进去的）。
+ */
+export const brandId = (): BrandId => {
+  // 这一处**包着 try**（同一个文件里别的读没有）：它在 App 的模块作用域里就被调了一次，
+  // 那儿抛出来不是「退回默认」而是整个模块加载失败 —— 白屏。和 readLayoutCache 同一个道理
+  let v: string | null = null
+  try {
+    v = localStorage.getItem('brand')
+  } catch { /* 隐私模式 / 禁了 site data：当没设过 */ }
+  return BRANDS.some((b) => b.id === v) ? (v as BrandId) : 'green'
+}
+
+/**
+ * 把主题色挂到 `<html>` 上（CSS 那边认 `[data-brand=...]`）。
+ *
+ * 出厂那档也照样写上去，不做「绿就删掉属性」的省事写法：CSS 里绿有自己的规则块，
+ * 有没有属性走的是两条路，将来改其中一条另一条就悄悄不一样了。
+ */
+export const applyBrand = (id: BrandId) => {
+  document.documentElement.dataset.brand = id
+}

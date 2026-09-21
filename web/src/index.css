@@ -83,6 +83,105 @@
   --color-warn: #a2680a;
 }
 
+/*
+  ————————————————————————————————————— 主题色（pref `brand`，见 lib/prefs.ts）
+
+  换的只有 brand 那**四个** token（文字/图标那一档 + 主按钮那一套填充），灰阶一个不动 ——
+  「界面往后退、内容自己出彩」是上面那条取舍，换个色相不该把它推翻。
+
+  **ok / bad / warn 三个语义色也一个都不换**：绿=好、红=坏、黄=在跑，那是「这是什么状态」
+  不是「我喜欢什么颜色」。由此来的一条硬规矩：**内置色里没有红、橙、黄。**
+  面板一览那一行上同框出现「等你」（红）、「在跑」（黄点）和「当前 / 完成」（brand），
+  主题色一旦落进红黄那一段，这三个当场分不出来 —— 这是已经翻过一次车的地方
+  （见 --color-warn 那段注释）。绿虽然和 ok 同色，但 ok 只出现在顶栏那个连接点上，不同框。
+
+  每套只写一个 --sw-<id>（色块预览也读它，见 SettingsPanel「主题色」那一行），
+  另外三个值手写：从主色机械推导（color-mix 到黑）出来的填充在青、品红这类色相上会发灰，
+  而这一档要的正是「好看」。
+
+  **顺序有讲究**：下面这些 `:root[data-brand=x]` 和上面那个 `:root.light` 特异性一样
+  （都是 0,2,0），靠**位置**分胜负 —— 整段必须在 `:root.light` 之后，不然亮色下选了别的
+  主题色也还是绿。而 `--color-brand: var(--sw-x)` 只写一次就够（暗亮各一份的是 --sw-x 自己）。
+
+  一条**已知的降级**：`bg-brand/12` 这类带透明度的写法，Tailwind 会编出两份 —— 一份写死
+  的 hex 兜底、一份 `@supports (color-mix)` 里的 `var(--color-brand)`。所以在**不支持
+  color-mix 的老浏览器**上（Safari < 16.2 / Chrome < 111），换了主题色之后那些半透明的
+  底和描边还会停在绿上（实心的那些照旧跟着换）。不为它做补偿：真要补就得把 6 套 × 明暗
+  的每一档透明度都写死一遍，而那正是这次要避免的「色值抄好几份」。
+
+  logo（public/logo*.svg）和离线页里那点绿**有意不跟着走** —— 那是品牌标识，不是界面
+  强调色；离线页还压根不能跑脚本（CSP 挡内联 script），读不到人选了什么。
+*/
+:root {
+  --sw-green: #3ecf8e;
+  --sw-blue: #4d9cf8;
+  --sw-violet: #a78bfa;
+  --sw-cyan: #2bc9e0;
+  --sw-magenta: #e87ae0;
+  /* 石墨：给「界面上一点颜色都别有」的人。代价说在明处 —— 暗色下它和正文色 #ededed
+     几乎一样，于是「打开着 / 选中」只剩底和边在认（别的主题还能靠色相一眼扫到）。 */
+  --sw-mono: #e6e6e6;
+}
+:root.light {
+  /* 亮底上那几个亮色当文字全不够看（#3ecf8e 才 ~1.9:1），整条往下压两档 */
+  --sw-green: #157f56;
+  --sw-blue: #0b63ce;
+  --sw-violet: #6d33d6;
+  --sw-cyan: #0e7490;
+  --sw-magenta: #a3199b;
+  --sw-mono: #2e2e2e;
+}
+
+:root[data-brand="green"] {
+  --color-brand: var(--sw-green);
+  --color-brand-bg: #1c6a47; --color-brand-line: #2b8f61; --color-brand-fg: #f2fdf7;
+}
+:root.light[data-brand="green"] {
+  --color-brand-bg: var(--sw-green); --color-brand-line: #0f6b47; --color-brand-fg: #ffffff;
+}
+
+:root[data-brand="blue"] {
+  --color-brand: var(--sw-blue);
+  --color-brand-bg: #1b4a87; --color-brand-line: #2a6cbe; --color-brand-fg: #f2f8ff;
+}
+:root.light[data-brand="blue"] {
+  --color-brand-bg: var(--sw-blue); --color-brand-line: #0a55b0; --color-brand-fg: #ffffff;
+}
+
+:root[data-brand="violet"] {
+  --color-brand: var(--sw-violet);
+  --color-brand-bg: #46309b; --color-brand-line: #6a4ad0; --color-brand-fg: #f7f4ff;
+}
+:root.light[data-brand="violet"] {
+  --color-brand-bg: var(--sw-violet); --color-brand-line: #5a25bb; --color-brand-fg: #ffffff;
+}
+
+:root[data-brand="cyan"] {
+  --color-brand: var(--sw-cyan);
+  --color-brand-bg: #135a6b; --color-brand-line: #1d8aa3; --color-brand-fg: #f0fdff;
+}
+:root.light[data-brand="cyan"] {
+  --color-brand-bg: var(--sw-cyan); --color-brand-line: #0b6076; --color-brand-fg: #ffffff;
+}
+
+:root[data-brand="magenta"] {
+  --color-brand: var(--sw-magenta);
+  --color-brand-bg: #7a2472; --color-brand-line: #a63c9c; --color-brand-fg: #fdf4fc;
+}
+:root.light[data-brand="magenta"] {
+  --color-brand-bg: var(--sw-magenta); --color-brand-line: #86137f; --color-brand-fg: #ffffff;
+}
+
+/* 石墨的主按钮反过来：暗色里是**白底黑字**（深灰底在 #1a1a1a 的面板上根本浮不起来，
+   而主按钮是一屏一个的主操作，必须一眼看见），亮色里是黑底白字。 */
+:root[data-brand="mono"] {
+  --color-brand: var(--sw-mono);
+  --color-brand-bg: #d8d8d8; --color-brand-line: #f2f2f2; --color-brand-fg: #121212;
+}
+:root.light[data-brand="mono"] {
+  --color-brand-bg: var(--sw-mono); --color-brand-line: #1b1b1b; --color-brand-fg: #ffffff;
+}
+
 /* 高度跟着 visualViewport 走：iOS 的虚拟键盘从不缩布局视口，Android 也要
    interactive-widget 才缩。只写 100% 的话键盘会盖住快捷键条和发件箱。 */
 /* 原生控件（<select> 弹出的那张列表、输入法候选框、系统滚动条）跟着这一档走。

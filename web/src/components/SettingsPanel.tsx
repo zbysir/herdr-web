@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { X } from 'lucide-react'
 import { AArrowDown, AArrowUp, CircleHalf } from '@/icons'
 import type { ProfilesResponse, SoftkeysConfig, State } from '@/lib/api'
-import { HOLD_RATES, POPUP_CLEARS, type HoldRate, type KeyStyle, type PopupClear } from '@/lib/prefs'
+import { BRANDS, HOLD_RATES, POPUP_CLEARS, type BrandId, type HoldRate, type KeyStyle, type PopupClear } from '@/lib/prefs'
 import { enableNotify, notifyState, testNotify, type NotifyState } from '@/lib/notify'
 import { installState, onInstallChange, promptInstall, type InstallState } from '@/lib/install'
 import { Panel } from './ui/panel'
@@ -65,7 +65,7 @@ export function SettingsPanel({
   kbdFull, onKbdFull, keyStyle, onKeyStyle, popupClear, onPopupClear, holdRate, onHoldRate,
   enterSend, onEnterSend, live, onLive,
   heals, onSaved, onTopbar, toast, state,
-  fontSize, onFont, scheme, onScheme, profile, onProfiles,
+  fontSize, onFont, scheme, onScheme, brand, onBrand, profile, onProfiles,
 }: {
   tab: SettingsTab
   onTab: (t: SettingsTab) => void
@@ -118,6 +118,9 @@ export function SettingsPanel({
   onFont: (d: number) => void
   scheme: 'dark' | 'light'
   onScheme: () => void
+  /** 主题色（界面上那一点强调色），见 lib/prefs.ts 的 BRANDS */
+  brand: BrandId
+  onBrand: (v: BrandId) => void
   /** 这台设备用哪一套排布（顶栏 / 快捷键条两页改的就是它），见 internal/profiles */
   profile: { id: string; name: string }
   /** 名册 / 绑定 / 那一套的开关变了 —— App 据此重拉排布、把开关刷一遍 */
@@ -181,6 +184,7 @@ export function SettingsPanel({
           osFg={osFg} onOSFg={onOSFg} cardMs={cardMs} onCardMs={onCardMs}
           heals={heals} state={state} toast={toast}
           fontSize={fontSize} onFont={onFont} scheme={scheme} onScheme={onScheme}
+          brand={brand} onBrand={onBrand}
         />
       )}
       {tab === 'topbar' && <TopbarPanel onSaved={onTopbar} toast={toast} profile={profile} />}
@@ -194,7 +198,7 @@ function TermSection({
   opts, setOpt, card, onCard, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs, kbdFull, onKbdFull,
   keyStyle, onKeyStyle, popupClear, onPopupClear, holdRate, onHoldRate,
   enterSend, onEnterSend, live, onLive,
-  heals, state, fontSize, onFont, scheme, onScheme, toast,
+  heals, state, fontSize, onFont, scheme, onScheme, brand, onBrand, toast,
 }: {
   opts: TermOpts
   setOpt: (k: keyof TermOpts, v: boolean) => void
@@ -230,6 +234,8 @@ function TermSection({
   onFont: (d: number) => void
   scheme: 'dark' | 'light'
   onScheme: () => void
+  brand: BrandId
+  onBrand: (v: BrandId) => void
 }) {
   // 上次自动全屏失败的原因（成功过就没有了）。面板一开读一次就够
   const kbdErr = localStorage.getItem('kbdFullErr')
@@ -259,21 +265,50 @@ function TermSection({
   )
   return (
     <div className="flex flex-col gap-0.5">
-      {/* 字号和明暗：手机竖屏（< 440px）的顶栏放不下这三个图标，那一档只能从这儿调。
-          宽屏顶栏里那三个还在，这里是同一套动作，不是另一份状态 */}
-      <div className="mb-2 flex flex-wrap items-center gap-2 border-b border-line pb-3">
-        <span className="text-xs text-muted tabular-nums">字号 {fontSize}px</span>
-        {/* 加减贴成一个控件：它们操作的是同一个量，分开两个方块看着像两件事 */}
-        <div className="flex overflow-hidden rounded-md border border-line">
-          <Button size="icon" className="rounded-none border-0 border-r border-line" title="缩小字号" onClick={() => onFont(-1)}>
-            <AArrowDown className="size-4" />
-          </Button>
-          <Button size="icon" className="rounded-none border-0" title="放大字号" onClick={() => onFont(1)}>
-            <AArrowUp className="size-4" />
-          </Button>
+      {/* 外观那一组：字号、明暗、主题色。手机竖屏（< 440px）的顶栏放不下前两个图标，
+          那一档只能从这儿调；宽屏顶栏里那几个还在，这里是同一套动作，不是另一份状态 */}
+      <div className="mb-2 flex flex-col gap-2.5 border-b border-line pb-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-muted tabular-nums">字号 {fontSize}px</span>
+          {/* 加减贴成一个控件：它们操作的是同一个量，分开两个方块看着像两件事 */}
+          <div className="flex overflow-hidden rounded-md border border-line">
+            <Button size="icon" className="rounded-none border-0 border-r border-line" title="缩小字号" onClick={() => onFont(-1)}>
+              <AArrowDown className="size-4" />
+            </Button>
+            <Button size="icon" className="rounded-none border-0" title="放大字号" onClick={() => onFont(1)}>
+              <AArrowUp className="size-4" />
+            </Button>
+          </div>
+          <span className="ml-2 text-xs text-muted">{scheme === 'dark' ? '暗色' : '亮色'}</span>
+          <Button size="icon" title="切换明暗" onClick={onScheme}><CircleHalf className="size-4" /></Button>
         </div>
-        <span className="ml-2 text-xs text-muted">{scheme === 'dark' ? '暗色' : '亮色'}</span>
-        <Button size="icon" title="切换明暗" onClick={onScheme}><CircleHalf className="size-4" /></Button>
+
+        {/* 主题色。**画成一排色块而不是一排名字**：挑颜色这件事眼睛比字快，而「紫」两个字
+            说不出那是哪个紫。色块的底色直接读 CSS 里那份 `--sw-<id>`（唯一出处，见
+            index.css），所以它在亮色下自己就是压深过的那一版 —— 挑的时候看到的就是待会
+            界面上的那个颜色。选中态是「挖一圈底色 + 外面一道亮环」：色块本身已经被颜色占满，
+            再往上叠勾或者描边都会被底色吃掉（六个色块里有近白也有深紫）。 */}
+        <div className="flex flex-wrap items-center gap-2 text-[13px]">
+          主题色
+          <div className="flex items-center gap-1.5">
+            {BRANDS.map((b) => (
+              <button
+                key={b.id}
+                type="button"
+                title={b.name}
+                aria-label={`主题色 ${b.name}`}
+                aria-pressed={brand === b.id}
+                onClick={() => onBrand(b.id)}
+                className={cn(
+                  'size-7 shrink-0 cursor-pointer rounded-full transition',
+                  brand === b.id ? 'border-2 border-bg ring-2 ring-fg' : 'border border-line hover:border-line-hi',
+                )}
+                style={{ background: `var(--sw-${b.id})` }}
+              />
+            ))}
+          </div>
+          <span className="text-xs text-faint">只换强调色；「等你 / 在跑」那几个状态色不跟着变</span>
+        </div>
       </div>
 
       {row('kitty', 'kitty 键盘协议（Ctrl+Shift+x / Ctrl+数字 / Ctrl+Enter）')}

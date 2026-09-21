@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Maximize, Minimize } from './icons'
 import { api, deviceKind, filesApi, libMap, resolveRows, SESSION, topbarKeyRef, UNAUTHED, type ClipResult, type FileStat, type Notice, type ProfilesResponse, type RowSegments, type SoftKey, type SoftkeysConfig, type SoftkeysResponse, type State, type TopbarResponse, type UnauthedDetail, type WhoAmI } from '@/lib/api'
-import { applyPrefs, composeEnter, holdRate, keyStyle, popupClear, pushPref, type HoldRate, type KeyStyle, type PopupClear } from '@/lib/prefs'
+import { applyBrand, applyPrefs, brandId, composeEnter, holdRate, keyStyle, popupClear, pushPref, type BrandId, type HoldRate, type KeyStyle, type PopupClear } from '@/lib/prefs'
 import { cacheLayout, readLayoutCache } from '@/lib/layoutcache'
 import { readClipboard, writeClipboard } from '@/lib/clipboard'
 import { Session } from '@/term/session'
@@ -103,6 +103,14 @@ function pairHint(): string | undefined {
  */
 const CACHED = readLayoutCache()
 
+/**
+ * 主题色**在第一帧之前**就挂到 `<html>` 上（模块作用域，和上面那份镜像同一个道理）。
+ *
+ * 放 effect 里的话第一帧是出厂绿、下一帧才变过去 —— 顶栏那一排图标当着面闪一下颜色。
+ * 下面那个 effect 照旧会再调一次（人在设置里改的那一下走的是它），这儿只管开场那一帧。
+ */
+applyBrand(brandId())
+
 export default function App() {
   const host = useRef<HTMLDivElement>(null)
   const sess = useRef<Session | null>(null)
@@ -124,6 +132,7 @@ export default function App() {
   const [sticky, setSticky] = useState({ ctrl: false, alt: false })
   const [kbdUp, setKbdUp] = useState(false)
   const [scheme, setScheme] = useState<Scheme>(initialScheme)
+  const [brand, setBrand] = useState<BrandId>(brandId)
   const [fontSize, setFontSize] = useState(
     () => Number(localStorage.getItem('fontSize')) || (matchMedia('(pointer: coarse)').matches ? 11 : 13),
   )
@@ -536,10 +545,20 @@ export default function App() {
   const relayoutVV = useCallback(() => sess.current?.relayout(true), [])
   useViewportHeight(relayoutVV)
 
-  useEffect(() => { sess.current?.setScheme(scheme) }, [scheme])
+  /**
+   * 明暗。**先切 `<html>` 上的类，再通知终端** —— 顺序反不得：终端那份主题里的光标和
+   * 选区是 termTheme 从 CSS 变量现读的（见 term/themes.ts），类还没切就读到上一套的值，
+   * 而且会一直错到下次切换。原来这是两个 effect，React 按定义顺序跑、正好是反的。
+   */
   useEffect(() => {
     document.documentElement.classList.toggle('light', scheme === 'light')
+    sess.current?.setScheme(scheme)
   }, [scheme])
+  // 主题色同理：属性先落下去，终端再去读（光标和选区跟着主题色走，界面那一片是纯 CSS）
+  useEffect(() => {
+    applyBrand(brand)
+    sess.current?.setBrand()
+  }, [brand])
   useEffect(() => {
     if (!sess.current) return
     sess.current.opts = opts
@@ -726,6 +745,7 @@ export default function App() {
     setNoticeMs(Number(localStorage.getItem('noticeCardMs') ?? AUTO_MS_DEFAULT) || 0)
     const sc = localStorage.getItem('scheme')
     if (sc === 'dark' || sc === 'light') setScheme(sc)
+    setBrand(brandId())
     const fs = Number(localStorage.getItem('fontSize'))
     if (fs > 0) setFontSize(sess.current?.setFontSize(fs) ?? fs)
   }
@@ -746,6 +766,12 @@ export default function App() {
     setScheme(next)
     pushPref(profile.id, 'scheme', next, toast)
   }, [scheme, profile.id, toast])
+
+  /** 主题色。和明暗一样跟着这一套排布走（手机一套、电脑一套各选各的） */
+  const pickBrand = useCallback((v: BrandId) => {
+    setBrand(v)
+    pushPref(profile.id, 'brand', v, toast)
+  }, [profile.id, toast])
 
   /* --------------------------------------------------------- 启动拉配置 */
   useEffect(() => {
@@ -1582,6 +1608,8 @@ export default function App() {
             onFont={bumpFont}
             scheme={scheme}
             onScheme={flipScheme}
+            brand={brand}
+            onBrand={pickBrand}
             profile={profile}
             // 换了一套 / 改了名 / 改了绑定：记住新的那一套，再把排布整份换过来
             onProfiles={(r) => { applyProfiles(r); void loadLayout() }}

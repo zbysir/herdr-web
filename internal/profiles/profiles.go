@@ -79,7 +79,7 @@ var Kinds = map[string]bool{"phone": true, "tablet": true, "desktop": true}
 // 以及发件箱 / 快捷键条显不显示 —— 最后这几个是随手开关的视图状态，一次会话里点十几次，
 // 每点一次写一趟服务端不值当。
 var Prefs = []string{
-	"fontSize", "scheme",
+	"fontSize", "scheme", "brand",
 	"kitty", "meta", "copyOnSelect", "sync2026", "switchPanel",
 	"kbdFull",
 	"noticeDot", "noticeCard", "noticeOS", "noticeOSFg", "noticeCardMs",
