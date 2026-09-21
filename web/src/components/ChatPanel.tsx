@@ -86,8 +86,10 @@ const WAIT_MS = 25_000
 const Markdown = lazy(() => import('./ChatMarkdown'))
 
 export function ChatPanel({
-  panes, sent, onDropSent, onClose, onToast, onOpenPath, onHealth, focus,
+  panes, sent, onDropSent, onClose, onToast, onOpenPath, onHealth, focus, chatFont,
 }: {
+  /** 对话区的字号（px）。**和终端那个 fontSize 是两回事**，见列表容器上那段注释 */
+  chatFont: number
   /** herdr 的 pane 列表。**这就是「看哪个 pane」的候选来源** */
   panes: Pane[]
   /** 刚投出去还没在转录里露面的那几条（见 useCompose 的 sent） */
@@ -173,6 +175,9 @@ export function ChatPanel({
   // 存现场时要读此刻的 msgs / meta，而把它们塞进 effect 依赖会让整个重置逻辑乱跑 —— 用镜像
   const msgsRef = useRef<ChatMsg[]>([])
   msgsRef.current = msgs
+  /** 「现在屏幕上是哪个 pane」的镜像 —— 迟到的响应拿它当判据，见 tick 里那段 */
+  const activeRef = useRef<string | null>(active)
+  activeRef.current = active
   const metaRef = useRef<typeof meta>(null)
   metaRef.current = meta
   // 贴底也得有一份 ref：滚动回调和轮询回调都要**同步**读它，state 那份在闭包里是旧的。
@@ -198,7 +203,20 @@ export function ChatPanel({
       const log = await chatApi.log(paneID, next.current, sig.current)
       // 换 pane 那一下上一拍的响应可能后到 —— 服务端把 pane 回了一遍，对不上就丢掉。
       // 不丢的话新 pane 的对话里会混进旧 pane 的几条，而且看着完全正常。
-      if (log.pane && log.pane !== paneID) return
+      /*
+        **迟到的响应要和「现在屏幕上是哪个 pane」比，不是和「这个请求是为谁发的」比。**
+
+        原来比的是 `paneID` —— 那就是发起这次请求的那个 pane，所以旧 pane 的响应**一路通过**，
+        接着把它的 `sig` / `msgs` / `next` 写进了新 pane 的状态（`setMsgs(旧的)`，而旧的那次
+        多半是「增量、没有新消息」= 空数组）。表现就是切 pane 时偶发「这条会话里还没有对话」。
+        `active` 不在 tick 的依赖里（那会让每次换 pane 都重建一遍轮询），所以用镜像 ref 现读。
+
+        连 `first` 都不许动：清掉的话新 pane 在自己的响应回来之前就会显示空。
+      */
+      // 本质是一句话：**只应用「现在正显示的那个 pane」的响应**。两道都要 ——
+      // 老服务端不回 `log.pane`，那时只有前一道拦得住。
+      if (paneID !== activeRef.current) return
+      if (log.pane && log.pane !== activeRef.current) return
       setErr(null)
       onHealth?.(true)
       // sig 变了 = 换了会话（/clear、/resume、压缩）→ 手上那份整份丢掉。
@@ -253,9 +271,11 @@ export function ChatPanel({
         reason: e instanceof ApiError ? e.reason : undefined,
       })
       onHealth?.(false)
-    } finally {
       setFirst(false)
+      return
     }
+    setFirst(false)
+
   }, [dropLanded, onHealth])
 
   /*
@@ -268,7 +288,10 @@ export function ChatPanel({
   */
   useLayoutEffect(() => {
     const p = prev.current
-    if (p && p !== active) {
+    // **只有真读到过的现场才存**（`sig` 是第一次成功响应才写的）。存一个还在加载的空快照，
+    // 下次切回来就是「现场还在」+ 一条消息都没有 → 屏幕上写「这条会话里还没有对话」，
+    // 而其实只是没读完（用户报的「切面板时有很小的几率说当前面板没有对话」）。
+    if (p && p !== active && sig.current) {
       cache.current.delete(p) // 先删再插 = 让它排到最后（只留最近几个）
       cache.current.set(p, { msgs: msgsRef.current, meta: metaRef.current, next: next.current, sig: sig.current })
       while (cache.current.size > KEEP_PANES) {
@@ -310,7 +333,18 @@ export function ChatPanel({
     let timer = 0
     const loop = async () => {
       if (!alive) return
-      await tick(active)
+      /*
+        **这一下必须包起来。** `tick` 一旦抛出来（它里面那个 try 只兜住了网络那一段），
+        `loop` 就在这儿断了，后面那个 `setTimeout` 再也不排 —— 轮询**永久停住**，
+        状态冻在当时那一刻，而屏幕上一个字都不报。刚切过去那一下冻住就是一片空白
+        「这条会话里还没有对话」，而且自己不会好，只能把面板关掉重开（整个重挂）。
+        用户报的正是这个。所以：错就错一拍，下一拍照旧排。
+      */
+      try {
+        await tick(active)
+      } catch {
+        onHealth?.(false)
+      }
       if (alive) timer = window.setTimeout(loop, POLL_MS)
     }
     void loop()
@@ -321,7 +355,7 @@ export function ChatPanel({
       clearTimeout(timer)
       document.removeEventListener('visibilitychange', wake)
     }
-  }, [active, tick])
+  }, [active, tick, onHealth])
 
   /* --------------------------------------------------------------- 滚动 */
 
@@ -634,7 +668,12 @@ export function ChatPanel({
               这条会话里还没有对话{meta?.file ? <><br /><span className="text-faint">{meta.file}</span></> : null}
             </p>
           ) : (
-            <div className="flex flex-col gap-2 py-3">
+            /* 对话区的字号是**一个独立的设置项**（`chatFont`，跟着排布走）——
+               终端那个 `fontSize` 管的是 xterm，两回事（用户点名要分开）。挂在这一层而不是
+               整个面板上：顶栏那行 pane 名、底下那颗「新动态」药丸是**外壳**，跟着一起放大
+               只会把固定高度的地方撑变形，而人要调的是「对话看得清不清」。
+               里面那几个组件的字号都写成 em，所以全跟着这一个数走。 */
+            <div className="flex flex-col gap-2 py-3" style={{ fontSize: `${chatFont}px` }}>
               {err && <Strip msg={err.msg} />}
               {meta?.more ? (
                 <button
@@ -1195,13 +1234,13 @@ function AskCard({ m, onAnswer, live }: {
     <div className="flex flex-col gap-2 rounded-card border border-brand/40 bg-brand/10 px-3 py-2.5">
       {qs.map((q, qi) => (
         <div key={qi} className="flex flex-col gap-1.5">
-          <span className="text-xs text-brand">
+          <span className="text-[0.9em] text-brand">
             {canPick && <span className={cn('mr-1', picks[qi]?.length ? 'text-brand' : 'text-faint')}>
               {picks[qi]?.length ? '☑' : '☐'}
             </span>}
             {q.header || `第 ${qi + 1} 问`}{q.multi ? '（可多选）' : ''}
           </span>
-          <p className="text-[13px]/relaxed text-fg">{q.question}</p>
+          <p className="text-[1em]/relaxed text-fg">{q.question}</p>
           <div className="flex flex-col gap-1">
             {q.options.map((o, oi) => {
               const at = `${qi}:${oi}`
@@ -1211,11 +1250,11 @@ function AskCard({ m, onAnswer, live }: {
               const chose = !!q.picked && q.picked.split(', ').includes(o.label)
               const row = (
                 <>
-                  <span className="shrink-0 font-mono text-[11px] text-faint">{oi + 1}</span>
+                  <span className="shrink-0 font-mono text-[0.85em] text-faint">{oi + 1}</span>
                   <span className="min-w-0">
-                    <span className="text-[13px] text-fg">{o.label}</span>
+                    <span className="text-[1em] text-fg">{o.label}</span>
                     {o.description && (
-                      <span className="block text-xs text-muted">{o.description}</span>
+                      <span className="block text-[0.9em] text-muted">{o.description}</span>
                     )}
                   </span>
                 </>
@@ -1293,7 +1332,7 @@ function AskCard({ m, onAnswer, live }: {
               }
             }}
             className={cn(
-              'shrink-0 rounded-md border px-3 py-1 text-[13px] disabled:opacity-100',
+              'shrink-0 rounded-md border px-3 py-1 text-[1em] disabled:opacity-100',
               ready
                 ? 'border-brand-line bg-brand-bg text-brand-fg'
                 : 'border-line bg-ctl text-faint',
@@ -1303,16 +1342,16 @@ function AskCard({ m, onAnswer, live }: {
           </button>
           {/* 按不动的时候**就在按钮旁边**说为什么（见 missing 那段注释） */}
           {!ready && (
-            <span className="text-xs text-warn">
+            <span className="text-[0.9em] text-warn">
               还有 {missing.length} 题没选{missing.length <= 3 ? `（第 ${missing.map((i) => i + 1).join('、')} 问）` : ''}
             </span>
           )}
         </div>
-        {bad && <p className="text-xs/relaxed text-bad">{bad}</p>}
+        {bad && <p className="text-[0.9em]/relaxed text-bad">{bad}</p>}
         </>
       )}
 
-      <p className="text-xs text-faint">{footer(canPick, live, ready, chosen)}</p>
+      <p className="text-[0.9em] text-faint">{footer(canPick, live, ready, chosen)}</p>
     </div>
   )
 }
@@ -1364,14 +1403,14 @@ function ToolRun({ items, open, onToggle }: { items: ChatMsg[]; open: boolean; o
  */
 function ToolLine({ m, toggle }: { m: ChatMsg; toggle?: { open: boolean; n: number; onToggle: () => void } }) {
   return (
-    <div className="flex items-center gap-1.5 text-xs text-muted">
+    <div className="flex items-center gap-1.5 text-[0.9em] text-muted">
       {toggle ? (
         <button
           type="button"
           onClick={toggle.onToggle}
           title={toggle.open ? '折起这一串工具调用' : `这一串一共 ${toggle.n} 条，点开看全部`}
           className="flex shrink-0 items-center gap-0.5 rounded border border-line bg-ctl px-1
-                     font-mono text-[11px] text-muted hover:bg-ctl-hi hover:text-fg"
+                     font-mono text-[0.85em] text-muted hover:bg-ctl-hi hover:text-fg"
         >
           {toggle.open ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
           {toggle.n}
@@ -1379,8 +1418,8 @@ function ToolLine({ m, toggle }: { m: ChatMsg; toggle?: { open: boolean; n: numb
       ) : (
         <Wrench className="size-3 shrink-0 text-faint" />
       )}
-      <span className="shrink-0 font-mono text-[11.5px] text-fg">{m.tool}</span>
-      {m.meta && <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-faint">{m.meta}</span>}
+      <span className="shrink-0 font-mono text-[0.88em] text-fg">{m.tool}</span>
+      {m.meta && <span className="min-w-0 flex-1 truncate font-mono text-[0.88em] text-faint">{m.meta}</span>}
       {/* ok 是 undefined 就是「还不知道」（结果还没落盘）—— 那时画一个省略号，
           而不是画成成功。画成成功的话「正在跑」和「跑完了」看着一样 */}
       <span className="shrink-0">
@@ -1407,7 +1446,7 @@ function Bubble({ m, onAnswer, live, onOpenPath }: {
   if (m.ask) return <AskCard m={m} onAnswer={onAnswer} live={live} />
 
   if (m.kind === 'notice') {
-    return <p className="py-1 text-center text-xs text-faint">{m.text}</p>
+    return <p className="py-1 text-center text-[0.9em] text-faint">{m.text}</p>
   }
 
   if (m.kind === 'think') {
@@ -1416,7 +1455,7 @@ function Bubble({ m, onAnswer, live, onOpenPath }: {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="w-full text-left text-xs text-faint hover:text-muted"
+        className="w-full text-left text-[0.9em] text-faint hover:text-muted"
       >
         {open
           ? <span className="whitespace-pre-wrap break-words italic">{m.text}</span>
@@ -1430,7 +1469,7 @@ function Bubble({ m, onAnswer, live, onOpenPath }: {
     <div className={cn('flex', mine ? 'justify-end' : 'justify-start')}>
       <div
         className={cn(
-          'max-w-[85%] min-w-0 rounded-card px-3 py-2 text-[13px]/relaxed',
+          'max-w-[85%] min-w-0 rounded-card px-3 py-2 text-[1em]/relaxed',
           /*
            * 人说的话用**淡绿底 + 绿边**（`bg-brand/12 border-brand/40`，仓库里「打开 /
            * 选中态」的通用写法），**不是 `bg-brand-bg`** —— 那个 token 是主按钮那套饱和
