@@ -129,17 +129,7 @@ type Log struct {
 	More bool `json:"more"`
 	// Updates 前面那些消息的结果补丁（见 Update）。
 	Updates []Update `json:"updates,omitempty"`
-	/*
-		Gone **前面送过、但现在证明已经被撤回的那几条**（消息 id）。
-
-		和 `Updates` 是同一个形状、同一个理由：**证据出现在后面那一批里**。撤回一条消息在
-		树上的样子是「后面的记录跳过它」（见 onBranch），而那条「跳过它」的记录往往是下一次
-		增量才读到的 —— 那时候这条早就作为增量送到浏览器里了。而前端只会追加、不会删，
-		所以必须由这儿指名说「这几条没了」，不然屏幕上那条一直挂着，只有整份重读
-		（换会话 / 重开面板）才消失（用户报的）。
-	*/
-	Gone  []string `json:"gone,omitempty"`
-	Agent string   `json:"agent"`
+	Agent   string   `json:"agent"`
 	// File 转录文件名（**只有文件名，不是全路径**）。给的是「我在读哪一份」这个诊断信息，
 	// 全路径没必要送到浏览器上。
 	File string `json:"file"`
@@ -195,11 +185,6 @@ const (
 	// 人点一次「看更早的」拿到的就是紧挨着当前最上面那条的一段。256KB 的 claude JSONL
 	// 实测出几十条，在手机上是好几屏。
 	backWindow = 256 << 10
-	// lookBack 增量那一拍**为了判分支**多往前看多少字节（见 Read 里那段）。
-	//
-	// 撤回的总是「刚发出去那条」，所以只要覆盖最近几十条记录就够；取大了每拍白解析，
-	// 取小了撤回反映不出来。128KB 实测覆盖几十条，而一拍是 3 秒。
-	lookBack = 128 << 10
 	// minTail 一窗里至少要出几条才算够。
 	//
 	// **这个门槛不能是 tailMsgs。** 写成「凑满 200 条才算够」的话，一份 2.3MB 的转录里
@@ -256,31 +241,9 @@ func Read(src Source, from int64) (*Log, error) {
 	// 增量：偏移还在文件里就从那儿接着读。**没读到东西也不是错** ——
 	// agent 正在想，文件就是不动（实测能 15 秒零字节）。
 	if from > 0 && from <= size {
-		msgs, ups, _, _, end, err := scan(f, from, size, parse, 0)
+		msgs, ups, _, end, err := scan(f, from, size, parse, 0)
 		if err != nil {
 			return nil, err
-		}
-		/*
-			**判「有没有消息被撤回」要多往前看一段。**
-
-			撤回在树上的样子是「后面的记录跳过它」（见 onBranch），而被撤的那条**在增量
-			这一窗之前** —— 只看这一窗的话它压根不在，说不出它的 id，于是前端屏幕上那条
-			一直挂着（用户报的）。
-
-			所以另做一次**只为判分支**的小扫描，从 `from - lookBack` 起。**刻意不把回看那段
-			的消息并进 Msgs**：前端拿「增量批次里冒出人话」当「投稿落地了」的判据
-			（`dropLanded` 的 fifo，见 useCompose），重叠送旧人话会把还没落地的回显误撤掉。
-			所以这儿只取它的 `gone`。
-
-			代价是每拍多解析 lookBack 那点字节（几十行 JSON），换的是「撤回能当场反映」。
-		*/
-		if lb := from - lookBack; true {
-			if lb < 0 {
-				lb = 0
-			}
-			if _, _, g, _, _, err2 := scan(f, lb, size, parse, lb); err2 == nil {
-				out.Gone = g
-			}
 		}
 		// 增量那一段的 Start 没有意义（人手上已经有更早的了），照旧把首屏那次的值留给前端管。
 		// **Updates 是这一段最要紧的东西之一**：工具调用常常落在上一段里（见 Update）。
@@ -295,7 +258,7 @@ func Read(src Source, from int64) (*Log, error) {
 		if start < 0 {
 			start = 0
 		}
-		msgs, _, gone, begin, end, err := scan(f, start, size, parse, start)
+		msgs, _, begin, end, err := scan(f, start, size, parse, start)
 		if err != nil {
 			return nil, err
 		}
@@ -309,7 +272,7 @@ func Read(src Source, from int64) (*Log, error) {
 		if len(msgs) > tailMsgs {
 			msgs = msgs[len(msgs)-tailMsgs:]
 		}
-		out.Msgs, out.Next, out.Start, out.Gone = msgs, end, begin, gone
+		out.Msgs, out.Next, out.Start = msgs, end, begin
 		out.More = begin > 0
 		return out, nil
 	}
@@ -361,7 +324,6 @@ func ReadBefore(src Source, before int64) (*Log, error) {
 	// 往前走了），别让前端卡住。
 	var (
 		msgs  []Msg
-		gone  []string
 		begin int64
 	)
 	for w := int64(backWindow); ; w *= 4 {
@@ -370,7 +332,7 @@ func ReadBefore(src Source, before int64) (*Log, error) {
 			start = 0
 		}
 		var err error
-		msgs, _, gone, begin, _, err = scan(f, start, before, parse, start)
+		msgs, _, begin, _, err = scan(f, start, before, parse, start)
 		if err != nil {
 			return nil, err
 		}
@@ -386,7 +348,7 @@ func ReadBefore(src Source, before int64) (*Log, error) {
 			break
 		}
 	}
-	out.Msgs, out.Start, out.Gone = msgs, begin, gone
+	out.Msgs, out.Start = msgs, begin
 	out.More = begin > 0
 	// **Next 不能动。** 这一批是往前翻出来的，前端手上那个「下次从哪儿接着读」指的是文件尾，
 	// 拿这儿的值去盖它的话增量就会从中间某处重读一大段（表现是消息成片重复）。
@@ -404,9 +366,9 @@ func ReadBefore(src Source, before int64) (*Log, error) {
 //
 // 返回的第二个值是**最后一个完整行的结束偏移**。文件正在被写时最后一行可能只有一半，
 // 把它算进 Next 的话下次就从半行中间接着读，**那一条消息从此永远丢了**（而且不报错）。
-func scan(f *os.File, start, end int64, parse parseFunc, skipPartial int64) ([]Msg, []Update, []string, int64, int64, error) {
+func scan(f *os.File, start, end int64, parse parseFunc, skipPartial int64) ([]Msg, []Update, int64, int64, error) {
 	if _, err := f.Seek(start, io.SeekStart); err != nil {
-		return nil, nil, nil, start, start, err
+		return nil, nil, start, start, err
 	}
 	rd := io.LimitReader(f, end-start)
 
@@ -450,12 +412,10 @@ func scan(f *os.File, start, end int64, parse parseFunc, skipPartial int64) ([]M
 			if rerr == io.EOF {
 				break
 			}
-			kept := onBranch(st, msgs)
-			return kept, st.ups, st.gone, begin, done, rerr
+			return msgs, st.ups, begin, done, rerr
 		}
 	}
-	kept := onBranch(st, msgs)
-	return kept, st.ups, st.gone, begin, done, nil
+	return msgs, st.ups, begin, done, nil
 }
 
 // parseFunc 解析一行，把认出来的消息 append 到 out。
@@ -474,84 +434,13 @@ type state struct {
 	// ups 这一批里见到的结果补丁（见 Update）。**不管那条工具在不在这一批里都攒** ——
 	// 在的话回填 + 补丁都做（幂等），不在的话补丁就是唯一的路。
 	ups []Update
-
-	/*
-		下面三个是「当前那条分支」用的（只有 claude 有；codex 的 rollout 是平的）。
-
-		**转录是树，不是列表**（`parentUuid` → `uuid`，见 docs/dev/CHAT.md §4）。人在 TUI 里
-		按 Esc **撤回一条还没被回复的消息**时，那条消息**照旧留在文件里**，只是后面的记录
-		不再从它往下挂 —— 它掉出了当前分支。`/rewind` 同理。线性地把每行都画出来的后果是
-		屏幕上留着一条 TUI 里已经撤掉的消息（用户报的：投了几条「哈哈」、都撤了，chat 里
-		还在）。
-
-		判据不能是「它有没有孩子」：撤回那条下面**仍然挂着自动附件**
-		（`total_tokens_reminder` 的 parent 就是它），真机上核过。所以只能**从最后一条
-		往上走链**，掉出链的才算撤掉。
-	*/
-	// parent uuid → parentUuid（不收 sidechain：那是另一条分支，走进去会把主线带跑偏）
-	parent map[string]string
-	// pos uuid → 它是这次扫描里的第几条（按文件顺序），用来判「链走到多早」
-	pos map[string]int
-	// order 按文件顺序的 uuid
-	order []string
-	// gone onBranch 挑出去的那几条消息 id（见 Log.Gone）
-	gone []string
 }
 
 // 这儿**刻意不做「连着两条一样就去重」**。agentwatch 那边有这么一条，但它的前提是
 // 读屏会重复读到同一屏；转录是纯 append 的事件流，每一行都是一件真发生过的事 ——
 // 而「继续」连说两遍是再正常不过的用法，去重就是把人真说过的话吞掉。
 
-func newState() *state {
-	return &state{tool: map[string]int{}, parent: map[string]string{}, pos: map[string]int{}}
-}
-
-/*
-onBranch：把「掉出当前分支」的消息挑掉。
-
-从**最后一条**记录往上走 parentUuid，走出来的就是当前那条分支；链上没有的就是被撤回
-（或者被 `/rewind` 掉）的。两条保守处理，宁可多留也不错杀：
-
-  - 链**只往回走到走不动为止**（父亲不在这一窗里、或者 parentUuid 为空 —— 压缩边界那种
-    就是 `parentUuid: null`）。链最早那一条在文件顺序里的位置记作 k，**比 k 更早的一律保留**
-    —— 那些的分支关系这一窗里证不了。
-  - uuid 压根没收到的（没有 uuid 的记录类型）也保留。
-
-所以这个函数只在「能证明它掉出分支」时才丢，其余照旧。
-*/
-func onBranch(st *state, msgs []Msg) []Msg {
-	if len(st.order) == 0 || len(msgs) == 0 {
-		return msgs
-	}
-	live := make(map[string]bool, len(st.order))
-	cur := st.order[len(st.order)-1]
-	oldest := len(st.order) // 链走到的最早位置
-	for cur != "" {
-		if _, ok := st.pos[cur]; !ok {
-			break // 父亲在这一窗外面：到此为止
-		}
-		if live[cur] {
-			break // 防环（不该有，但别死循环）
-		}
-		live[cur] = true
-		if i := st.pos[cur]; i < oldest {
-			oldest = i
-		}
-		cur = st.parent[cur]
-	}
-	out := msgs[:0:0]
-	for _, m := range msgs {
-		i, known := st.pos[m.ID]
-		// 证不了的（没收到 uuid / 比链的起点还早）一律留着
-		if !known || i < oldest || live[m.ID] {
-			out = append(out, m)
-			continue
-		}
-		// 能证明掉出分支了：这一批不送它，**并且指名告诉前端把它去掉**（见 Log.Gone）
-		st.gone = append(st.gone, m.ID)
-	}
-	return out
-}
+func newState() *state { return &state{tool: map[string]int{}} }
 
 func parserFor(agent string) parseFunc {
 	switch agent {

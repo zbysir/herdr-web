@@ -97,11 +97,8 @@ func slashCmd(s string) string {
 const interruptMark = "[Request interrupted by user]"
 
 type clLine struct {
-	Type string `json:"type"`
-	UUID string `json:"uuid"`
-	// ParentUUID 树上的父亲。撤回 / rewind 靠它判「这条还在当前分支上吗」，
-	// 见 transcript.go 的 onBranch。
-	ParentUUID  string          `json:"parentUuid"`
+	Type        string          `json:"type"`
+	UUID        string          `json:"uuid"`
 	Timestamp   string          `json:"timestamp"`
 	IsSidechain bool            `json:"isSidechain"`
 	IsMeta      bool            `json:"isMeta"`
@@ -152,20 +149,6 @@ func parseClaude(line []byte, st *state, out *[]Msg) {
 	if json.Unmarshal(line, &l) != nil {
 		return // 半行 / 坏行，跳过。别让一行坏字节把整份对话废掉
 	}
-	/*
-		先把「谁挂在谁下面」记下来（撤回 / rewind 掉的消息靠它挑出去，见 state 里那段）。
-
-		**放在下面那道闸之前**：`isMeta` 那些状态快照也是链上的一环，跳过它们会把链走断。
-		**但 sidechain 不收** —— 子 agent 是另一条分支，走进去会把主线带跑偏。
-	*/
-	if !l.IsSidechain && l.UUID != "" {
-		if _, seen := st.pos[l.UUID]; !seen {
-			st.pos[l.UUID] = len(st.order)
-			st.order = append(st.order, l.UUID)
-		}
-		st.parent[l.UUID] = l.ParentUUID
-	}
-
 	// **子 agent（sidechain）不进主对话流。** 一次 Task 调用里子 agent 自己也写几十行，
 	// 混进来的表现是「对话里突然冒出一段没头没尾的活」，而主线上只是一条 Task 工具调用。
 	// 子 agent（sidechain）不进主对话流；isMeta 是状态快照那类。
