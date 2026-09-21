@@ -217,10 +217,91 @@ func humanText(raw string) string {
 	return strings.TrimSpace(cmdAny.ReplaceAllString(text, ""))
 }
 
+/*
+机器注入的那几种「块」：它们以 **user 角色**记着，但都不是人说的话，而且原样显示就是一坨
+标签 —— 用户报的是后台任务那条（`<task-notification><task-id>…</task-id>…`）在手机上
+占了整屏一个气泡，而人要看的只有「哪个后台任务跑完了」。
+
+全机 45 个项目的转录扫过一遍，这类只有这几种（按条数）：`task-notification` 168、
+`local-command-stdout` 27、`bash-input`/`bash-stdout` 各 26 —— 另外 `command-*` 和
+`pasted_content` 早就在剥了。
+
+**判据必须是标签名白名单，不能写成「以 `<` 开头就算」**：人话里真的有 `<https://…>`
+这种写法（实测 2 条），一刀切就把它吃掉了 —— 和 `cmdHead` 那条锚定是同一个教训。
+*/
+var (
+	// 后台任务通知。`summary` 是唯一人要看的东西，其余（task-id / tool-use-id / 输出文件路径）
+	// 是给 agent 自己对账的。
+	noteWrap    = regexp.MustCompile(`(?s)^\s*<task-notification>(.*?)</task-notification>`)
+	noteSummary = regexp.MustCompile(`(?s)<summary>(.*?)</summary>`)
+	noteStatus  = regexp.MustCompile(`<status>([^<]*)</status>`)
+	// 斜杠命令的输出（`/model` 那种）。
+	cmdOut = regexp.MustCompile(`(?s)^\s*<local-command-stdout>(.*?)</local-command-stdout>`)
+	// 人在 claude 里敲的 `!命令` 和它的输出。**输入算人话**（那是人的动作），输出不算。
+	bashIn  = regexp.MustCompile(`(?s)^\s*<bash-input>(.*?)</bash-input>`)
+	bashOut = regexp.MustCompile(`(?s)^\s*<bash-(?:stdout|stderr)>`)
+	anyTag  = regexp.MustCompile(`</?[a-zA-Z][\w-]*(?:\s+[^>]*)?>`)
+)
+
+// machineBlock 认出这几种块，给「画成什么」。
+//
+// 回 (文本, 是不是小字, 认出来了没有)：小字那种走 KindNotice（一行，不占气泡）。
+func machineBlock(text string) (string, bool, bool) {
+	if m := noteWrap.FindStringSubmatch(text); m != nil {
+		body := m[1]
+		gist := ""
+		if g := noteSummary.FindStringSubmatch(body); g != nil {
+			gist = strings.TrimSpace(g[1])
+		}
+		if gist == "" {
+			// 形状变了也别退回显示标签：把标签抹掉当散文读
+			gist = squash(anyTag.ReplaceAllString(body, " "))
+		}
+		what := "跑完了"
+		if st := noteStatus.FindStringSubmatch(body); st != nil && strings.TrimSpace(st[1]) != "completed" {
+			what = strings.TrimSpace(st[1])
+		}
+		return "后台任务" + what + "：" + clip(gist, 300), true, true
+	}
+	if m := cmdOut.FindStringSubmatch(text); m != nil {
+		return clip(squash(m[1]), 300), true, true
+	}
+	if m := bashIn.FindStringSubmatch(text); m != nil {
+		// 这一条是人的动作，所以照旧是气泡，只是显示成 `! 命令`（和 TUI 里一致）
+		return "! " + clip(squash(m[1]), 300), false, true
+	}
+	if bashOut.MatchString(text) {
+		return clip(squash(anyTag.ReplaceAllString(text, " ")), 300), true, true
+	}
+	return "", false, false
+}
+
+// ansiSeq 是 ANSI 控制序列。斜杠命令的输出里真的带（实测 `/permissions` 回的是
+// `Approved \x1b[1m…\x1b[22m`），不剥的话屏幕上是字面的 `[1m`。
+var ansiSeq = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+
+// squash 把多行压成一行、顺手剥掉 ANSI（小字那几种只占一行，长了也读不了）。
+func squash(s string) string {
+	return strings.Join(strings.Fields(ansiSeq.ReplaceAllString(s, "")), " ")
+}
+
 // claudeSay 把「人说的一句话」落成一条消息 —— 字符串 content 和数组 content 两条路**共用
 // 这一份**（见 claudeUser 的 ⑤：原来只有字符串那条路做剥壳和打断判断，而打断记号压根不走
 // 那条路）。`imgs` 是这条里贴了几张图，只在一个字都没有时用来补占位。
 func claudeSay(l *clLine, raw string, imgs int, out *[]Msg) {
+	// 机器注入的那几种块先认出来（见 machineBlock）：它们以 user 角色记着，但不是人话，
+	// 原样显示就是一坨标签。
+	if txt, small, ok := machineBlock(raw); ok {
+		if txt == "" {
+			return
+		}
+		kind := KindHuman
+		if small {
+			kind = KindNotice
+		}
+		*out = append(*out, Msg{ID: l.UUID, Kind: kind, Text: txt, At: l.Timestamp})
+		return
+	}
 	text := humanText(raw)
 	if text == "" {
 		if imgs == 0 {

@@ -1080,3 +1080,73 @@ func TestCodexImageOnly(t *testing.T) {
 		}
 	}
 }
+
+// 机器注入的那几种块（以 user 角色记着，但不是人说的话）。用户报的是后台任务通知
+// —— `<task-notification><task-id>…` 原样占了整屏一个气泡，而人要看的只有那句 summary。
+//
+// **判据是标签名白名单**：人话里真的有 `<https://…>` 这种写法，一刀切会把它吃掉
+// （和 cmdHead 那条锚定同一个教训），所以这儿专门有一条钉它。
+func TestClaudeMachineBlocks(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "s.jsonl")
+	row := func(uuid, text string) string {
+		b, _ := json.Marshal(map[string]any{
+			"type": "user", "uuid": uuid, "timestamp": "2026-09-21T02:00:00.000Z",
+			"message": map[string]any{"role": "user", "content": text},
+		})
+		return string(b) + "\n"
+	}
+	note := "<task-notification>\n<task-id>b79kmrnjb</task-id>\n" +
+		"<tool-use-id>toolu_01YBHFaHTm2vpWqWwRBegF9X</tool-use-id>\n" +
+		"<output-file>/private/tmp/x/tasks/b79kmrnjb.output</output-file>\n" +
+		"<status>completed</status>\n" +
+		"<summary>Background command \"Watch the babbage build\" completed (exit code 0)</summary>\n" +
+		"</task-notification>"
+	body := row("u1", note)
+	// 形状变了（没有 summary）也别退回显示标签
+	body += row("u2", "<task-notification><task-id>zz</task-id><status>failed</status></task-notification>")
+	// 斜杠命令的输出里真的带 ANSI（实测 `/permissions` 回的就是这样），要剥掉
+	body += row("u3", "<local-command-stdout>Set model to \x1b[1mOpus 5\x1b[22m</local-command-stdout>")
+	body += row("u4", "<bash-input>ls -la /tmp</bash-input>")
+	body += row("u5", "<bash-stdout></bash-stdout><bash-stderr>boom</bash-stderr>")
+	// **这条是真的人话**，一个字都不许动
+	url := "<https://maersk.longbridge-inc.com/application/v2/core> 这个地址"
+	body += row("u6", url)
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	l, err := Read(Source{Path: p, Agent: "claude", Sig: "sig"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type want struct {
+		kind Kind
+		text string
+	}
+	exp := []want{
+		{KindNotice, `后台任务跑完了：Background command "Watch the babbage build" completed (exit code 0)`},
+		{KindNotice, "后台任务failed：zz failed"},
+		{KindNotice, "Set model to Opus 5"},
+		{KindHuman, "! ls -la /tmp"},
+		{KindNotice, "boom"},
+		{KindHuman, url},
+	}
+	if len(l.Msgs) != len(exp) {
+		t.Fatalf("该有 %d 条，实际 %d：%v", len(exp), len(l.Msgs), brief(l))
+	}
+	for i, w := range exp {
+		if l.Msgs[i].Kind != w.kind || l.Msgs[i].Text != w.text {
+			t.Errorf("第 %d 条该是 %s/%q，实际 %s/%q", i+1, w.kind, w.text, l.Msgs[i].Kind, l.Msgs[i].Text)
+		}
+	}
+	// 一个标签都不许漏到屏幕上（除了那条真人话里的 URL）
+	for i, m := range l.Msgs {
+		if i == len(l.Msgs)-1 {
+			continue
+		}
+		if strings.Contains(m.Text, "<task-") || strings.Contains(m.Text, "<bash-") || strings.Contains(m.Text, "<local-") {
+			t.Errorf("第 %d 条漏了标签：%q", i+1, m.Text)
+		}
+	}
+}
