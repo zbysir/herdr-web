@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
+	"github.com/zbysir/herdr-web/internal/herdr"
 	"github.com/zbysir/herdr-web/internal/transcript"
 )
 
@@ -206,7 +209,10 @@ chatAnswer：**替人答那个选择框**（`AskUserQuestion`），发 ↓ ×n +
 */
 func (s *Server) chatAnswer(w http.ResponseWriter, r *http.Request) {
 	var b struct {
-		Pane  string
+		Pane string
+		// Picks 每题选了哪几个选项（下标）。多选那题可以给多个。
+		Picks [][]int
+		// Index 老前端那条路：单题单选时的那一个序号。Picks 有值就不看它。
 		Index int
 	}
 	if err := readJSON(r, &b); err != nil {
@@ -253,23 +259,152 @@ func (s *Server) chatAnswer(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "reason": "not_pending"})
 		return
 	}
-	q := ask.Questions[0]
-	if b.Index >= len(q.Options) {
-		fail(w, 400, fmt.Errorf("只有 %d 个选项，给的是第 %d 个", len(q.Options), b.Index+1))
-		return
-	}
-
-	// 键序列在这儿算：n 个 ↓ 然后一个 ↵。**这个口发不出别的东西。**
-	keys := make([]string, 0, b.Index+1)
-	for i := 0; i < b.Index; i++ {
-		keys = append(keys, "down")
-	}
-	keys = append(keys, "enter")
-	if err := sess.outbox.C.SendKeys(b.Pane, keys); err != nil {
+	picks, err := resolvePicks(ask, b.Picks, b.Index)
+	if err != nil {
 		fail(w, 400, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"pane": b.Pane, "picked": q.Options[b.Index].Label, "keys": len(keys)})
+	keys := askKeys(ask, picks)
+	if err := sendOneByOne(sess.outbox.C, b.Pane, keys); err != nil {
+		fail(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"pane": b.Pane, "picked": pickedLabels(ask, picks), "keys": len(keys)})
+}
+
+/*
+askKeys：把「每题选了哪几个」编成按键序列。
+
+# 这套协议是**量出来的**，不是猜的
+
+拿一个隔离的 tmux + 真 claude 2.1.278 逐键试出来的（和 CLAUDE.md 里量 codex 那个粘贴判据
+一个办法）。实测：
+
+	单选题      发该选项的**序号**（1-based）→ 选中 + **自动进入下一题**
+	多选题      发每个要选的序号 → **切换勾选**，高亮不动、不跳题
+	换页        `tab` → 下一个标签；最后一题之后是 Submit 页
+	提交        Submit 页上发 `1`（那页第一项就是 `1. Submit answers`）
+	例外        **只有一个问题且是单选**时，序号本身就提交了，没有 Submit 页
+
+# 为什么改用数字而不是原来那串 ↓×n + ↵
+
+**数字键和高亮停在哪完全无关**（实测：先按两下 ↓ 把高亮移到第 3 个，再发 `2`，记下来的是
+第 2 个）。原来那串 ↓ 假设「高亮此刻停在第一个选项上」——人只要先在终端里按过方向键就会选错，
+而那正是当初只敢做单题、还要在界面上提醒「别按方向键」的原因。这个假设现在整个没了。
+
+# 序号怎么对应
+
+TUI 的列表里 payload 的选项排在前面，后面还跟着 `Type something` / `Chat about this` 这些
+它自己加的行 —— 所以 payload 第 i 个 ⇒ 数字 i+1。**因此选项不能超过 9 个**（一个数字字符），
+pendingAsk 里挡着。
+*/
+func askKeys(ask *transcript.Ask, picks [][]int) []string {
+	var keys []string
+	for qi, q := range ask.Questions {
+		for _, oi := range picks[qi] {
+			keys = append(keys, strconv.Itoa(oi+1))
+		}
+		if q.Multi {
+			// 多选不会自己跳题，得手动翻页
+			keys = append(keys, "tab")
+		}
+	}
+	// 单题单选那种发完序号就已经提交了，再补一个 `1` 会被打进输入框
+	if !(len(ask.Questions) == 1 && !ask.Questions[0].Multi) {
+		keys = append(keys, "1")
+	}
+	return keys
+}
+
+// keyGap 两下之间隔多久。见 sendOneByOne 的 ③。
+const keyGap = 80 * time.Millisecond
+
+/*
+sendOneByOne：把那串按键发出去。三条**全是在真 pane 上量出来的**，每一条都对应一种
+「静默失效」，所以都别改：
+
+① **数字必须走 `keys`，不能走 `text`。** herdr 的 `pane.send_input` 在给 `text` 时会**按那个
+
+	pane 当前的 bracketed-paste 状态**编码（CLAUDE.md 里就写着它会这么干）。claude 的 TUI
+	开着 DEC 2004，于是一个数字被当成「粘进来的一段文字」—— **选择器压根不理**。
+	表现极具误导性：herdr 不报错、往 `cat -v` 那种没开 2004 的 pane 里发看到的又是裸字节，
+	而真实后果是「点了提交，TUI 里一个选项都没选上，但标签还是往后翻了」（用户报的，
+	因为 `tab` 走的是 `keys`、照样生效）。同一张卡上 A/B 过：
+	`send_input{text:"1"}` 无效，`send_text{text:"2"}` / `send_keys{["3"]}` /
+	`send_input{keys:["4"]}` 三个都有效。**数字本身是合法键名**，所以统一走 `keys`。
+
+② **一个键一次调用。** 一次 `send_keys{["2","3","4"]}` 实测只有**最后一个**生效
+
+	（`[✔][✔][✔]` → `[✔][✔][ ]`），另外两个静默丢掉。
+
+③ **两下之间要留间隔。** 背靠背三次调用（总共 1ms）只有**第一下**生效；实测 10ms 就够，
+
+	这儿取 80ms 留足余量（6 个键也才 0.5 秒，而丢一下就是答错）。
+
+顺带解释了为什么原来那串 `↓↓⏎` 一次发能用：那些是转义序列，herdr 按键编码之后 claude
+逐个解析，不走「粘贴」那条路 —— 所以老那条路从来没暴露过 ①。
+*/
+func sendOneByOne(c *herdr.Client, pane string, keys []string) error {
+	for i, k := range keys {
+		if i > 0 {
+			time.Sleep(keyGap)
+		}
+		if err := c.SendKeys(pane, []string{k}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// resolvePicks 把请求里那份选择核一遍。`index` 是老前端那条路（单题单选）。
+//
+// **每题都必须有选择**：缺一题的话 Submit 页会拒（那边要求全答完），而我们已经把前面几题
+// 的按键发出去了 —— 停在一个半填的选择器上比什么都没发更糟。
+func resolvePicks(ask *transcript.Ask, picks [][]int, index int) ([][]int, error) {
+	if len(picks) == 0 {
+		// 老前端：只传了一个序号，那时候只可能是单题单选
+		if len(ask.Questions) != 1 {
+			return nil, fmt.Errorf("这次问了 %d 个问题，得每题都给一个选择", len(ask.Questions))
+		}
+		picks = [][]int{{index}}
+	}
+	if len(picks) != len(ask.Questions) {
+		return nil, fmt.Errorf("有 %d 个问题，给了 %d 份选择", len(ask.Questions), len(picks))
+	}
+	for qi, q := range ask.Questions {
+		got := picks[qi]
+		if len(got) == 0 {
+			return nil, fmt.Errorf("第 %d 个问题还没选", qi+1)
+		}
+		if !q.Multi && len(got) != 1 {
+			return nil, fmt.Errorf("第 %d 个问题是单选，给了 %d 个", qi+1, len(got))
+		}
+		seen := map[int]bool{}
+		for _, oi := range got {
+			if oi < 0 || oi >= len(q.Options) {
+				return nil, fmt.Errorf("第 %d 个问题只有 %d 个选项，给的是第 %d 个", qi+1, len(q.Options), oi+1)
+			}
+			if seen[oi] {
+				// 多选是**切换**，同一个发两次等于没选（实测），所以这儿挡掉
+				return nil, fmt.Errorf("第 %d 个问题里第 %d 个选项给了两次", qi+1, oi+1)
+			}
+			seen[oi] = true
+		}
+	}
+	return picks, nil
+}
+
+// pickedLabels 回一句「选了什么」给前端做反馈（每题用 `,` 连、题之间用 ` / `）。
+func pickedLabels(ask *transcript.Ask, picks [][]int) string {
+	var qs []string
+	for qi, q := range ask.Questions {
+		var one []string
+		for _, oi := range picks[qi] {
+			one = append(one, q.Options[oi].Label)
+		}
+		qs = append(qs, strings.Join(one, ", "))
+	}
+	return strings.Join(qs, " / ")
 }
 
 // pendingAsk 认「此刻真有一个没答的选择框」。
@@ -289,11 +424,19 @@ func pendingAsk(msgs []transcript.Msg) (*transcript.Ask, error) {
 		if m.Ask == nil || m.OK != nil {
 			return nil, errf("这个 pane 此刻没有在等你选（最后一条工具调用不是没答的提问）")
 		}
-		if len(m.Ask.Questions) != 1 {
-			return nil, fmt.Errorf("这次问了 %d 个问题，一键作答只支持一个 —— 回终端答", len(m.Ask.Questions))
+		if len(m.Ask.Questions) == 0 {
+			return nil, errf("这次提问里一个问题都没有")
 		}
-		if m.Ask.Questions[0].Multi {
-			return nil, errf("这是多选，一键作答只支持单选 —— 回终端答")
+		// **选项超过 9 个就不接**：按键是单个数字字符（见 askKeys 的注释），十位数没法发。
+		// AskUserQuestion 的 schema 本身上限是 4 个，所以这只是道保险 —— 真撞上了宁可
+		// 让人回终端答，别发出一串意思完全不同的按键。
+		for i, q := range m.Ask.Questions {
+			if len(q.Options) == 0 {
+				return nil, fmt.Errorf("第 %d 个问题没有选项", i+1)
+			}
+			if len(q.Options) > 9 {
+				return nil, fmt.Errorf("第 %d 个问题有 %d 个选项，超过 9 个这条路发不了 —— 回终端答", i+1, len(q.Options))
+			}
 		}
 		return m.Ask, nil
 	}

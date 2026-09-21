@@ -653,14 +653,17 @@ export const chatApi = {
    * （表现是消息成片重复）。这儿只取 `msgs` / `start` / `more`。
    */
   /**
-   * 替人答那个选择框：**传选项序号，不传按键**。
+   * 替人答那个选择框：**传每题选了哪几个选项（下标），不传按键**。
    *
-   * 键序列（↓ ×n + ↵）是服务端按序号算的 —— 这个口发不出别的任何东西。服务端还会先从
-   * 转录里核一遍「此刻真有一个没答的提问」（不是看 `agent_status`，那个实测不可靠），
-   * 核不过回 409 + `reason: 'not_pending'`。详见 internal/server/chatapi.go 的注释。
+   * 按键序列是服务端按下标算的（数字键 + 必要时的 tab + 提交键，那套协议是拿真 claude
+   * 逐键量出来的，见 internal/server/chatapi.go 的 askKeys）—— 这个口发不出别的任何东西。
+   * 服务端还会先从转录里核一遍「此刻真有一个没答的提问」（不是看 `agent_status`，
+   * 那个实测不可靠）、每题都给了选择、下标没越界，核不过回 409 / 400。
+   *
+   * `picks[i]` 是第 i 题选的那几个下标：单选题给一个，可多选的那题能给几个。
    */
-  answer: (pane: string, index: number) =>
-    api.post<{ pane: string; picked: string; keys: number }>('/chat/answer', { pane, index }),
+  answer: (pane: string, picks: number[][]) =>
+    api.post<{ pane: string; picked: string; keys: number }>('/chat/answer', { pane, picks }),
 
   /**
    * 在一个**没有 agent 的** pane 里开一个 agent（往那个 pane 里敲命令名 + 回车）。

@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -473,6 +474,39 @@ func TestChatLogIgnoresOffsetFromAnotherSession(t *testing.T) {
 
 // writeAsk 摆一份「agent 在问你」的转录：一条 AskUserQuestion 的 tool_use，
 // answered 为真时再补一条 tool_result（= 已经答过了）。
+// writeAskQs 写一次「多题」提问。qs 里每项是 {多选?, 选项标签...}。
+func writeAskQs(t *testing.T, st *transcript.Store, slug, id string, qs []askQ) {
+	t.Helper()
+	dir := filepath.Join(st.ClaudeRoot, slug)
+	os.MkdirAll(dir, 0o700)
+	questions := make([]map[string]any, 0, len(qs))
+	for i, q := range qs {
+		options := make([]map[string]any, 0, len(q.opts))
+		for _, o := range q.opts {
+			options = append(options, map[string]any{"label": o})
+		}
+		questions = append(questions, map[string]any{
+			"header": fmt.Sprintf("题%d", i+1), "question": fmt.Sprintf("第 %d 问？", i+1),
+			"multiSelect": q.multi, "options": options,
+		})
+	}
+	ask, _ := json.Marshal(map[string]any{
+		"type": "assistant", "uuid": "a1", "requestId": "r1", "timestamp": "2026-09-21T02:00:00.000Z",
+		"message": map[string]any{"role": "assistant", "content": []map[string]any{{
+			"type": "tool_use", "id": "toolu_ask", "name": "AskUserQuestion",
+			"input": map[string]any{"questions": questions},
+		}}},
+	})
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(string(ask)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type askQ struct {
+	multi bool
+	opts  []string
+}
+
 func writeAsk(t *testing.T, st *transcript.Store, slug, id string, opts []string, multi, answered bool) {
 	t.Helper()
 	dir := filepath.Join(st.ClaudeRoot, slug)
@@ -535,30 +569,112 @@ func TestChatLogCarriesAsk(t *testing.T) {
 }
 
 // 一键作答：**只发得出 ↓ ×n + ↵**，而且是按 pane 寻址（不依赖 herdr 的焦点）。
-func TestChatAnswerSendsDownsAndEnter(t *testing.T) {
+/*
+一键作答发出去的按键序列。**这套协议是拿真 claude（2.1.278）在隔离的 tmux 里逐键量出来的**
+（和 CLAUDE.md 里量 codex 那个粘贴判据一个办法），四条都钉在这儿：
+
+	单选题                发选项序号（1-based）→ 选中 + 自动进下一题
+	多选题                发每个要选的序号 → 切换勾选，不跳题；答完要自己 `tab` 翻页
+	提交                  Submit 页上发 `1`
+	只有一题且单选        序号本身就提交了，**不能再补 `1`**（会打进输入框）
+
+还有一条更要紧的：**一个键一次调用**。`31` 连成一坨发过去整串会被丢掉（可见字符被当成
+「粘进来的字符串」，两题都不会答上），所以这儿断言的是**调用次数 == 按键个数**，
+不是「发出去的内容拼起来对不对」。
+*/
+func TestChatAnswerKeys(t *testing.T) {
+	// 每项：发的 body → 期望依次发出去的那几下（数字走 text，tab 走命名键）
 	for _, tc := range []struct {
-		index int
-		keys  []string
+		why  string
+		qs   []askQ
+		body string
+		want []string
 	}{
-		{0, []string{"enter"}},
-		{1, []string{"down", "enter"}},
-		{2, []string{"down", "down", "enter"}},
+		{
+			"单题单选（老前端那条 index 路）：只发序号，不补提交键",
+			[]askQ{{false, []string{"a", "b", "c"}}},
+			`{"pane":"p1","index":1}`,
+			[]string{"2"},
+		},
+		{
+			"单题单选（picks 路）",
+			[]askQ{{false, []string{"a", "b", "c"}}},
+			`{"pane":"p1","picks":[[2]]}`,
+			[]string{"3"},
+		},
+		{
+			"两题单选：两个序号 + 一个提交键",
+			[]askQ{{false, []string{"a", "b"}}, {false, []string{"x", "y", "z"}}},
+			`{"pane":"p1","picks":[[1],[0]]}`,
+			[]string{"2", "1", "1"},
+		},
+		{
+			"单题多选：两个序号 + tab 翻页 + 提交键",
+			[]askQ{{true, []string{"a", "b", "c"}}},
+			`{"pane":"p1","picks":[[0,2]]}`,
+			[]string{"1", "3", "tab", "1"},
+		},
+		{
+			"多选在前、单选在后：多选那题要 tab，单选那题自己跳",
+			[]askQ{{true, []string{"a", "b", "c"}}, {false, []string{"x", "y"}}},
+			`{"pane":"p1","picks":[[0,2],[1]]}`,
+			[]string{"1", "3", "tab", "2", "1"},
+		},
 	} {
 		s, store, keys := chatServerKeys(t, true, askPanes())
-		writeAsk(t, store, "-w", sid, []string{"第一个", "第二个", "第三个"}, false, false)
-		w := postChat(t, s, `{"pane":"p1","index":`+itoa(tc.index)+`}`)
+		writeAskQs(t, store, "-w", sid, tc.qs)
+		w := postChat(t, s, tc.body)
 		if w.Code != 200 {
-			t.Fatalf("index=%d：%d %s", tc.index, w.Code, w.Body.String())
+			t.Errorf("%s：%d %s", tc.why, w.Code, strings.TrimSpace(w.Body.String()))
+			continue
 		}
 		got := keys.all()
-		if len(got) != 1 {
-			t.Fatalf("index=%d：该发一次，实际 %d 次", tc.index, len(got))
+		// ① 一个键一次调用
+		if len(got) != len(tc.want) {
+			t.Errorf("%s：该发 %d 次（一个键一次），实际 %d 次：%+v", tc.why, len(tc.want), len(got), got)
+			continue
 		}
-		if got[0].Pane != "p1" {
-			t.Fatalf("发错 pane 了：%q（这条路必须按 pane 寻址，不能依赖焦点）", got[0].Pane)
+		// ② 顺序和内容。**每一下都必须走 `keys`，`text` 一个字都不能有** ——
+		//    `send_input` 的 text 会被按 bracketed paste 编码，而 claude 的选择器不理粘贴
+		//    （见 sendOneByOne 的 ①，这是用户报的「提交了却一个都没选上」的真因）。
+		for i, w2 := range tc.want {
+			if got[i].Text != "" {
+				t.Errorf("%s：第 %d 下走了 text（%q）—— 必须走 keys", tc.why, i+1, got[i].Text)
+			}
+			if len(got[i].Keys) != 1 {
+				t.Errorf("%s：第 %d 下发了 %d 个键 —— 一次只能一个", tc.why, i+1, len(got[i].Keys))
+				continue
+			}
+			one := strings.Join(got[i].Keys, "+")
+			if one != w2 {
+				t.Errorf("%s：第 %d 下该是 %q，实际 %q", tc.why, i+1, w2, one)
+			}
+			if got[i].Pane != "p1" {
+				t.Errorf("%s：第 %d 下发错 pane 了：%q", tc.why, i+1, got[i].Pane)
+			}
 		}
-		if strings.Join(got[0].Keys, ",") != strings.Join(tc.keys, ",") {
-			t.Fatalf("index=%d 该发 %v，实际 %v", tc.index, tc.keys, got[0].Keys)
+	}
+}
+
+// 选择给得不对时**一个键都不许发**：发了一半停在半填的选择器上，比什么都没发更糟
+// （Submit 页要求全答完）。
+func TestChatAnswerRejectsBadPicks(t *testing.T) {
+	two := []askQ{{false, []string{"a", "b"}}, {true, []string{"x", "y"}}}
+	for _, tc := range []struct{ why, body string }{
+		{"少给一题", `{"pane":"p1","picks":[[0]]}`},
+		{"某题一个都没选", `{"pane":"p1","picks":[[0],[]]}`},
+		{"单选那题给了两个", `{"pane":"p1","picks":[[0,1],[0]]}`},
+		{"序号越界", `{"pane":"p1","picks":[[0],[9]]}`},
+		{"同一个选项给了两次（多选是切换，等于没选）", `{"pane":"p1","picks":[[0],[1,1]]}`},
+		{"多题却走老的 index 路", `{"pane":"p1","index":0}`},
+	} {
+		s, store, keys := chatServerKeys(t, true, askPanes())
+		writeAskQs(t, store, "-w", sid, two)
+		if w := postChat(t, s, tc.body); w.Code != 400 {
+			t.Errorf("%s：该 400，实际 %d %s", tc.why, w.Code, strings.TrimSpace(w.Body.String()))
+		}
+		if n := len(keys.all()); n != 0 {
+			t.Errorf("%s：一个键都不该发，实际 %d 次", tc.why, n)
 		}
 	}
 }
@@ -576,7 +692,8 @@ func TestChatAnswerRefusesWhenNotPending(t *testing.T) {
 		answered bool
 	}{
 		{"已经答过了", []string{"a", "b"}, false, true},
-		{"多选（TUI 里是空格勾选再回车，按键序列不一样）", []string{"a", "b"}, true, false},
+		// 多选 / 多题**现在是支持的**（按键协议实测出来了，见 askKeys），所以不在这张表里；
+		// 它们的序列钉在 TestChatAnswerKeys 上。
 	}
 	for _, c := range cases {
 		s, store, keys := chatServerKeys(t, true, askPanes())

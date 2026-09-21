@@ -2,7 +2,6 @@ import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import { ArrowDown, ChevronDown, ChevronUp, Play, Terminal, Wrench, AlertCircle } from 'lucide-react'
 import { ApiError, chatApi, type ChatLog, type ChatMsg, type Pane } from '@/lib/api'
 import type { SentEcho } from '@/hooks/useCompose'
-import { useArm } from '@/hooks/useArm'
 import { STATUS_DOT } from '@/lib/agentstatus'
 import { cn } from '@/lib/utils'
 
@@ -474,18 +473,38 @@ export function ChatPanel({
    * （会把草稿提交出去）。服务端在真发键之前还会自己核一遍同样的判据，这儿只决定「画不画
    * 那几个可点的按钮」。
    */
-  const liveAskID = useMemo(() => {
+  /**
+   * **此刻真在等人答的那张卡**（判据：最后一条工具调用是提问且还没有结果）。
+   *
+   * 这里和下面那个「能不能在这儿代答」**必须分成两个值** —— 原来是一个，于是多题 / 多选
+   * 那种（代答不了）被一路当成「不是在等你答」，卡底下那行小字就落到最后那句
+   * 「这个问题已经答过了」上：agent 明明红着「在等你回答」，屏幕上却说你答过了
+   * （用户报的「我没有答啊」）。这条错的方向最糟 —— 人会因此**不去答**，而对面就一直卡着。
+   */
+  const pendingAskID = useMemo(() => {
     for (let i = msgs.length - 1; i >= 0; i--) {
       const m = msgs[i]
       if (m.kind !== 'tool') continue
       if (!m.ask || m.ok !== undefined) return null
-      // 一键作答只支持单个问题 + 单选（多选是空格勾选、多题要一题一题走，按键都不一样）
-      const qs = m.ask.questions
-      if (qs.length !== 1 || qs[0].multi) return null
       return m.id
     }
     return null
   }, [msgs])
+
+  /**
+   * 其中**能在这儿一键代答**的那种：单个问题 + 单选。
+   *
+   * 多选是空格勾选、多题要一题一题走，按键序列都不是「↓ ×n + ↵」—— 宁可不给点，别替人选错
+   * （服务端那个口也会自己再核一遍，见 chatapi.go 的 pendingAsk）。
+   */
+  const answerableAskID = useMemo(() => {
+    if (!pendingAskID) return null
+    const qs = msgs.find((m) => m.id === pendingAskID)?.ask?.questions ?? []
+    if (!qs.length) return null
+    // **判据要和服务端那份一样**（chatapi.go 的 pendingAsk）：按键是单个数字字符，
+    // 所以选项超过 9 个就发不了。前端不挡的话是「点了报错」，那比不给点更糟。
+    return qs.every((q) => q.options.length > 0 && q.options.length <= 9) ? pendingAskID : null
+  }, [msgs, pendingAskID])
 
   /**
    * 在焦点那个 pane 里开一个 agent。
@@ -502,16 +521,20 @@ export function ChatPanel({
     await chatApi.start(id, agent)
   }, [cur?.id])
 
-  const answer = useCallback(async (index: number) => {
-    if (!active) return
-    try {
-      const r = await chatApi.answer(active, index)
-      // 立刻补一拍：答完 agent 马上就动起来了，等 3 秒才更新看着像没答上
-      void tick(active)
-      onToast?.(`已选「${r.picked}」`)
-    } catch (e) {
-      onToast?.(e instanceof Error ? e.message : String(e))
-    }
+  /**
+   * 替人答那个选择框。
+   *
+   * **失败故意不在这儿接** —— 让它抛给那张卡（AskCard 会把原因写在提交键底下）。
+   * 原来是在这儿 catch 成 toast，而 toast 贴在整屏最下沿，人的眼睛在刚点的那个按钮上
+   * （CLAUDE.md 那条「点了没反应多半是反馈离手指太远」）。成功那一下照旧走 toast：
+   * 那是「顺手做完、结果马上看得见」的那类（对话流当场就会动）。
+   */
+  const answer = useCallback(async (picks: number[][]) => {
+    if (!active) throw new Error('还不知道在看哪个 pane')
+    const r = await chatApi.answer(active, picks)
+    // 立刻补一拍：答完 agent 马上就动起来了，等 3 秒才更新看着像没答上
+    void tick(active)
+    onToast?.(`已选「${r.picked}」`)
   }, [active, tick, onToast])
 
   /* --------------------------------------------------------------- 画 */
@@ -635,8 +658,8 @@ export function ChatPanel({
                     m={r.msg}
                     // **只有最后那条没答的提问才给点。** 早先那些早就答过了，
                     // 而对着一条答过的提问发 ↓↵ 就是往输入框里打回车。
-                    live={r.msg.id === liveAskID}
-                    onAnswer={r.msg.id === liveAskID ? answer : undefined}
+                    live={r.msg.id === pendingAskID}
+                    onAnswer={r.msg.id === answerableAskID ? answer : undefined}
                     onOpenPath={onOpenPath}
                   />
                 )
@@ -1116,44 +1139,76 @@ function Problem({ err, agent }: { err: { msg: string; reason?: string }; agent?
  * 为什么要它：屏幕上一条 `AskUserQuestion …` 等于什么都没说 —— 被问住的时候人缺的恰恰是
  * **有几个选项、第二个是什么**。而那份负载就在转录里（见 internal/transcript 的 askOf）。
  *
- * # 点一下选：**两下才发**
+ * # 先选、再提交（多题 / 多选都支持）
  *
- * 第一下只是举起来，第二下才真发 ↓ ×n + ↵（复用快捷键条上危险键那套 `useArm`，
- * 别写第二份计时器）。要这一档是因为有一条挡不住的前提：**↓ ×n 假设高亮此刻停在第一个
- * 选项上**，而人要是先在终端里按过方向键，就会选到另一个上去。
+ * 选择只在本地攒着，点「提交」才一次发出去。**没有二次确认**：原来点选项要「点两下」，
+ * 理由是那串 ↓ ×n 假设「高亮此刻停在第一个选项上」—— 人先在终端里按过方向键就会选错。
+ * 现在按的是**选项序号**（实测和高亮位置无关，见 chatapi.go 的 askKeys），那个前提整个
+ * 没了；而这儿发出去的就是屏幕上摆着的这几个勾，没选完还按不动，再加一道就是纯多按一下。
  *
- * 另外三道在服务端（见 internal/server/chatapi.go）：那个口只发得出 ↓ 和 ↵、按 pane 寻址
- * 不走焦点、发之前从**转录**核一遍「此刻真有一个没答的提问」（不是看 `agent_status` ——
- * 实测那个在开着选择器时报 idle）。
+ * 那套按键协议是拿真 claude 在隔离的 tmux 里逐键量出来的（单选发序号会自动跳题、多选是
+ * 切换要自己 `tab`、最后在 Submit 页发 `1`、而单题单选那种序号本身就提交了），
+ * 全写在 `internal/server/chatapi.go` 的 `askKeys` 上 —— **这儿不重复那套逻辑**，
+ * 前端只送「每题选了哪几个」。
  *
- * 答过的那张卡（或者多选 / 多题的）只显示不给点：对着答过的提问发 ↵ 就是往输入框里打回车，
- * 把草稿提交出去。
+ * 服务端那三道照旧：这个口只发得出那套序列、按 pane 寻址不走焦点、发之前从**转录**核一遍
+ * 「此刻真有一个没答的提问」（不是看 `agent_status` —— 实测那个在开着选择器时报 idle）。
+ *
+ * 答过的那张卡只显示不给点（对着答过的提问再发一遍就是往输入框里打字）。**「在等你答」
+ * 和「这儿能不能代答」是两个判据** —— 混成一个的后果见 `footer`。
  */
 function AskCard({ m, onAnswer, live }: {
   m: ChatMsg
-  onAnswer?: (index: number) => void
+  onAnswer?: (picks: number[][]) => void
   live?: boolean
 }) {
-  const { armed, tap } = useArm(m.id)
   const qs = m.ask?.questions ?? []
-  const one = qs.length === 1 ? qs[0] : null
-  const canTap = !!(live && onAnswer && one && !one.multi)
+  /** 还没提交、只在本地攒着的选择：每题一串选项下标 */
+  const [picks, setPicks] = useState<number[][]>(() => qs.map(() => []))
+  const [sending, setSending] = useState(false)
+  const [bad, setBad] = useState('')
+  const canPick = !!(live && onAnswer)
   /** 当时选了哪几个（多题的话每题一个，用 / 连起来）。空 = 拿不到 */
-  const picked = qs.map((q) => q.picked).filter(Boolean).join(' / ')
+  const chosen = qs.map((q) => q.picked).filter(Boolean).join(' / ')
+  /**
+   * 还有哪几题没选（1-based 题号）。
+   *
+   * **这个必须显示出来。** 提交的判据是「每题都得有选择」（服务端也这么核，发一半会停在
+   * 一个半填的选择器上），而手机上第二题常常**在屏幕外面** —— 用户报的正是这个：第一题
+   * 4 个全勾上了，提交键却按不动，而屏幕上没有任何一句话说为什么。
+   * 所以除了下面那句「还有 N 题没选」，每题头上还画一个 `☐`/`☑`（和 TUI 那条标签栏
+   * 同一个办法：`☐ 关注方面 ☒ 确认方式`），一眼能看出缺的是哪一题。
+   */
+  const missing = qs.map((_, qi) => qi).filter((qi) => !picks[qi]?.length)
+  const ready = qs.length > 0 && missing.length === 0
+
+  const toggle = (qi: number, oi: number, multi?: boolean) => setPicks((prev) => {
+    const next = prev.map((a) => [...a])
+    if (!multi) next[qi] = [oi]
+    // 多选是**切换**（和 TUI 里一致）：再点一下取消
+    else if (next[qi].includes(oi)) next[qi] = next[qi].filter((x) => x !== oi)
+    else next[qi] = [...next[qi], oi].sort((a, b) => a - b)
+    return next
+  })
 
   return (
     <div className="flex flex-col gap-2 rounded-card border border-brand/40 bg-brand/10 px-3 py-2.5">
       {qs.map((q, qi) => (
         <div key={qi} className="flex flex-col gap-1.5">
-          {q.header && <span className="text-xs text-brand">{q.header}</span>}
+          <span className="text-xs text-brand">
+            {canPick && <span className={cn('mr-1', picks[qi]?.length ? 'text-brand' : 'text-faint')}>
+              {picks[qi]?.length ? '☑' : '☐'}
+            </span>}
+            {q.header || `第 ${qi + 1} 问`}{q.multi ? '（可多选）' : ''}
+          </span>
           <p className="text-[13px]/relaxed text-fg">{q.question}</p>
           <div className="flex flex-col gap-1">
             {q.options.map((o, oi) => {
               const at = `${qi}:${oi}`
-              const up = armed === at
+              const on = picks[qi]?.includes(oi)
               // 答过的那张卡要把**当时选的那个**标出来：不标的话往上翻历史看到的是一排
               // 干巴巴的选项，「当时到底定了哪个」还得回终端翻（用户报的）
-              const chose = !!q.picked && q.picked === o.label
+              const chose = !!q.picked && q.picked.split(', ').includes(o.label)
               const row = (
                 <>
                   <span className="shrink-0 font-mono text-[11px] text-faint">{oi + 1}</span>
@@ -1167,21 +1222,23 @@ function AskCard({ m, onAnswer, live }: {
               )
               // 不能点的时候画成一行静态的：别画一个点了没反应的按钮
               // （「点开一片报错比没有这个入口更糟」同一条道理）
-              if (!canTap) {
+              if (!canPick) {
                 return (
                   <div
                     key={at}
                     className={cn(
                       'flex items-start gap-1.5 rounded-md border px-2 py-1',
-                      // 选中过的那条：淡绿底 + 绿边（不是涂满 —— 见配色那节），
-                      // 没选的压暗一档，好让「选了哪个」一眼看出来
                       chose
                         ? 'border-brand/40 bg-brand/12'
-                        : 'border-line bg-ctl/60 opacity-60',
+                        // **在等你答的时候别压暗**：那时候这几个选项正是你要读的东西
+                        // （你在终端里答，照着这儿看）。压暗只留给答过的历史 ——
+                        // 那时候压暗是为了让「选了哪个」一眼跳出来。
+                        : live
+                          ? 'border-line bg-ctl'
+                          : 'border-line bg-ctl/60 opacity-60',
                     )}
                   >
                     {row}
-                    {chose && <span className="ml-auto shrink-0 self-center text-xs text-brand">✓</span>}
                   </div>
                 )
               }
@@ -1189,27 +1246,73 @@ function AskCard({ m, onAnswer, live }: {
                 <button
                   key={at}
                   type="button"
-                  onClick={() => { if (tap(at, true)) onAnswer?.(oi) }}
-                  title={up ? '再点一下就选它' : '点两下选它（第一下只是举起来）'}
+                  disabled={sending}
+                  onClick={() => toggle(qi, oi, q.multi)}
+                  title={q.multi ? '点一下勾上／取消' : '点一下选它'}
                   className={cn(
-                    'flex items-start gap-1.5 rounded-md border px-2 py-1 text-left',
-                    // 举起来那一下**涂满**：这是「按下去了必须一眼看见」的状态（见配色那节）
-                    up
-                      // 这一下**故意涂满**：「按下去了必须一眼看见」的状态，配色那节把
-                      // 饱和填充留给的正是这种（和粘滞修饰键亮着时一样）
-                      ? 'border-brand-line bg-brand-bg text-brand-fg'
-                      : 'border-line bg-ctl hover:bg-ctl-hi',
+                    'flex items-start gap-1.5 rounded-md border px-2 py-1 text-left disabled:opacity-100',
+                    // 选中态是「淡绿底 + 绿边」，不是涂满 —— 涂满留给这张卡上唯一的
+                    // 主操作（那个提交键），见配色那节。
+                    // **不再额外画一个 ✓**（用户点名去掉的）：底色和边框已经说完了「选了」这件事，
+                    // 右边再顶一个勾只是噪音，而且在窄屏上会把选项文字挤窄一截。
+                    on ? 'border-brand/40 bg-brand/12' : 'border-line bg-ctl hover:bg-ctl-hi',
                   )}
                 >
                   {row}
-                  {up && <span className="ml-auto shrink-0 self-center text-xs text-brand">再点一下</span>}
                 </button>
               )
             })}
           </div>
         </div>
       ))}
-      <p className="text-xs text-faint">{footer(canTap, live, one, picked)}</p>
+
+      {canPick && (
+        /*
+          **提交不做二次确认。** 原来点选项要「点两下」，理由是那串 ↓×n 假设「高亮此刻停在
+          第一个选项上」—— 人先在终端里按过方向键就会选错，所以要举一下再确认。
+          现在按的是**选项序号**（实测和高亮位置无关，见 chatapi.go 的 askKeys），那个前提
+          整个没了；而这儿发出去的就是屏幕上摆着的这几个勾，没选完还按不动。
+          再要一道二次确认就是纯多按一下。
+        */
+        <>
+        <div className="mt-0.5 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={!ready || sending}
+            onClick={async () => {
+              setBad('')
+              setSending(true)
+              try {
+                await onAnswer?.(picks)
+              } catch (e) {
+                // **失败要画在这张卡上**，不能只发 toast —— 那个贴在整屏最下沿，而眼睛在
+                // 刚点的这个按钮上（CLAUDE.md 那条「反馈离手指太远」）。
+                setBad(e instanceof Error ? e.message : String(e))
+              } finally {
+                setSending(false)
+              }
+            }}
+            className={cn(
+              'shrink-0 rounded-md border px-3 py-1 text-[13px] disabled:opacity-100',
+              ready
+                ? 'border-brand-line bg-brand-bg text-brand-fg'
+                : 'border-line bg-ctl text-faint',
+            )}
+          >
+            {sending ? '发送中…' : '提交'}
+          </button>
+          {/* 按不动的时候**就在按钮旁边**说为什么（见 missing 那段注释） */}
+          {!ready && (
+            <span className="text-xs text-warn">
+              还有 {missing.length} 题没选{missing.length <= 3 ? `（第 ${missing.map((i) => i + 1).join('、')} 问）` : ''}
+            </span>
+          )}
+        </div>
+        {bad && <p className="text-xs/relaxed text-bad">{bad}</p>}
+        </>
+      )}
+
+      <p className="text-xs text-faint">{footer(canPick, live, ready, chosen)}</p>
     </div>
   )
 }
@@ -1220,11 +1323,18 @@ function AskCard({ m, onAnswer, live }: {
  * 四种状态各说一句 —— 尤其是「答过了」那种要说清**选了哪个**：不说的话往上翻历史看到的
  * 是一排干巴巴的选项，「当时到底定了哪个」还得回终端翻（用户报的）。
  * 拿不到选项时（问题文案两处对不上）才退回那句干话，不编一个出来。
+ *
+ * **`live` 和 `canPick` 是两件事**：在等你答、但这儿代答不了（选项超过 9 个）时要说清
+ * 「在等你答，回终端」，绝不能落到「已经答过了」那句上 —— 那会让人干脆不去答，而对面
+ * 一直卡着（用户报的「我没有答啊 为什么说我答过了」）。
  */
-function footer(canTap: boolean, live: boolean | undefined, one: { multi?: boolean } | null, picked: string) {
-  if (canTap) return '点两下选一个。点之前别在终端里按方向键 —— 那会把高亮移开，这儿是按「停在第一个」算的'
-  if (live) return one?.multi ? '多选：回终端答（空格勾选、回车确认）' : '多个问题：回终端一题一题答'
-  return picked ? `已选：${picked}` : '这个问题已经答过了'
+function footer(canPick: boolean, live: boolean | undefined, ready: boolean, chosen: string) {
+  if (canPick) {
+    // 缺哪几题由按钮旁边那行说（那儿离手指近），这儿只讲怎么用
+    return ready ? '点「提交」就替你在终端里按下去' : '每题都要选（可多选的那题能选几个），选完点「提交」'
+  }
+  if (live) return '选项太多，这儿发不了 —— 回终端答'
+  return chosen ? `已选：${chosen}` : '这个问题已经答过了'
 }
 
 /**
@@ -1286,7 +1396,7 @@ function ToolLine({ m, toggle }: { m: ChatMsg; toggle?: { open: boolean; n: numb
 function Bubble({ m, onAnswer, live, onOpenPath }: {
   m: ChatMsg
   /** 点了第 index 个选项（已经过二次确认）。不给 = 这条 ask 只显示不给点 */
-  onAnswer?: (index: number) => void
+  onAnswer?: (picks: number[][]) => void
   /** 这条 ask 是不是**还没答**（= 它是最后一条工具调用且没有结果）。只有它才给点 */
   live?: boolean
   /** 点了正文里一条本地路径（走终端那套 openPath） */
