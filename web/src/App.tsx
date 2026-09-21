@@ -225,6 +225,15 @@ export default function App() {
    * 生命周期只有一件事要守住：**别让它卡住**。所以 pane 列表一旦确认焦点就是它，这个提示
    * 立刻清掉（下面那个 effect）；goto 失败就收回，herdr 说焦点在别处就跟它的说法。
    */
+  /**
+   * 「刚往 pane 里发过东西，chat 立刻补一拍」的计数器。
+   *
+   * chat 是 3 秒一拍的轮询，而按 Esc / `/clear` 这类键是**会改对面状态**的动作 ——
+   * 等下一拍才看到反应就是 2~3 秒的空窗，人会以为「没点成功」（用户报的）。
+   * 发完就把这个数 +1，chat 那边据此立刻读一次，延迟变成一个来回（几十毫秒）。
+   */
+  const [keyNudge, setKeyNudge] = useState(0)
+
   const [focusHint, setFocusHint] = useState<string | null>(null)
 
   /**
@@ -1410,7 +1419,28 @@ export default function App() {
       void compose.submit()
       return
     }
+    /*
+      **终端没连上时这一下是发不出去的，必须说话。**
+
+      这些键（Esc 打断、`/clear`、新标签…）走的是终端那条 WebSocket，而 `session.send`
+      在连接不是 OPEN 时**静默丢掉**。平时看得见终端所以无所谓，但 **chat 模式下终端不在
+      屏幕上**：连接断着照样能看对话（那正是左上角那个点要分开说的事），于是按 Esc、按
+      `/clear` 全都「点了没反应且不报错」—— 这个项目里最不该有的那种行为（用户问的
+      「chat 模式下怎么 clear / 打断」就是撞在这儿）。
+
+      顺手把终端连回来：重连**没有任何代价**（一条 WebSocket 一个 PTY，herdr 的 pane 活在
+      herdr server 里，见 CLAUDE.md 那条「锁屏断连」）。但这一下按键本身是补不回来的 ——
+      它已经丢了，所以话要说清「连上再按一次」，别让人以为发出去了。
+    */
+    if (status.cls !== 'on') {
+      toast('终端没连上，这个键发不出去 —— 正在连，连上再按一次')
+      connect()
+      return
+    }
     sess.current?.sendKey(b)
+    // 这一下多半改了对面的状态（Esc 打断、`/clear` 清空…）—— 让 chat 立刻读一次，
+    // 别等那 3 秒一拍（见 keyNudge）
+    setKeyNudge((n) => n + 1)
     if (kbdUp) sess.current?.focus()
   }
 
@@ -1846,6 +1876,7 @@ export default function App() {
             onHealth={setChatOK}
             focus={focusHint}
             chatFont={chatFont}
+            nudge={keyNudge}
           />
         )}
         {/* 「正在打开…」那一屏：和查看器同层（z-20），它一出来就换成查看器 */}
