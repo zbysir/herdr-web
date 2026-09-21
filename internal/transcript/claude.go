@@ -217,6 +217,25 @@ func humanText(raw string) string {
 	return strings.TrimSpace(cmdAny.ReplaceAllString(text, ""))
 }
 
+// claudeSay 把「人说的一句话」落成一条消息 —— 字符串 content 和数组 content 两条路**共用
+// 这一份**（见 claudeUser 的 ⑤：原来只有字符串那条路做剥壳和打断判断，而打断记号压根不走
+// 那条路）。`imgs` 是这条里贴了几张图，只在一个字都没有时用来补占位。
+func claudeSay(l *clLine, raw string, imgs int, out *[]Msg) {
+	text := humanText(raw)
+	if text == "" {
+		if imgs == 0 {
+			return
+		}
+		text = "[图片]"
+	}
+	// 打断记号自己占一条小字，不当成人说的话 —— 它是 claude 写进去的，不是人打的。
+	if strings.Contains(text, interruptMark) {
+		*out = append(*out, Msg{ID: l.UUID, Kind: KindNotice, Text: "被打断了", At: l.Timestamp})
+		return
+	}
+	*out = append(*out, Msg{ID: l.UUID, Kind: KindHuman, Text: clip(text, 4000), At: l.Timestamp})
+}
+
 // claudeUser 处理 user 行。
 //
 // ② **工具结果是以 `user` 角色记的**（Anthropic API 的约定），所以这儿要分两种：
@@ -237,16 +256,7 @@ func claudeUser(l *clLine, st *state, out *[]Msg) {
 	}
 	var s string
 	if json.Unmarshal(m.Content, &s) == nil {
-		text := humanText(s)
-		if text == "" {
-			return
-		}
-		// 打断记号自己占一条小字，不当成人说的话 —— 它是 claude 写进去的，不是人打的。
-		if strings.Contains(text, interruptMark) {
-			*out = append(*out, Msg{ID: l.UUID, Kind: KindNotice, Text: "被打断了", At: l.Timestamp})
-			return
-		}
-		*out = append(*out, Msg{ID: l.UUID, Kind: KindHuman, Text: clip(text, 4000), At: l.Timestamp})
+		claudeSay(l, s, 0, out)
 		return
 	}
 
@@ -254,6 +264,42 @@ func claudeUser(l *clLine, st *state, out *[]Msg) {
 	if json.Unmarshal(m.Content, &blocks) != nil {
 		return
 	}
+
+	/*
+		⑤ **数组 content 不等于「这是工具结果」。** 人说的话只要带了附件（贴图）就也是数组：
+		`[{type:"text",…},{type:"image",…}]`。原来这儿只捞 `tool_result`，于是**带图的人话
+		一个字都不进对话流**（用户报的「我在电脑上终端发的这条，手机 chat 里看不到」，
+		而纯文字的那几条好端端在），而且完全静默。
+
+		顺带治好了同一个根因的第二处：**打断记号也只以数组形态出现** —— 这份仓库的转录里
+		实测「字符串 0 条 / 数组 24 条」，也就是说那行「被打断了」的小字**一次都没出现过**，
+		判据当初写在了永远匹配不到的那条路上。
+
+		分得清是因为这三种组合是**互斥**的（同一份转录里实测：`tool_result` 5870 条、
+		只有 `text` 的 14 条全是打断记号、`image,text` 10 条全是带图的人话）。
+
+		**图片本身不带出去**：一张贴图在这儿是 200KB 以上的 base64，而这条路是按秒轮询、
+		要过隧道发到手机上的。claude 自己在正文里就留了 `[Image #10]` 这个记号，所以取文本
+		块就够；真的一个字都没有（只贴了图）时才补一句占位。
+	*/
+	var say []string
+	imgs := 0
+	for _, b := range blocks {
+		switch b.Type {
+		case "text":
+			if t := strings.TrimSpace(b.Text); t != "" {
+				say = append(say, t)
+			}
+		case "image":
+			imgs++
+		}
+	}
+	// **不 return**：万一哪天同一行里既有人话又有 tool_result，两样都要处理
+	// （实测目前互斥，但这么写不用赌）。
+	if len(say) > 0 || imgs > 0 {
+		claudeSay(l, strings.Join(say, "\n"), imgs, out)
+	}
+
 	for _, b := range blocks {
 		if b.Type != "tool_result" {
 			continue

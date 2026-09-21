@@ -979,3 +979,104 @@ func TestClaudeCompactBoundary(t *testing.T) {
 		}
 	}
 }
+
+// **数组 content 不等于「这是工具结果」。** 人说的话只要带了附件（贴图）就也是数组，
+// 原来这儿只捞 `tool_result`，于是带图的人话一个字都不进对话流（用户报的：
+// 「我在电脑上终端发的这条，手机 chat 里看不到」，而纯文字那几条好端端在），完全静默。
+//
+// 同一个根因还坑掉了打断记号：它**只以数组形态出现**（这台机器上的转录实测「字符串 0 条 /
+// 数组 24 条」），所以那行「被打断了」的小字一次都没出现过。
+func TestClaudeArrayContentIsNotAlwaysToolResult(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "s.jsonl")
+	row := func(uuid string, content any) string {
+		b, _ := json.Marshal(map[string]any{
+			"type": "user", "uuid": uuid, "timestamp": "2026-09-21T02:00:00.000Z",
+			"message": map[string]any{"role": "user", "content": content},
+		})
+		return string(b) + "\n"
+	}
+	img := map[string]any{"type": "image", "source": map[string]any{
+		"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo=",
+	}}
+
+	body := row("u1", "纯文字那条")
+	// 带图的人话：正文里 claude 自己留了 `[Image #10]` 这个记号
+	body += row("u2", []any{map[string]any{"type": "text", "text": "[Image #10] 这条是在终端里发的"}, img})
+	// 顺序反过来也要认（实测 claude 把 image 放前面、codex 也是）
+	body += row("u3", []any{img, map[string]any{"type": "text", "text": "图在前面那条"}})
+	// 只贴图、一个字没打
+	body += row("u4", []any{img})
+	// 打断记号：数组形态
+	body += row("u5", []any{map[string]any{"type": "text", "text": "[Request interrupted by user]"}})
+	// 工具结果照旧不是人话
+	body += row("u6", []any{map[string]any{"type": "tool_result", "tool_use_id": "t1", "content": "输出"}})
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	l, err := Read(Source{Path: p, Agent: "claude", Sig: "sig"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type want struct {
+		kind Kind
+		text string
+	}
+	exp := []want{
+		{KindHuman, "纯文字那条"},
+		{KindHuman, "[Image #10] 这条是在终端里发的"},
+		{KindHuman, "图在前面那条"},
+		{KindHuman, "[图片]"},
+		{KindNotice, "被打断了"},
+	}
+	if len(l.Msgs) != len(exp) {
+		t.Fatalf("该有 %d 条，实际 %d：%v", len(exp), len(l.Msgs), brief(l))
+	}
+	for i, w := range exp {
+		if l.Msgs[i].Kind != w.kind || l.Msgs[i].Text != w.text {
+			t.Errorf("第 %d 条该是 %s/%q，实际 %s/%q", i+1, w.kind, w.text, l.Msgs[i].Kind, l.Msgs[i].Text)
+		}
+	}
+	// 图片本身绝不能带出去：一张贴图是几百 KB 的 base64，而这条路按秒轮询、要过隧道到手机上
+	for _, m := range l.Msgs {
+		if strings.Contains(m.Text, "iVBORw0KGgo") {
+			t.Errorf("把图片数据带出去了：%q", m.Text)
+		}
+	}
+}
+
+// codex 那边贴图是 `local_image` + **路径**（不是 base64），而 cxText 本来就只挑文本块，
+// 所以带文字那种原本就对；这儿钉的是「只贴图不打字」别整条消失。
+func TestCodexImageOnly(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "r.jsonl")
+	row := func(id string, content []any) string {
+		b, _ := json.Marshal(map[string]any{
+			"timestamp": "2026-09-21T03:00:00.000Z", "type": "event_msg",
+			"payload": map[string]any{"type": "item_completed", "item": map[string]any{
+				"type": "UserMessage", "id": id, "content": content,
+			}},
+		})
+		return string(b) + "\n"
+	}
+	shot := map[string]any{"type": "local_image", "path": "/tmp/codex-clipboard-x.png"}
+	body := row("m1", []any{shot, map[string]any{"type": "text", "text": "[Image #1] 这种"}})
+	body += row("m2", []any{shot})
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Read(Source{Path: p, Agent: "codex", Sig: "sig"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"[Image #1] 这种", "[图片]"}
+	if len(l.Msgs) != len(want) {
+		t.Fatalf("该有 %d 条，实际 %d：%v", len(want), len(l.Msgs), brief(l))
+	}
+	for i, w := range want {
+		if l.Msgs[i].Kind != KindHuman || l.Msgs[i].Text != w {
+			t.Errorf("第 %d 条该是 human/%q，实际 %s/%q", i+1, w, l.Msgs[i].Kind, l.Msgs[i].Text)
+		}
+	}
+}

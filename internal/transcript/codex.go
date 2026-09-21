@@ -53,6 +53,9 @@ type cxItem struct {
 	Content []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
+		// Path 贴图那种块（`local_image`）给的是**本机路径**，不是 base64（claude 那边是
+		// base64）。这儿只用来认出「这条里有图」，路径本身不往外送。
+		Path string `json:"path"`
 	} `json:"content"`
 	// CommandExecution
 	Command  json.RawMessage `json:"command"` // 可能是数组（["/bin/zsh","-lc","…"]）也可能是字符串
@@ -91,7 +94,13 @@ func parseCodex(line []byte, st *state, out *[]Msg) {
 	case "UserMessage":
 		text := strings.TrimSpace(cxText(&it))
 		if text == "" {
-			return
+			// 只贴了图、一个字没打：给个占位，别整条消失（和 claude 那边同一条，
+			// 见 claude.go 的 ⑤）。带文字的那种不用管 —— codex 自己会在正文里
+			// 留 `[Image #1]`，而 cxText 本来就只挑文本块。
+			if !cxHasImage(&it) {
+				return
+			}
+			text = "[图片]"
 		}
 		*out = append(*out, Msg{ID: it.ID, Kind: KindHuman, Text: clip(text, 4000), At: at})
 
@@ -146,6 +155,16 @@ func cxText(it *cxItem) string {
 		}
 	}
 	return b.String()
+}
+
+// cxHasImage 这条里有没有贴图块（`local_image`）。
+func cxHasImage(it *cxItem) bool {
+	for _, c := range it.Content {
+		if strings.ToLower(c.Type) == "local_image" || c.Path != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // cxCommand 命令行可能是数组也可能是字符串。
