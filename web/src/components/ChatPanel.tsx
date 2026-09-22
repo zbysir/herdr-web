@@ -86,8 +86,10 @@ const WAIT_MS = 25_000
 const Markdown = lazy(() => import('./ChatMarkdown'))
 
 export function ChatPanel({
-  panes, sent, onDropSent, onClose, onToast, onOpenPath, onHealth, focus, chatFont, nudge,
+  panes, sent, onDropSent, onClose, onToast, onOpenPath, onHealth, focus, chatFont, nudge, onPickPane,
 }: {
+  /** 点头上那行「看哪个 pane」→ 开面板一览（换一个 agent 看） */
+  onPickPane?: () => void
   /** 对话区的字号（px）。**和终端那个 fontSize 是两回事**，见列表容器上那段注释 */
   chatFont: number
   /**
@@ -256,17 +258,6 @@ export function ChatPanel({
       if (log.updates?.length) {
         setMsgs((old) => patch(old, log.updates!))
       }
-      /*
-        **前面某几条在 TUI 里被撤回了** —— 按 id 去掉。
-
-        和上面那条补丁同一个理由：证据在后面那一批里（撤回的证据是「同父的另一条人话拿到了
-        回应」）。不按名单去掉的话屏幕上那条一直挂着，只有整份重读才消失（用户报的）。
-      */
-      if (log.gone?.length) {
-        const gone = new Set(log.gone)
-        setMsgs((old) => (old.some((m) => gone.has(m.id)) ? old.filter((m) => !gone.has(m.id)) : old))
-      }
-
       next.current = log.next
       // `more` / `start` **只从整份那次采纳，增量那次保住手上的**。
       // 写成每拍都盖的后果是：首屏说了「上面还有」，第二拍（增量）把它覆盖成 false，
@@ -635,20 +626,37 @@ export function ChatPanel({
       {/* 第一排：看哪个 pane + 状态 + × 。和改动面板一样不给标题栏 —— 手机上那一整行就是
           44px 的空白，而「这是什么面板」看内容就知道 */}
       <div className="flex shrink-0 items-center gap-1.5 border-b border-line bg-bar px-3 py-2">
-        {/* 「我在哪个 agent 上」照面板一览那一行的样子：tab 名 + agent 小标 + cwd */}
-        {info ? (
-          <div className="flex min-w-0 flex-1 items-center gap-1.5">
-            <span className="truncate text-[13px]">{info.tab || info.id}</span>
-            <span className="shrink-0 rounded border border-line bg-ctl px-1 py-px font-mono text-[10px] text-muted">
-              {info.agent}
+        {/*
+          「我在哪个 agent 上」照面板一览那一行的样子：tab 名 + agent 小标 + cwd。
+
+          **整行可点，点开面板一览**（用户点名要的）：这一行回答的就是「我在看谁」，
+          那么「换一个看」最该在它自己身上，而不是绕到顶栏那个 ▦ 去。
+          用真 `<button>` 不是 `div + onClick`：触屏上丢 click 那条兜底认的是
+          `[role=button]`（见 lib/tap.ts），而按钮天生就有。
+          **只有左边这段身份是按钮** —— 右边的状态药丸和 ✕ 各自独立，不然点关闭会先开个面板。
+        */}
+        <button
+          type="button"
+          onClick={onPickPane}
+          disabled={!onPickPane}
+          title="换一个 agent 看（打开面板一览）"
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-0.5 text-left
+                     enabled:hover:bg-ctl disabled:opacity-100"
+        >
+          {info ? (
+            <>
+              <span className="truncate text-[1em]">{info.tab || info.id}</span>
+              <span className="shrink-0 rounded border border-line bg-ctl px-1 py-px font-mono text-[10px] text-muted">
+                {info.agent}
+              </span>
+              <span className="min-w-0 truncate text-xs text-faint">{shortPath(info.cwd)}</span>
+            </>
+          ) : (
+            <span className="min-w-0 truncate text-xs text-muted">
+              {cur ? `当前 pane（${cur.id}）里没有 agent` : '还没拿到 pane 列表'}
             </span>
-            <span className="min-w-0 truncate text-xs text-faint">{shortPath(info.cwd)}</span>
-          </div>
-        ) : (
-          <div className="min-w-0 flex-1 truncate text-xs text-muted">
-            {cur ? `当前 pane（${cur.id}）里没有 agent` : '还没拿到 pane 列表'}
-          </div>
-        )}
+          )}
+        </button>
         <Status status={st} />
         {/*
           这儿原来还有一个 `>_`「回终端看这个 pane」。**去掉了**，它是 chat 还是浮动面板时的

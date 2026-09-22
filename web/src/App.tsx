@@ -1890,6 +1890,7 @@ export default function App() {
             focus={focusHint}
             chatFont={chatFont}
             nudge={keyNudge}
+            onPickPane={openPanes}
           />
         )}
         {/* 「正在打开…」那一屏：和查看器同层（z-20），它一出来就换成查看器 */}
