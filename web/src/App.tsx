@@ -226,6 +226,15 @@ export default function App() {
    * 立刻清掉（下面那个 effect）；goto 失败就收回，herdr 说焦点在别处就跟它的说法。
    */
   /**
+   * 投稿：发完顺手让 chat 补几拍（见 keyNudge）。投出去之后 agent 会从「闲着」变「运行中」，
+   * 不补的话那个状态要等一拍（3 秒）才变 —— 而人刚按完投稿正盯着看它动没动。
+   */
+  const submitCompose = () => {
+    void compose.submit()
+    setKeyNudge((n) => n + 1)
+  }
+
+  /**
    * 「刚往 pane 里发过东西，chat 立刻补一拍」的计数器。
    *
    * chat 是 3 秒一拍的轮询，而按 Esc / `/clear` 这类键是**会改对面状态**的动作 ——
@@ -1386,10 +1395,14 @@ export default function App() {
 
       和左上角那个状态点、那个「连接」按钮同一类毛病：给终端写的话漏进了 chat 模式。
     */
-    if (chatOpen) {
-      toast(`对话已切到 ${paneName(r.target)}`)
-      return
-    }
+    /*
+      **chat 模式下切成功了不弹提示。** 头上那行 pane 名 + agent 立刻就变了，那本身就是
+      反馈 —— 再弹一句「对话已切到 …」是重复，而且每切一次弹一次，很打扰（用户报的）。
+
+      **但「没切到」那种照旧要弹**（上面那一支）：屏幕上还在老 pane 而提示说成功，是最难查
+      的一种。所以这儿只是「成功时安静」，不是「不再报」。
+    */
+    if (chatOpen) return
     const offline = status.cls !== 'on'
     toast(
       (r.singlePane
@@ -1416,7 +1429,7 @@ export default function App() {
   const sendKeyBytes = (b: string) => {
     if ((b === '\r' || b === '\n') && enterSend && showCompose
       && document.activeElement?.closest?.('[data-testid="compose"]')) {
-      void compose.submit()
+      submitCompose()
       return
     }
     /*
@@ -2021,7 +2034,7 @@ export default function App() {
                 bad={compose.bad}
                 busy={compose.busy}
                 enterSend={enterSend}
-                onSubmit={() => void compose.submit()}
+                onSubmit={submitCompose}
                 onAttach={compose.attach}
                 atts={compose.atts.length}
                 onDropAtt={compose.dropAtt}

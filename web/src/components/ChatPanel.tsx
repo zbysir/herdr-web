@@ -257,17 +257,16 @@ export function ChatPanel({
         setMsgs((old) => patch(old, log.updates!))
       }
       /*
-        **前面某几条被撤回了** —— 按 id 去掉。
+        **前面某几条在 TUI 里被撤回了** —— 按 id 去掉。
 
-        和上面那条补丁同一个理由：证据在后面那一批里。撤回一条还没被回复的消息在树上的
-        样子是「后面的记录跳过它」（见 internal/transcript 的 onBranch），而那条「跳过它」
-        的记录往往是下一次增量才读到的 —— 这时候被撤的那条早就送到浏览器里了。
-        不按名单去掉的话屏幕上那条一直挂着，只有整份重读才消失（用户报的）。
+        和上面那条补丁同一个理由：证据在后面那一批里（撤回的证据是「同父的另一条人话拿到了
+        回应」）。不按名单去掉的话屏幕上那条一直挂着，只有整份重读才消失（用户报的）。
       */
       if (log.gone?.length) {
         const gone = new Set(log.gone)
         setMsgs((old) => (old.some((m) => gone.has(m.id)) ? old.filter((m) => !gone.has(m.id)) : old))
       }
+
       next.current = log.next
       // `more` / `start` **只从整份那次采纳，增量那次保住手上的**。
       // 写成每拍都盖的后果是：首屏说了「上面还有」，第二拍（增量）把它覆盖成 false，
@@ -344,11 +343,23 @@ export function ChatPanel({
     setFirst(true)
   }, [active])
 
-  // 刚发过键就立刻补一拍（见 nudge）。**不进上面那个轮询的依赖** —— 那会把整条心跳
-  // 重建一次（清掉计时器再从头排），而这儿要的只是「额外读一次」。
+  /*
+    刚发过键就补几拍（见 nudge）。
+
+    **一次不够。** chat 的状态来自 herdr 的 `agent_status`，而 herdr 自己那个状态是**刮屏**
+    得出来的（见 docs/dev/HERDR-API.md）—— 按下 Esc 之后它要过一会儿才翻，所以「立刻读
+    一次」很可能读到的还是翻转前的值，然后就得等下一拍（3 秒）。用户报的「按了 esc 状态
+    还是慢半拍」就是这一段。
+
+    所以按完键之后**在 1.6 秒里多采几次**（120 / 400 / 900 / 1600ms），采到就采到了 ——
+    重复读的代价只是几次 `pane.get`，而这几拍正是人盯着屏幕等反应的那一段。
+    **不进上面那个轮询的依赖**：那会把整条心跳重建一次（清掉计时器再从头排）。
+  */
   useEffect(() => {
     if (!nudge || !active) return
-    void tick(active)
+    const at = [0, 120, 400, 900, 1600]
+    const timers = at.map((ms) => window.setTimeout(() => void tick(active), ms))
+    return () => timers.forEach(clearTimeout)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nudge])
 
