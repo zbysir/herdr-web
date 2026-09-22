@@ -40,10 +40,16 @@ const clampChat = (n: number) => Math.min(24, Math.max(11, n > 0 ? n : 13))
 /**
  * 抢跑那个焦点提示最多活多久（见 focusHint 的收尾 effect ②）。
  *
- * 它要盖住的只是 goto + 重拉列表那两次往返（实测一百多毫秒），2 秒是足够宽的余量；
- * 它的作用是**保证这个提示不可能卡住**，所以宁可宽一点也不能没有。
+ * **从「那一跳回来了」开始算，不是从点下去开始算**（effect 里 `jumping` 那一段）。所以它
+ * 只需要盖住最后一次往返：goto 回来之后重拉的那份 pane 列表。那一份必然是**全量**
+ * （焦点变了，指纹一定变，11.5KB），而这条路上最要命的情形恰恰是「网络很慢」，所以给到
+ * 4 秒 —— 原来 2 秒是按「实测一百多毫秒」定的，那是局域网的数。
+ *
+ * 它的作用是**保证这个提示不可能卡住**（herdr 的焦点被别处挪走时，相等永远不成立），
+ * 所以宁可宽一点也不能没有。真被挪走了也不用等满这个数：发件箱那条 500ms 的心跳每拍都
+ * 现问 `pane.current`，一发现焦点变了就顺手重拉列表（见 useCompose 的 `switched`）。
  */
-const HINT_CAP = 2000
+const HINT_CAP = 4000
 import { AUTO_MS_DEFAULT, Notices } from '@/components/Notices'
 import { FilesPanel } from '@/components/FilesPanel'
 import { DiffPanel } from '@/components/DiffPanel'
@@ -270,6 +276,13 @@ export default function App() {
    * 判据只能是「我是不是最后那一次点击」：pane id 比不出来（同一个 pane 点两下也算两次）。
    */
   const hintSeq = useRef(0)
+
+  /**
+   * 这会儿有几跳 goto 还在飞。**抢跑提示在它们回来之前不许超时**，见下面那个收尾 effect。
+   *
+   * 是 state 不是 ref：那个 effect 要在「最后一跳回来了」这一刻重新起算。
+   */
+  const [jumping, setJumping] = useState(0)
 
   const [chatMode, setChatMode] = useState(() => {
     try {
@@ -656,10 +669,23 @@ export default function App() {
       setFocusHint(null)
       return
     }
+    /*
+      **那一跳还在飞的时候不起算。**
+
+      时限要盖住的就是「goto + 重拉列表」这两次往返 —— 从点下去那一刻开始数的话，等于
+      「网络越慢越早放弃」，而那恰恰是最需要它的时候。真机上的表现是用户报的：从 A 切到
+      B，先是骨架图，**然后突然冒出 A 的对话**，过一会 B 的才出来 —— 时限在半路上到了，
+      提示被清掉，而列表这会儿还说焦点在 A（`active` 于是退回 A，而 A 的现场是缓存着的，
+      所以它是瞬间冒出来的），等下一拍列表刷到 B 才换回去。
+
+      所以 `jumping` 一落回 0 这个 effect 会重跑，时限**从那一刻**重新起算 —— 那时候
+      只剩「列表追上来」这一次往返要等了。
+    */
+    if (jumping) return
     const t = window.setTimeout(() => setFocusHint(null), HINT_CAP)
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusHint, compose.panes])
+  }, [focusHint, compose.panes, jumping])
 
   /** 取消「正在打开」：连 seq 一起推掉，迟到的结果就不算了 */
   const cancelOpen = useCallback(() => {
@@ -1383,7 +1409,16 @@ export default function App() {
     // **抢跑**：chat 按 pane id 读，不用等 goto 和 pane 列表这两次往返（见 focusHint）
     const seq = ++hintSeq.current
     setFocusHint(id)
-    const r = await compose.jump(id, zoom)
+    setJumping((n) => n + 1)
+    // finally：`jump` 自己吞了异常，但这个计数一旦漏减就是「提示永远不超时」——
+    // 那时候 chat 会一直钉在我们以为的那个 pane 上，而发件箱跟着真焦点走（两边对不上
+    // 就是「看着 A 的对话把话发给了 B」）。
+    let r: Awaited<ReturnType<typeof compose.jump>>
+    try {
+      r = await compose.jump(id, zoom)
+    } finally {
+      setJumping((n) => n - 1)
+    }
     // 这中间人又点了别的 → 这一次的收尾（清提示 / 改提示 / 弹提示）全部作废，见 hintSeq
     if (seq !== hintSeq.current) return
     if (!r) { setFocusHint(null); return } // 跳失败：把提前切过去的收回来
