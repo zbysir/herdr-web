@@ -184,7 +184,28 @@ export function PaneSwitcher({
       **分钟**，15 秒推一次已经远远够了。
     */
     const t2 = setInterval(() => { if (!document.hidden) setNow(Date.now()) }, 15000)
-    return () => { clearInterval(t); clearInterval(t2) }
+    /*
+      **回到前台立刻对一次**，别等下一拍。
+
+      上面两拍都有 `document.hidden` 闸（后台标签页里浏览器自己也会把定时器压到一分钟
+      一档），所以从别的 app 切回来 / 息屏回来时，面板里那张列表是**你走之前那一份** ——
+      而这恰恰是最想知道「谁跑完了」的时刻。少了这一条要等 1.5 秒，而它的成本是
+      34 字节（没变的话，见 useCompose 的 `rev`）。
+
+      提示那边（useNotices）和发件箱那边（useCompose）各自也有这一条，是同一个道理。
+    */
+    const back = () => {
+      if (document.hidden) return
+      setNow(Date.now())
+      reload.current()
+    }
+    document.addEventListener('visibilitychange', back)
+    addEventListener('focus', back)
+    return () => {
+      clearInterval(t); clearInterval(t2)
+      document.removeEventListener('visibilitychange', back)
+      removeEventListener('focus', back)
+    }
   }, [])
 
   const rows = useMemo(() => {
