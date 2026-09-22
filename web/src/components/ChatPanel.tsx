@@ -3,6 +3,7 @@ import { ArrowDown, ChevronDown, ChevronUp, Play, Terminal, Wrench, AlertCircle 
 import { ApiError, chatApi, type ChatLog, type ChatMsg, type Pane } from '@/lib/api'
 import type { SentEcho } from '@/hooks/useCompose'
 import { STATUS_DOT } from '@/lib/agentstatus'
+import { paneTitle } from '@/lib/panename'
 import { cn } from '@/lib/utils'
 
 /**
@@ -645,11 +646,25 @@ export function ChatPanel({
         >
           {info ? (
             <>
-              <span className="truncate text-[1em]">{info.tab || info.id}</span>
+              {/*
+                **标题占主位，路径垫底**（用户点名的）：手机上那一行就那么宽，而人要的是
+                「我在哪个对话里」—— 标题（claude 自己给这轮起的那个）直接回答它，
+                而 `~/dev/bysir/herdr-web` 那串在手机上几乎总被截断、也说不出是哪个对话。
+
+                所以：标题 `flex-1` 拿走剩下的宽度、最后才被截；tab 名和路径降成次要，
+                **路径 `shrink` 先被挤掉**。标题拿不到时退回 tab 名 / id ——
+                shell pane、拿不到 title 的、以及标题是泛名字（`Claude Code`）的都走这条 —— 和面板一览共用
+                那一份（`paneTitle`，见 lib/panename.ts）。
+              */}
+              <span className="min-w-0 flex-1 truncate text-[1em]">
+                {paneTitle(info) || info.tab || info.id}
+              </span>
               <span className="shrink-0 rounded border border-line bg-ctl px-1 py-px font-mono text-[10px] text-muted">
                 {info.agent}
               </span>
-              <span className="min-w-0 truncate text-xs text-faint">{shortPath(info.cwd)}</span>
+              <span className="min-w-0 shrink truncate text-xs text-faint">
+                {info.tab ? `${info.tab} · ` : ''}{shortPath(info.cwd)}
+              </span>
             </>
           ) : (
             <span className="min-w-0 truncate text-xs text-muted">

@@ -6,6 +6,7 @@ import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { STATUS_BUCKET, STATUS_DOT } from '@/lib/agentstatus'
 import { cn } from '@/lib/utils'
+import { paneTitle } from '@/lib/panename'
 
 /**
  * 面板一览：**手机上换 pane 的那条路**。
@@ -61,14 +62,6 @@ const STATUS_CHIP: Record<string, { text: string; cls: string }> = {
 /** 长路径显示成 ~/…：一行里 cwd 是最认得出 pane 的东西，但绝对路径太占宽度 */
 const shortCwd = (p: string) => p.replace(/^\/(?:Users|home)\/[^/]+/, '~')
 
-/**
- * 去掉标题前面那个状态字形。Claude Code 会在终端标题前挂一个转圈的符号（`✳ 图片识别`、
- * `◐ Herdr session URL 路由`），herdr 的 `terminal_title_stripped` 只剥掉了一部分
- * （实拍见过 ◐ 留在里面）。这一行左边已经有一个状态点了，再挂一个抖动的字形只是噪音。
- *
- * 只吃「符号 + 空白」这种开头，所以 `~/subhub`（符号后面没空格）不会被误伤。
- */
-const cleanTitle = (t: string) => t.replace(/^[^\p{L}\p{N}\s]+\s+/u, '')
 
 /**
  * 「上次动过」多久了。给的是 unix 毫秒，0 / 缺失就返回空字符串 —— **空着比编一个时间好**
@@ -358,7 +351,7 @@ export function PaneSwitcher({
                     <span className="mt-px flex items-center gap-1.5 font-mono text-[11px] text-faint">
                       <span className="truncate">
                         {sort !== 'group' && `${p.workspace} · `}
-                        {(p.agent && cleanTitle(p.title)) || shortCwd(p.cwd) || p.id}
+                        {paneTitle(p) || shortCwd(p.cwd) || p.id}
                       </span>
                       {/* pane id 在手机上**也要出**：一个 tab 里有两个 pane 时（herdr 里分屏），
                           两行的 tab 标签和 cwd 一模一样，id 是唯一分得开的东西（实拍见过） */}
