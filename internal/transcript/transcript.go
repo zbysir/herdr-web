@@ -129,15 +129,7 @@ type Log struct {
 	More bool `json:"more"`
 	// Updates 前面那些消息的结果补丁（见 Update）。
 	Updates []Update `json:"updates,omitempty"`
-	/*
-		Gone **前面送过、但现在认定被撤回的那几条**（消息 id）。
-
-		和 `Updates` 同一个形状、同一个理由：**证据出现在后面那一批里**。撤回的证据是
-		「同父的另一条人话拿到了 assistant 回应」，而那条回应往往是下一次增量才读到的 ——
-		这时候被撤的那条早就送到浏览器里了。前端只会追加不会删，所以必须指名说「这几条没了」。
-	*/
-	Gone  []string `json:"gone,omitempty"`
-	Agent string   `json:"agent"`
+	Agent   string   `json:"agent"`
 	// File 转录文件名（**只有文件名，不是全路径**）。给的是「我在读哪一份」这个诊断信息，
 	// 全路径没必要送到浏览器上。
 	File string `json:"file"`
@@ -193,9 +185,6 @@ const (
 	// 人点一次「看更早的」拿到的就是紧挨着当前最上面那条的一段。256KB 的 claude JSONL
 	// 实测出几十条，在手机上是好几屏。
 	backWindow = 256 << 10
-	// lookBack 增量那一拍**为了认撤回**多往前看多少字节（见 Read 里那段）。
-	// 撤回的总是「刚发出去那条」，覆盖最近几十条记录就够；取大了每拍白解析。
-	lookBack = 128 << 10
 	// minTail 一窗里至少要出几条才算够。
 	//
 	// **这个门槛不能是 tailMsgs。** 写成「凑满 200 条才算够」的话，一份 2.3MB 的转录里
@@ -252,23 +241,9 @@ func Read(src Source, from int64) (*Log, error) {
 	// 增量：偏移还在文件里就从那儿接着读。**没读到东西也不是错** ——
 	// agent 正在想，文件就是不动（实测能 15 秒零字节）。
 	if from > 0 && from <= size {
-		msgs, ups, _, _, end, err := scan(f, from, size, parse, 0)
+		msgs, ups, _, end, err := scan(f, from, size, parse, 0)
 		if err != nil {
 			return nil, err
-		}
-		/*
-			**认撤回要多往前看一段。** 撤回的证据是「同父的另一条人话拿到了回应」，而被撤的
-			那条**在增量这一窗之前** —— 只看这一窗的话它压根不在，说不出它的 id，前端屏幕上
-			那条就一直挂着。所以另做一次**只为认撤回**的扫描，从 `from - lookBack` 起。
-			**刻意不把回看那段的消息并进 Msgs**：前端拿「增量批次里冒出人话」当「投稿落地了」
-			的判据（`dropLanded` 的 fifo），重叠送旧人话会把还没落地的回显误撤掉。
-		*/
-		lb := from - lookBack
-		if lb < 0 {
-			lb = 0
-		}
-		if _, _, g, _, _, err2 := scan(f, lb, size, parse, lb); err2 == nil {
-			out.Gone = g
 		}
 		// 增量那一段的 Start 没有意义（人手上已经有更早的了），照旧把首屏那次的值留给前端管。
 		// **Updates 是这一段最要紧的东西之一**：工具调用常常落在上一段里（见 Update）。
@@ -283,7 +258,7 @@ func Read(src Source, from int64) (*Log, error) {
 		if start < 0 {
 			start = 0
 		}
-		msgs, _, gone, begin, end, err := scan(f, start, size, parse, start)
+		msgs, _, begin, end, err := scan(f, start, size, parse, start)
 		if err != nil {
 			return nil, err
 		}
@@ -297,7 +272,7 @@ func Read(src Source, from int64) (*Log, error) {
 		if len(msgs) > tailMsgs {
 			msgs = msgs[len(msgs)-tailMsgs:]
 		}
-		out.Msgs, out.Next, out.Start, out.Gone = msgs, end, begin, gone
+		out.Msgs, out.Next, out.Start = msgs, end, begin
 		out.More = begin > 0
 		return out, nil
 	}
@@ -349,7 +324,6 @@ func ReadBefore(src Source, before int64) (*Log, error) {
 	// 往前走了），别让前端卡住。
 	var (
 		msgs  []Msg
-		gone  []string
 		begin int64
 	)
 	for w := int64(backWindow); ; w *= 4 {
@@ -358,7 +332,7 @@ func ReadBefore(src Source, before int64) (*Log, error) {
 			start = 0
 		}
 		var err error
-		msgs, _, gone, begin, _, err = scan(f, start, before, parse, start)
+		msgs, _, begin, _, err = scan(f, start, before, parse, start)
 		if err != nil {
 			return nil, err
 		}
@@ -374,7 +348,7 @@ func ReadBefore(src Source, before int64) (*Log, error) {
 			break
 		}
 	}
-	out.Msgs, out.Start, out.Gone = msgs, begin, gone
+	out.Msgs, out.Start = msgs, begin
 	out.More = begin > 0
 	// **Next 不能动。** 这一批是往前翻出来的，前端手上那个「下次从哪儿接着读」指的是文件尾，
 	// 拿这儿的值去盖它的话增量就会从中间某处重读一大段（表现是消息成片重复）。
@@ -392,9 +366,9 @@ func ReadBefore(src Source, before int64) (*Log, error) {
 //
 // 返回的第二个值是**最后一个完整行的结束偏移**。文件正在被写时最后一行可能只有一半，
 // 把它算进 Next 的话下次就从半行中间接着读，**那一条消息从此永远丢了**（而且不报错）。
-func scan(f *os.File, start, end int64, parse parseFunc, skipPartial int64) ([]Msg, []Update, []string, int64, int64, error) {
+func scan(f *os.File, start, end int64, parse parseFunc, skipPartial int64) ([]Msg, []Update, int64, int64, error) {
 	if _, err := f.Seek(start, io.SeekStart); err != nil {
-		return nil, nil, nil, start, start, err
+		return nil, nil, start, start, err
 	}
 	rd := io.LimitReader(f, end-start)
 
@@ -438,11 +412,10 @@ func scan(f *os.File, start, end int64, parse parseFunc, skipPartial int64) ([]M
 			if rerr == io.EOF {
 				break
 			}
-			return dropRetracted(st, msgs), st.ups, st.gone, begin, done, rerr
+			return msgs, st.ups, begin, done, rerr
 		}
 	}
-	kept := dropRetracted(st, msgs)
-	return kept, st.ups, st.gone, begin, done, nil
+	return msgs, st.ups, begin, done, nil
 }
 
 // parseFunc 解析一行，把认出来的消息 append 到 out。
@@ -461,127 +434,13 @@ type state struct {
 	// ups 这一批里见到的结果补丁（见 Update）。**不管那条工具在不在这一批里都攒** ——
 	// 在的话回填 + 补丁都做（幂等），不在的话补丁就是唯一的路。
 	ups []Update
-
-	/*
-		下面这几个是认「被撤回的消息」用的（只有 claude；codex 的 rollout 是平的）。
-
-		**转录是树**（`parentUuid` → `uuid`，见 docs/dev/CHAT.md §4）。人在 TUI 里按 Esc
-		撤回一条**还没被回复**的消息时，那条照旧留在文件里，只是会话从它的父亲那儿另开一支。
-
-		判据**不能是「它不在最后那条的链上」** —— 我按那个做过一版，把还活着的消息也删了
-		（排队中的消息挂在入队那刻的叶子上，被打断之后后面的记录自然绕过它；一条 assistant
-		带两个工具结果时那两条 `user` 也同父）。**判据是语义的**：同父的几条人话里，
-		**有 assistant 后代的那条是活的，没有的才是被撤回的**。全机最近 12 个会话实测
-		6 组同父人话，**每组恰好 1 条有 assistant 后代** —— 那条就是真发生过的那次。
-	*/
-	// parent uuid → parentUuid（不收 sidechain：那是另一条分支）
-	parent map[string]string
-	// kids parentUuid → 孩子们的 uuid，按文件顺序
-	kids map[string][]string
-	// asst 这个 uuid 是不是一条 assistant 记录
-	asst map[string]bool
-	// said 这个 uuid 是不是「一条人话」（`user` 记录里人真说的话，不含工具结果、
-	// 不含排队中那种 attachment —— 那两类都不参与这个判断）
-	said map[string]bool
-	// seq uuid → 文件顺序（挑「留哪一条」时按它定先后）
-	seq map[string]int
-	// gone 认定被撤回、因此没送出去的那几条消息 id（见 Log.Gone）
-	gone []string
 }
 
 // 这儿**刻意不做「连着两条一样就去重」**。agentwatch 那边有这么一条，但它的前提是
 // 读屏会重复读到同一屏；转录是纯 append 的事件流，每一行都是一件真发生过的事 ——
 // 而「继续」连说两遍是再正常不过的用法，去重就是把人真说过的话吞掉。
 
-func newState() *state {
-	return &state{
-		tool:   map[string]int{},
-		parent: map[string]string{},
-		kids:   map[string][]string{},
-		asst:   map[string]bool{},
-		said:   map[string]bool{},
-		seq:    map[string]int{},
-	}
-}
-
-/*
-dropRetracted：把「在 TUI 里被撤回的那几条人话」挑掉。
-
-判据（在真数据上验过，见 state 里那段）：**同一个父亲下有多条人话时，有 assistant 后代的
-那条是活的，没有的是被撤回的。** 后代要顺着树往下找 —— 撤回那条下面仍然挂着自动附件
-（`total_tokens_reminder` 的 parent 就是它，真机上核过），所以「有没有孩子」不能当判据，
-得看有没有 **assistant** 后代。
-
-三条保守处理，宁可多留也不错杀（上一版就是错杀了才回滚的）：
-
-  - **没有兄弟就不动**。最新那条永远没有兄弟，所以刚发出去的消息绝不会被误删。
-  - **一组里没有任何一条有 assistant 后代时整组留着**。那说明这一轮还没开始（人连发几条、
-    agent 还没动），不是撤回。
-  - **只认 `user` 记录里的人话**。排队中的那种是 attachment（`queued_command`），
-    工具结果虽然也是 `user` 角色但不算人话 —— 这两类压根不参与，所以上一版那两个错杀在
-    这儿是结构上不可能的。
-*/
-func dropRetracted(st *state, msgs []Msg) []Msg {
-	if len(msgs) == 0 || len(st.said) == 0 {
-		return msgs
-	}
-	// 顺着树找有没有 assistant 后代
-	var hasAsst func(uuid string, depth int) bool
-	hasAsst = func(uuid string, depth int) bool {
-		if depth > 64 { // 防环 / 防太深
-			return false
-		}
-		for _, k := range st.kids[uuid] {
-			if st.asst[k] || hasAsst(k, depth+1) {
-				return true
-			}
-		}
-		return false
-	}
-
-	dead := map[string]bool{}
-	for _, sibs := range st.kids {
-		// 这个父亲下的人话有哪几条
-		var hs []string
-		for _, u := range sibs {
-			if st.said[u] {
-				hs = append(hs, u)
-			}
-		}
-		if len(hs) < 2 {
-			continue // 没有兄弟：不动（最新那条走的就是这一支）
-		}
-		live := ""
-		for _, u := range hs {
-			if hasAsst(u, 0) {
-				// 有多条都有后代（理论上不该出现）就认**最后**那条，前面的照旧留着
-				if live == "" || st.seq[u] > st.seq[live] {
-					live = u
-				}
-			}
-		}
-		if live == "" {
-			continue // 一条都没被回复过：这一轮还没开始，整组留着
-		}
-		for _, u := range hs {
-			if u != live {
-				dead[u] = true
-			}
-		}
-	}
-	if len(dead) == 0 {
-		return msgs
-	}
-	out := msgs[:0:0]
-	for _, m := range msgs {
-		if dead[m.ID] {
-			st.gone = append(st.gone, m.ID)
-			continue
-		}
-		out = append(out, m)
-	}
-	return out
-}
+func newState() *state { return &state{tool: map[string]int{}} }
 
 func parserFor(agent string) parseFunc {
 	switch agent {

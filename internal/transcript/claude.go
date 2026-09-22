@@ -97,10 +97,8 @@ func slashCmd(s string) string {
 const interruptMark = "[Request interrupted by user]"
 
 type clLine struct {
-	Type string `json:"type"`
-	UUID string `json:"uuid"`
-	// ParentUUID 树上的父亲。认「被撤回的消息」靠它，见 transcript.go 的 dropRetracted。
-	ParentUUID  string          `json:"parentUuid"`
+	Type        string          `json:"type"`
+	UUID        string          `json:"uuid"`
 	Timestamp   string          `json:"timestamp"`
 	IsSidechain bool            `json:"isSidechain"`
 	IsMeta      bool            `json:"isMeta"`
@@ -151,23 +149,6 @@ func parseClaude(line []byte, st *state, out *[]Msg) {
 	if json.Unmarshal(line, &l) != nil {
 		return // 半行 / 坏行，跳过。别让一行坏字节把整份对话废掉
 	}
-	/*
-		先把树记下来（认撤回用，见 transcript.go 的 dropRetracted）。
-
-		**放在下面那道闸之前**：`isMeta` 那些状态快照也是树上的一环，跳过它们会把父子关系
-		断开。**但 sidechain 不收** —— 子 agent 是另一条分支。
-	*/
-	if !l.IsSidechain && l.UUID != "" {
-		if _, seen := st.seq[l.UUID]; !seen {
-			st.seq[l.UUID] = len(st.seq)
-			st.kids[l.ParentUUID] = append(st.kids[l.ParentUUID], l.UUID)
-		}
-		st.parent[l.UUID] = l.ParentUUID
-		if l.Type == clTypeAssistant {
-			st.asst[l.UUID] = true
-		}
-	}
-
 	// **子 agent（sidechain）不进主对话流。** 一次 Task 调用里子 agent 自己也写几十行，
 	// 混进来的表现是「对话里突然冒出一段没头没尾的活」，而主线上只是一条 Task 工具调用。
 	// 子 agent（sidechain）不进主对话流；isMeta 是状态快照那类。
@@ -307,35 +288,33 @@ func squash(s string) string {
 // claudeSay 把「人说的一句话」落成一条消息 —— 字符串 content 和数组 content 两条路**共用
 // 这一份**（见 claudeUser 的 ⑤：原来只有字符串那条路做剥壳和打断判断，而打断记号压根不走
 // 那条路）。`imgs` 是这条里贴了几张图，只在一个字都没有时用来补占位。
-// 回真 = 当成**人话**发出去了（打断记号那种小字不算，机器注入块也不算）。
-func claudeSay(l *clLine, raw string, imgs int, out *[]Msg) bool {
+func claudeSay(l *clLine, raw string, imgs int, out *[]Msg) {
 	// 机器注入的那几种块先认出来（见 machineBlock）：它们以 user 角色记着，但不是人话，
 	// 原样显示就是一坨标签。
 	if txt, small, ok := machineBlock(raw); ok {
 		if txt == "" {
-			return false
+			return
 		}
 		kind := KindHuman
 		if small {
 			kind = KindNotice
 		}
 		*out = append(*out, Msg{ID: l.UUID, Kind: kind, Text: txt, At: l.Timestamp})
-		return false // 机器注入的那几种不算人话（不参与认撤回）
+		return
 	}
 	text := humanText(raw)
 	if text == "" {
 		if imgs == 0 {
-			return false
+			return
 		}
 		text = "[图片]"
 	}
 	// 打断记号自己占一条小字，不当成人说的话 —— 它是 claude 写进去的，不是人打的。
 	if strings.Contains(text, interruptMark) {
 		*out = append(*out, Msg{ID: l.UUID, Kind: KindNotice, Text: "被打断了", At: l.Timestamp})
-		return false // 打断记号是 claude 写的小字，不是人话
+		return
 	}
 	*out = append(*out, Msg{ID: l.UUID, Kind: KindHuman, Text: clip(text, 4000), At: l.Timestamp})
-	return true
 }
 
 // claudeUser 处理 user 行。
@@ -358,9 +337,7 @@ func claudeUser(l *clLine, st *state, out *[]Msg) {
 	}
 	var s string
 	if json.Unmarshal(m.Content, &s) == nil {
-		if claudeSay(l, s, 0, out) {
-			st.said[l.UUID] = true // 「这条是人话」——认撤回时只看这一类
-		}
+		claudeSay(l, s, 0, out)
 		return
 	}
 
@@ -401,9 +378,7 @@ func claudeUser(l *clLine, st *state, out *[]Msg) {
 	// **不 return**：万一哪天同一行里既有人话又有 tool_result，两样都要处理
 	// （实测目前互斥，但这么写不用赌）。
 	if len(say) > 0 || imgs > 0 {
-		if claudeSay(l, strings.Join(say, "\n"), imgs, out) {
-			st.said[l.UUID] = true
-		}
+		claudeSay(l, strings.Join(say, "\n"), imgs, out)
 	}
 
 	for _, b := range blocks {
