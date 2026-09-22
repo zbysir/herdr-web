@@ -593,6 +593,15 @@ export interface ChatLog {
    * 只有刷新页面才对（用户报的）。
    */
   updates?: { ref: string; ok?: boolean; answers?: Record<string, string> }[]
+  /**
+   * **前面送过、但现在认定在 TUI 里被撤回的那几条**（消息 id）。
+   *
+   * 和 `updates` 同一个理由：证据出现在后面那一批里 —— 撤回的证据是「同父的另一条人话
+   * 拿到了 assistant 回应」，而那条回应往往是下一次增量才读到的，这时候被撤的那条早就
+   * 送到浏览器里了。前端只会追加不会删，所以必须按这个名单去掉。
+   * 判据和保守处理见 internal/transcript 的 dropRetracted。
+   */
+  gone?: string[]
   agent: string
   /** 转录文件名（只有文件名） */
   file: string
