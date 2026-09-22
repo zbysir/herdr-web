@@ -259,6 +259,18 @@ export default function App() {
   /** 「这是第几次打开」—— 取消或者又点了别的之后，迟到的结果靠它丢掉 */
   const openSeq = useRef(0)
 
+  /**
+   * 第几次点「切到这个 pane」。**迟到的那次 goto 不许再动抢跑提示。**
+   *
+   * 点 B 再点 A 时，B 那一跳的 `await` 是在点 A **之后**才回来的（跳转已经串成一队发了，
+   * 见 useCompose 的 `jump`）—— 它回来时如果还照着自己那套收尾，就会把 A 的抢跑提示
+   * 清掉（失败那支）或者改成 B（「herdr 说焦点在别处」那支）。屏幕上的表现是**人没操作、
+   * 过一会儿自己跳回 B**，而且只在网络慢的时候出现（用户报的）。
+   *
+   * 判据只能是「我是不是最后那一次点击」：pane id 比不出来（同一个 pane 点两下也算两次）。
+   */
+  const hintSeq = useRef(0)
+
   const [chatMode, setChatMode] = useState(() => {
     try {
       return localStorage.getItem(LS_CHAT) === '1'
@@ -1369,8 +1381,11 @@ export default function App() {
     // 它是个模式，切 pane 不该退出（用户报过两次）。
     setPanel(null)
     // **抢跑**：chat 按 pane id 读，不用等 goto 和 pane 列表这两次往返（见 focusHint）
+    const seq = ++hintSeq.current
     setFocusHint(id)
     const r = await compose.jump(id, zoom)
+    // 这中间人又点了别的 → 这一次的收尾（清提示 / 改提示 / 弹提示）全部作废，见 hintSeq
+    if (seq !== hintSeq.current) return
     if (!r) { setFocusHint(null); return } // 跳失败：把提前切过去的收回来
     refocusTerm()
     // **herdr 回的是它自己认的焦点 pane**（`focused_pane_id`），不是我们请求的那个。两者

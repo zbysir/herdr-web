@@ -112,7 +112,7 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
    * 投稿目标不用动：默认那条「跟随 herdr 当前 pane」自己就跟过去了。本地有草稿时目标
    * 仍然锁在原来那个 pane 上 —— 那是对的，为 A 写的话不该因为你去 B 看了一眼就投给 B。
    */
-  const jump = useCallback(async (id: string, zoom: boolean) => {
+  const jump1 = useCallback(async (id: string, zoom: boolean) => {
     try {
       const r = await api.post<GotoResult>('/herdr/goto', { target: id, zoom })
       resolved.current = ''
@@ -157,6 +157,26 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
       return null
     }
   }, [loadPanes, say2, toast])
+
+  /**
+   * 「跳转」要**排成一队发**，不能并发。
+   *
+   * goto 是一次 HTTP 请求，而 herdr 的焦点是「最后一跳说了算」—— 网络一卡，两次点击的
+   * 请求就可能**乱序到达**：点 B 再点 A，如果 B 那一跳后到，herdr 的焦点最终停在 B。
+   * 而 chat 那个抢跑提示两秒后就交还给「herdr 说焦点在谁」，于是屏幕**自己跳到 B**
+   * （用户报的「没操作、等一会自动跳过去」，而且只在网络不好时出现）。
+   *
+   * 串起来之后到达顺序 == 点击顺序，**最后一次点击必然是最后一跳**。代价是连点几下时
+   * 后面那几次要排队（每次一个往返），而那正是「谁说了算」需要的确定性。
+   */
+  const chain = useRef<Promise<unknown>>(Promise.resolve())
+
+  const jump = useCallback(async (id: string, zoom: boolean) => {
+    const mine = chain.current.then(() => jump1(id, zoom), () => jump1(id, zoom))
+    chain.current = mine
+    return mine
+  }, [jump1])
+
 
   const loadSoftkeyPresets = useCallback(async () => {
     try {
