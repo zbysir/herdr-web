@@ -26,6 +26,10 @@ const SENT_MAX = 8
 export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toast: (m: string) => void) {
   const [text, setText] = useState('')
   const [panes, setPanes] = useState<Pane[]>([])
+  // panes 的镜像：`jump` 是 useCallback，闭包里的 panes 会过期（而它的依赖里不能加 panes ——
+  // 那会让「跳转」这个函数每拉一次列表就换一个身份，调用方那边全得跟着重建）
+  const panesRef = useRef<Pane[]>([])
+  panesRef.current = panes
   // 服务端在盯 agent 状态变化没有。盯着才有「3 分钟前」那一列（herdr 不给时间戳）
   const [watching, setWatching] = useState(false)
   const [presets, setPresets] = useState<PresetGroup[]>([])
@@ -112,6 +116,39 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
     try {
       const r = await api.post<GotoResult>('/herdr/goto', { target: id, zoom })
       resolved.current = ''
+      /*
+        **人自己切过去 = 把草稿的瞄准也交回「跟随焦点」。**
+
+        一打第一个字，目标就被钉在那一刻的焦点 pane 上（见 onChangeText）。那一档是为了防
+        **herdr 自己**把焦点飘走（agent 状态一变它就可能换焦点）—— 为 A 写的话不该因为焦点
+        自己漂到 B 就投给 B。但**你亲手点着切过去**是明确的「我现在跟这个说话」，被那一档
+        挡住的表现是：chat 里整屏已经是 B 的对话了，投出去却落在 A（用户报的「切了面板还是
+        投错」）。而那个锁定在打字时**根本看不见** —— 那句「草稿锁在这个 pane 上」写在
+        placeholder 里，而 placeholder 只在框空时显示。
+
+        **只清 `pinned`，不动 `own`**：`own` 是「这段话是我自己写的」，清掉它下一拍就会把
+        远端输入框的内容抄进来、把你的草稿盖掉。清了 `pinned` 之后 `aimed()` 回 FOLLOW，
+        下一个字符会重新钉到**新**的那个 pane 上。
+      */
+      pinned.current = ''
+      /*
+        **抢跑：立刻把「投给谁」那行字换成新 pane，别等下一拍。**
+
+        chat 那边有抢跑（按 pane id 读，不等 goto + 列表两次往返，见 App 的 focusHint），
+        而这儿原来只清掉 `resolved`、等下一拍才重新显示 —— 于是有一小段时间「上面整屏已经是
+        B 的对话，下面还写着 A」。用户报的就是这个时间差：两边口径不一致，人就不敢信它。
+
+        **真正发到哪其实一直是对的**（`aimed()` 回 FOLLOW，服务端按 herdr 此刻的焦点解析，
+        而 goto 返回时焦点已经换了）—— 差的只是这行字。所以这儿只补显示，不动别的。
+
+        `resolved.current` 照旧清空（下面那句）：那是逼下一拍当成「切了 pane」处理、
+        把新 pane 输入框里的东西拉回来的开关，不能省。
+      */
+      {
+        const p = panesRef.current.find((x) => x.id === r.target)
+        const where = p ? `${p.workspace}/${p.tab}` : ''
+        say2(`⟳ ${r.target}${where ? ` · ${where}` : ''} · ${p?.agent ? `${p.agent} ${p.status}` : 'shell'}`)
+      }
       void loadPanes(true)   // focused 标记变了
       return r
     } catch (e) {
