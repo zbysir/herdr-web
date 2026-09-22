@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"io/fs"
 	"log"
@@ -243,6 +244,24 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("cache-control", "no-store")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// revOf 一份响应的指纹：整份序列化之后的 64 位 FNV。
+//
+// 用途见 `/api/herdr/panes`：前端带上次那个 rev 来，一样就只回几十字节。
+//
+// **哈希整份、不挑字段**：挑字段的话「Target 里加了一个字段」就得同步改这儿，漏了是
+// 完全静默的（那个字段永远不更新）。map 的 key 在 encoding/json 里是排过序的，所以
+// 同样的内容一定得到同样的字节。算不出来（正常不会）就给空串 —— 空串永远匹配不上，
+// 退回「每拍发全量」，也就是没有这一档时的行为。
+func revOf(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	h := fnv.New64a()
+	_, _ = h.Write(b)
+	return strconv.FormatUint(h.Sum64(), 36)
 }
 
 func fail(w http.ResponseWriter, code int, err error) {
@@ -555,10 +574,32 @@ func (s *Server) apiHerdr(w http.ResponseWriter, r *http.Request, seg []string) 
 		}
 		// watching 说「状态变化的订阅这会儿连着没有」——前端拿它区分「这个 pane 还没
 		// 变过状态」和「压根没在盯」，不然空着的时间列看着像坏了。
-		writeJSON(w, 200, map[string]any{
+		body := map[string]any{
 			"panes": list, "socket": sess.socket, "session": sess.name,
 			"watching": sess.watching(),
-		})
+		}
+		/*
+			**没变就只回一个指纹**（`?rev=` 带上次那个，一样就回 `{rev, same:true}`）。
+
+			为什么要这一档：面板开着的时候要盯 agent 状态，而「盯」就得问得勤 ——
+			实测 herdr 那一侧压根不是瓶颈（pane.list + workspace.list + tab.list +
+			agent.list 四个调用一共 1.7ms），贵的是**这份报文本身**：53 个 pane 二十多 KB，
+			而人是在手机上、走公网隧道。所以原来只能 4 秒一拍，而 4 秒一拍的表现就是
+			「面板里 agent 状态更新比较慢」（用户报的）。
+
+			指纹是**整份报文的哈希**，不是挑几个字段算的 —— 挑字段就得在「加了一个字段」
+			时同步改这儿，漏了是**完全静默**的（新字段永远不更新）。Target 里每一个字段
+			都是「状态变了才变」的（没有时间戳、没有计数器），所以这个哈希不会自己抖；
+			herdr 的 pane.list 顺序也是稳定的（实测 6 次取样同一个顺序），顺序真抖了
+			也只是退回「每拍都发全量」，不会出错。
+		*/
+		rev := revOf(body)
+		if q := r.URL.Query().Get("rev"); q != "" && q == rev {
+			writeJSON(w, 200, map[string]any{"rev": rev, "same": true})
+			return
+		}
+		body["rev"] = rev
+		writeJSON(w, 200, body)
 
 	// 跳到某个 pane：切焦点 + 全屏，一次调用（herdr 的 pane.zoom 按 pane_id 寻址，
 	// 跨 workspace / tab 也一起切过去）。手机上「面板一览」点一行走的就是这个口 ——

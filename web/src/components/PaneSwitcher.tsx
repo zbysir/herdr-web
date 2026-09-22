@@ -154,7 +154,16 @@ export function PaneSwitcher({
    * 打开那一刻的快照 —— 而这个面板正是用来看「谁在等我」的，停住的状态比没有更糟。手上
    * 那颗刷新按钮等于把这件事推给人，它占的还是筛选那一排最右边、最容易误按的位置。
    *
-   * 4 秒一拍，顺手把「3m」那一列的 now 也推一下（最小刻度是分钟，跟着一起走没坏处）。
+   * **1.5 秒一拍**，顺手把「3m」那一列的 now 也推一下（最小刻度是分钟，跟着一起走没坏处）。
+   *
+   * 原来是 4 秒，用户报「面板里面的 agent 更新比较慢」。量过一遍，慢的不是 herdr：
+   * 100ms 一拍地问 `agent.list`，agent 真干完之后 **0.77 秒** 它就报 done 了，而
+   * pane.list / workspace.list / tab.list / agent.list 四个调用一共 1.7ms。贵的是
+   * **报文**（53 个 pane 二十多 KB，走公网隧道到手机上），所以当时只敢 4 秒一拍。
+   * 现在服务端支持指纹（`?rev=`，没变就回几十字节，见 useCompose 的 `rev`），
+   * 一拍的稳态成本降到几乎为零 —— 那就没有理由还等 4 秒。
+   *
+   * 再快就没意义了：herdr 自己认状态要半秒到一秒（它是读屏认的），1.5 秒已经贴着它了。
    * 标签页不可见时不打 —— 那时候没人看，而手机上后台请求最容易被系统掐着不放。
    * 这一拍是**静默**的：失败不弹 toast（herdr 停了会一直失败，每 4 秒一条没人受得了），
    * 列表空掉时底下那句「拿不到 pane 列表」已经把话说清楚了。
@@ -167,10 +176,15 @@ export function PaneSwitcher({
   useEffect(() => { reload.current = onReload })
   useEffect(() => {
     const t = setInterval(() => {
-      setNow(Date.now())
       if (!document.hidden) reload.current()
-    }, 4000)
-    return () => clearInterval(t)
+    }, 1500)
+    /*
+      「3m」那一列**单独一个慢拍**。跟着上面那一拍走的话，整张表每 1.5 秒白重渲染一遍
+      （`now` 每次都是新值），正好把指纹省下来的那点又吃回去 —— 而这一列的最小刻度是
+      **分钟**，15 秒推一次已经远远够了。
+    */
+    const t2 = setInterval(() => { if (!document.hidden) setNow(Date.now()) }, 15000)
+    return () => { clearInterval(t); clearInterval(t2) }
   }, [])
 
   const rows = useMemo(() => {

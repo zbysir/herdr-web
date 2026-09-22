@@ -89,12 +89,30 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
     if (pane) pinned.current = pane
   }, [])
 
+  /*
+    上一次那份 pane 列表的指纹（服务端给的 `rev`）。
+
+    **它只是「省流量」的开关，不是状态** —— 带着它去问，服务端发现没变就只回
+    `{rev, same:true}` 几十字节，这边**一个 setState 都不做**（于是那张表也不重渲染）。
+    为什么要这一档：面板开着时要盯 agent 状态，而「盯」就得问得勤；herdr 那侧压根不是
+    瓶颈（四个 socket 调用一共 1.7ms），贵的是 53 个 pane 二十多 KB 的报文走公网隧道到
+    手机上 —— 原来只能 4 秒一拍，表现就是「面板里 agent 状态更新比较慢」（用户报的）。
+
+    **出错时要清掉**：那一支把列表设成了空数组，指纹还留着的话下一拍服务端会说
+    「没变」，而这边是空的 —— 表现是 herdr 恢复之后面板**永远空着**，刷新页面才回来。
+  */
+  const rev = useRef('')
+
   const loadPanes = useCallback(async (quiet = false) => {
     try {
-      const r = await api.get<{ panes: Pane[]; watching?: boolean }>('/herdr/panes')
+      const q = rev.current ? `?rev=${encodeURIComponent(rev.current)}` : ''
+      const r = await api.get<{ panes?: Pane[]; watching?: boolean; rev?: string; same?: boolean }>('/herdr/panes' + q)
+      rev.current = r.rev ?? ''
+      if (r.same) return
       setPanes(r.panes ?? [])
       setWatching(!!r.watching)
     } catch (e) {
+      rev.current = ''
       setPanes([])
       // socket 在跑 herdr server 的那台机器上，不一定是跑 herdr-web 的这台
       say2(`连不上 herdr：${(e as Error).message}`, true)
@@ -159,22 +177,56 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
   }, [loadPanes, say2, toast])
 
   /**
-   * 「跳转」要**排成一队发**，不能并发。
+   * 「跳转」**一次只飞一个，中间那些点击互相覆盖**（不排队、不并发）。
    *
-   * goto 是一次 HTTP 请求，而 herdr 的焦点是「最后一跳说了算」—— 网络一卡，两次点击的
-   * 请求就可能**乱序到达**：点 B 再点 A，如果 B 那一跳后到，herdr 的焦点最终停在 B。
-   * 而 chat 那个抢跑提示两秒后就交还给「herdr 说焦点在谁」，于是屏幕**自己跳到 B**
-   * （用户报的「没操作、等一会自动跳过去」，而且只在网络不好时出现）。
+   * 为什么不能并发：goto 是一次独立的 HTTP 请求，而 herdr 的焦点是「最后一跳说了算」——
+   * 网络一卡，点 B 再点 A 的两个请求就可能**乱序到达**，B 后到，焦点最终停在 B。而抢跑
+   * 提示两秒后就交还给「herdr 说焦点在谁」，于是屏幕**自己跳到 B**（用户报的「没操作、
+   * 等一会自动跳过去」，只在网络不好时出现）。
    *
-   * 串起来之后到达顺序 == 点击顺序，**最后一次点击必然是最后一跳**。代价是连点几下时
-   * 后面那几次要排队（每次一个往返），而那正是「谁说了算」需要的确定性。
+   * 为什么不能排队：第一版是串成一条链，结果**比原来的 bug 更糟** —— 快速点
+   * a-b-a-b-a-b 会攒下六跳，手已经停了它还在一个个往下走（用户报的「我都没操作了，
+   * 他还在 abab」）。切 pane 不是「一串要依次执行的动作」，它是**一个当前值**：
+   * 中间那几次点击的唯一意义就是被后面那次盖掉。
+   *
+   * 所以是「在飞的那一个 + 一个待发的最新目标」：新点击只覆盖 `pending`，在飞的那一跳
+   * 回来后如果 `pending` 还在就再发**一次**。最多两跳，而最后那一跳必然是最后一次点击。
+   *
+   * 三条：
+   *   - **每个调用方都等这个循环的最终结果**。被盖掉的那几次拿到的是同一个结果对象 ——
+   *     它们在 App 那边会被 `hintSeq` 整个丢掉（不是最后那次点击就不许收尾），所以不用
+   *     区分「我这次成了没有」。
+   *   - **同一个请求紧接着再发一次就跳过**（id + zoom 都一样）：点同一行两下最常见，
+   *     省一个往返。比的是**请求的 id**，不是 `r.target` —— 那两个在「herdr 说焦点在
+   *     别处」时不一样，拿它比会把一次真正的重试当成重复吃掉。
+   *   - `flying` 一定要在 `finally` 里清掉，否则一次异常就把这条路永久卡住
+   *     （表现是「点面板再也切不动了」，而且一个字都不报）。
    */
-  const chain = useRef<Promise<unknown>>(Promise.resolve())
+  const flying = useRef<Promise<GotoResult | null> | null>(null)
+  const pending = useRef<{ id: string; zoom: boolean } | null>(null)
 
-  const jump = useCallback(async (id: string, zoom: boolean) => {
-    const mine = chain.current.then(() => jump1(id, zoom), () => jump1(id, zoom))
-    chain.current = mine
-    return mine
+  const jump = useCallback((id: string, zoom: boolean): Promise<GotoResult | null> => {
+    pending.current = { id, zoom }
+    if (flying.current) return flying.current
+    const run = async () => {
+      let last: GotoResult | null = null
+      let sent: { id: string; zoom: boolean } | null = null
+      try {
+        while (pending.current) {
+          const want = pending.current
+          pending.current = null
+          if (sent && sent.id === want.id && sent.zoom === want.zoom) break
+          sent = want
+          last = await jump1(want.id, want.zoom)
+        }
+      } finally {
+        flying.current = null
+      }
+      return last
+    }
+    const pr = run()
+    flying.current = pr
+    return pr
   }, [jump1])
 
 
