@@ -247,6 +247,23 @@ export interface State {
   version?: { current: string; latest?: string; outdated?: boolean; how?: string }
 }
 
+/**
+ * 一个工作空间（herdr 的 workspace）。跟着 `/herdr/panes` 那一拍一起回来 —— 数据来自
+ * 同一批调用，见服务端 outbox.ListTargets。
+ *
+ * `status` 是 herdr **聚合过**的（这个工作空间里最要紧的那个 agent 状态），所以它和
+ * Pane.status 同一套取值，前端那张状态表（STATUS_DOT / STATUS_BUCKET）两处共用。
+ */
+export interface Space {
+  id: string
+  number: number
+  label: string
+  focused: boolean
+  panes: number
+  tabs: number
+  status?: string
+}
+
 export interface Pane {
   id: string
   agent: string
@@ -620,6 +637,12 @@ export interface ChatLog {
     ran?: number
     /** agent 最后一次落笔的时刻（RFC3339）。按**本机时区**格式化成 `14:41` */
     doneAt?: string
+    /**
+     * 最后一次落笔到现在多少秒（**服务端算的** —— 别在这边拿 doneAt 减 Date.now()，
+     * 手机和那台机器的时钟差几分钟是常事）。用来回答「我看的这段是不是已经旧了」，
+     * 见 internal/transcript/turn.go 里 Idle 那段（codex 的 /clear）。
+     */
+    idle?: number
     tokens?: number
     effort?: string
     model?: string
@@ -767,7 +790,50 @@ export interface SoftkeysResponse extends SoftkeysConfig {
  * （见 `TOPBAR_KEY` 和服务端 internal/topbar 的包注释）。`actions` 里**不列这些**：
  * 那份是内置白名单，引用的合法性靠「定义在不在」判。
  */
-export interface TopbarResponse { items: string[]; actions: string[]; pinned: string[]; max: number; profile?: string }
+export interface TopbarResponse {
+  items: string[]
+  /** 两端钉住几个（不跟着横滑）。缺 = 都不钉。和快捷键条那份是同一个语义，见 Pin */
+  pin?: Pin | null
+  actions: string[]
+  pinned: string[]
+  max: number
+  profile?: string
+}
+
+/**
+ * 工作空间那一层的两件事：**切过去**、**新开一个**。
+ *
+ * 只有这两件 —— 关掉 / 改名 / 换顺序没有入口，尽管 herdr 的协议全给得到：那几件是
+ * 不可逆的（关一个工作空间连里面跑着的 agent 一起没），而不可逆的事留在终端里做
+ * （docs/dev/TUI-VS-GUI.md §2①）。
+ */
+export const spaceApi = {
+  /** 切到一个工作空间或一个 tab（两个 id 显式分开，不靠形状猜） */
+  goto: (to: { workspace?: string; tab?: string }) => api.post<{ ok: boolean }>('/herdr/space', to),
+  /** 新开一个 tab / 工作空间，**建完就过去**。cwd 空着就交给 herdr 自己的策略 */
+  create: (b: { new: 'tab' | 'workspace'; workspace?: string; cwd?: string; label?: string }) =>
+    api.post<{ id: string; kind: string }>('/herdr/space', b),
+}
+
+/**
+ * 把顶栏那一串 id 切成**钉左 / 跟着滑 / 钉右**三段。
+ *
+ * 和 resolveRows 同一件事，只是顶栏存的是 id（按钮长什么样是渲染时的事），所以这儿
+ * **不做「认不出就丢掉」** —— 那一步在 App 里渲染时才做。切的是位置，丢在后面：
+ * 尾巴上那一项万一画不出来，右段就少一个，左段和滑动段的边界不受影响。
+ *
+ * 个数在这儿也要夹（服务端读的时候夹过一次，但前端可能又丢了几项）。
+ */
+export function topbarSegments(items: string[], pin?: Pin | null) {
+  let l = Math.max(0, pin?.left ?? 0)
+  let r = Math.max(0, pin?.right ?? 0)
+  if (l + r > items.length) {
+    // 左边优先：和服务端 resolvePin、快捷键条那边同一个取舍
+    l = Math.min(l, items.length)
+    r = items.length - l
+  }
+  return { left: items.slice(0, l), scroll: items.slice(l, items.length - r), right: items.slice(items.length - r) }
+}
 
 /**
  * 顶栏上「这一项是引用，不是内置按钮」的记号：`key:k3` 指向「我的按键」里 ID 为 k3 的定义。

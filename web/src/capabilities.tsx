@@ -48,7 +48,10 @@ export const CAPS = [
   { id: 'panes', key: true, panel: true, label: '面板一览', hint: '跳到某个 pane（顺带全屏）；有 agent 等你时挂红点', icon: <Panes className="size-4" /> },
   { id: 'files', key: true, panel: true, label: '文件', hint: '看 agent 生成的图 / 翻目录', icon: <Files className="size-4" /> },
   { id: 'diff', key: true, panel: true, label: '改动', hint: '看 git diff（折行、按词高亮 —— 终端里那份在手机上读不了）', icon: <Diff className="size-4" /> },
-  { id: 'chat', key: true, label: '对话', hint: '把 agent 的对话读成一条流（读它自己写的会话记录，不是读屏）', icon: <Chat className="size-4" /> },
+  // 名字里带上「chat」：用户升上来之后在库里翻了一遍没找到 —— 他找的是「Chat 模式」，
+  // 而这儿只写了「对话」。文档和界面上两个叫法并存时，**库里那份要带上两个**（这一筐是
+  // 拿来找东西的，不是拿来读的）
+  { id: 'chat', key: true, label: '对话', hint: 'chat 模式：把 agent 的对话读成一条流，代替那一屏 TUI（读它自己写的会话记录，不是读屏）', icon: <Chat className="size-4" /> },
   { id: 'compose', label: '发件箱', hint: '语音投稿（说话打字 → 投进 agent pane）', icon: <Pencil className="size-4" /> },
   { id: 'keys', label: '快捷键条', hint: '显示 / 收起快捷键条（Ctrl / Esc / 方向键）', icon: <Keyboard className="size-4" /> },
   { id: 'kbd', key: true, label: '系统键盘', hint: '呼出 / 收起系统输入法（手机上呼键盘只有这条路和快捷键条上的 ⌨）', icon: <Ime className="size-4" /> },
@@ -88,5 +91,12 @@ export const isCapId = (s: string): s is CapId => CAP_BY_ID.has(s as CapId)
  * （后端还没答、或者这个部署的接口挂了），别让顶栏因此空掉。
  */
 export const TOPBAR_DEFAULT: CapId[] = [
-  'panes', 'files', 'diff', 'compose', 'keys', 'font-', 'font+', 'theme', 'full', 'settings',
+  'panes', 'files', 'diff', 'compose', 'keys', 'font-', 'font+', 'theme', 'full', 'settings', 'chat',
 ]
+
+/**
+ * 出厂**钉住几个**：尾一个（chat）不跟着横滑。服务端那份是 `topbar.DefaultPin()`。
+ *
+ * 为什么钉它：顶栏放不下就横滑，而「切进对话流」是手机上最常按的一件 —— 滑走了等于没有。
+ */
+export const TOPBAR_PIN_DEFAULT = { right: 1 }

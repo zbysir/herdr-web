@@ -543,15 +543,29 @@ func askOf(name string, input json.RawMessage) *Ask {
 	// multiSelect 在 JSON 里是这个名字，而我们的字段叫 Multi（json tag 是 `multi`，
 	// 因为这个结构还要发给前端）—— 所以得单独再取一次，不然多选会被当成单选，
 	// 而那两种在 TUI 里的作答按键完全不同。
+	//
+	// `preview` 同理要单独取：它决定作答时要不要在序号后面补一下 enter（带 preview 的题
+	// 在 TUI 里是左右分栏，数字键只移光标）。**任意一个选项带就算这一题带** —— 布局是
+	// 整题一套的，不是每个选项各一套。见 AskQuestion.Preview。
 	var raw struct {
 		Questions []struct {
 			MultiSelect bool `json:"multiSelect"`
+			Options     []struct {
+				Preview string `json:"preview"`
+			} `json:"options"`
 		} `json:"questions"`
 	}
 	if json.Unmarshal(input, &raw) == nil {
 		for i := range a.Questions {
-			if i < len(raw.Questions) {
-				a.Questions[i].Multi = raw.Questions[i].MultiSelect
+			if i >= len(raw.Questions) {
+				continue
+			}
+			a.Questions[i].Multi = raw.Questions[i].MultiSelect
+			for _, o := range raw.Questions[i].Options {
+				if strings.TrimSpace(o.Preview) != "" {
+					a.Questions[i].Preview = true
+					break
+				}
 			}
 		}
 	}

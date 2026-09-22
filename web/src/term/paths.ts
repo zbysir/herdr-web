@@ -63,6 +63,28 @@ const TAIL = /[.,;:!?)\]}'">»。，、；：！？）】》]+$/
 /** 编译器 / 栈回溯风格的行号：`main.go:42` `App.tsx:42:7` */
 const LINENO = /:\d+(?::\d+)?$/
 
+/**
+ * 挂在路径尾巴上的**行号锚点**。比上面那个 LINENO 多认 markdown 那种 `#L21`。
+ *
+ *   `…/CONTENT-041.md#L21`      markdown 链接里的锚点（agent 在 chat 里最爱写这种）
+ *   `…/CONTENT-041.md#L21-L30`  一段范围
+ *   `main.go:42` / `App.tsx:42:7`
+ *
+ * **只认挂在最后的**（`$`）：路径中间的 `#` 和 `:` 是文件名的一部分，不能动。
+ *
+ * 为什么不并进 LINENO：那个是**认链接**时用的，剥出来的长度决定下划线画多宽（range
+ * 的下标要跟原文对齐）；这个是**打不开时**才用的补救，两处的时机不一样。
+ */
+const LINE_ANCHOR = /(?:#L?\d+(?:[-,]L?\d+)?|:\d+(?::\d+)?)$/
+
+/**
+ * 把行号锚点剥掉。**打开一个路径失败之后**才用它重试一次 —— 不能上来就剥：
+ * `notes#1.md` 是合法文件名，先剥的话那种文件永远打不开，而且报的错一模一样。
+ *
+ * 剥不掉（没有锚点）就原样返回，调用方据此决定要不要再问一次。
+ */
+export const stripLineAnchor = (p: string) => p.replace(LINE_ANCHOR, '')
+
 export interface PathHit {
   /** 清理干净的路径（可能是相对的，要拿 pane 的 cwd 去解） */
   path: string

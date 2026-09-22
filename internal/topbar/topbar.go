@@ -65,9 +65,15 @@ var Pinned = capability.TopbarPinned()
 // 字号 ±、明暗在**手机竖屏上原来是 CSS 藏掉的**（七个图标在 393px 上排不下）。现在不藏了：
 // 顶栏改成一行横滑（放不下就滑，见 App 里那排的 overflow-x-auto），而「放哪几个」本来就
 // 该由人定 —— 藏起来的按钮最难解释，用户只会觉得「我明明拖上去了」。
+//
+// **chat 在最后一个，配着 DefaultPin 钉在右边**：顶栏一放不下就横滑，而「切进对话流」是
+// 手机上最常按的一件 —— 滑走了就等于没有。钉住的语义和快捷键条那边一字不差（见 Pin）。
 func Defaults() []string {
-	return []string{"panes", "files", "diff", "compose", "keys", "font-", "font+", "theme", "full", "settings"}
+	return []string{"panes", "files", "diff", "compose", "keys", "font-", "font+", "theme", "full", "settings", "chat"}
 }
+
+// DefaultPin 出厂钉住：尾一个（chat）不跟着横滑。
+func DefaultPin() *Pin { return &Pin{Right: 1} }
 
 // KeyPrefix 是「这一项是引用，不是内置按钮」的记号：`key:k3` 指向快捷键条那份「我的按键」
 // 里 ID 为 k3 的那个定义（见 internal/softkeys）。
@@ -91,13 +97,48 @@ func KeyRef(item string) (string, bool) {
 	return id, true
 }
 
+// Pin 顶栏两端**钉住**几个按钮（不跟着横滑）。语义和快捷键条那份一字不差
+// （见 internal/softkeys 的 Pin）—— 两个界面一个心智模型，别在这儿另发明一套。
+//
+// 存的是**个数**不是另一份列表：Items 照旧是顶栏的完整顺序，头 Left 个钉左、尾 Right 个
+// 钉右、中间那段跟着滑。降级回只认 Items 的老版本读出来是同样那些按钮（只是全都跟着滑），
+// 不会「钉住的那几个不见了」。
+//
+// 代价和快捷键条那边一样：个数会随行长失效（别的设备删了个「我的按键」→ 顶栏变短），
+// 所以**读的时候夹住**（resolvePin），不报错 —— 那不是谁的 bug。
+type Pin struct {
+	Left  int `json:"left,omitempty"`
+	Right int `json:"right,omitempty"`
+}
+
 // Config 是**一套**顶栏配置。
 type Config struct {
 	Items []string `json:"items"`
+	// Pin 两端钉住几个。nil = 都不钉（**不是**「没设过」—— 那件事由 file.V 记，见 Migrate）
+	Pin *Pin `json:"pin,omitempty"`
 }
 
 // DefaultConfig 出厂配置。
-func DefaultConfig() Config { return Config{Items: Defaults()} }
+func DefaultConfig() Config { return Config{Items: Defaults(), Pin: DefaultPin()} }
+
+// resolvePin 把钉住的个数夹进合法范围：非负，而且 Left+Right 不超过顶栏长度。
+//
+// **不报错，一律夹住**（理由见 Pin）。一个都没钉就返回 nil，别在文件里留一行 `"pin": {}`。
+func resolvePin(p *Pin, n int) *Pin {
+	if p == nil {
+		return nil
+	}
+	l, r := max(0, p.Left), max(0, p.Right)
+	if l+r > n {
+		// 左边优先：和 softkeys.resolvePin 同一个取舍
+		l = min(l, n)
+		r = n - l
+	}
+	if l == 0 && r == 0 {
+		return nil
+	}
+	return &Pin{Left: l, Right: r}
+}
 
 // file 是落盘的形状。
 //
@@ -106,8 +147,20 @@ func DefaultConfig() Config { return Config{Items: Defaults()} }
 // 认得 Items，不镜像的话降级看到的是「顶栏恢复出厂」（和 softkeys.json 同一个处理）。
 type file struct {
 	Items    []string          `json:"items"`
+	Pin      *Pin              `json:"pin,omitempty"`
 	Profiles map[string]Config `json:"profiles,omitempty"`
+	// V 这份文件是哪一版写的。**只给一次性迁移用**（见 Migrate）——「钉住几个」那件事
+	// 不能拿 Pin 是不是 nil 来推：人家把钉住调回 0 之后 Pin 也是 nil，那就成了每次启动
+	// 都再补一个 chat 回来（删了又长出来，而且完全静默）。
+	V int `json:"v,omitempty"`
 }
+
+// curV 这一版写出去的文件版本，flush 每次都落。见 Migrate。
+const curV = 1
+
+// chatID 「切进对话流」那个按钮的 id（capability 里那一份）。Migrate 要按名字找它。
+const chatID = "chat"
+
 
 type Store struct {
 	Dir string
@@ -160,15 +213,16 @@ func (s *Store) Load(profile string) Config {
 	if !ok {
 		return DefaultConfig()
 	}
-	items, has := pick(f, profile)
+	c, has := pick(f, profile)
 	if !has {
 		return DefaultConfig()
 	}
-	out := clean(items)
+	out := clean(c.Items)
 	if len(out) == 0 {
 		return DefaultConfig()
 	}
-	return Config{Items: withPinned(out)}
+	items := withPinned(out)
+	return Config{Items: items, Pin: resolvePin(c.Pin, len(items))}
 }
 
 func (s *Store) read() (file, bool) {
@@ -187,17 +241,17 @@ func (s *Store) read() (file, bool) {
 }
 
 // pick 挑这一套。找不到就退到默认那一套（老文件里就是顶层的 Items）。
-func pick(f file, profile string) ([]string, bool) {
+func pick(f file, profile string) (Config, bool) {
 	if c, ok := f.Profiles[profile]; ok {
-		return c.Items, true
+		return c, true
 	}
 	if c, ok := f.Profiles[profiles.Default]; ok {
-		return c.Items, true
+		return c, true
 	}
 	if f.Items != nil {
-		return f.Items, true
+		return Config{Items: f.Items, Pin: f.Pin}, true
 	}
-	return nil, false
+	return Config{}, false
 }
 
 // sections 摊成「每套一段」，并保证默认那一套一定在里面（老文件的顶层 Items 在这儿收敛）。
@@ -208,7 +262,7 @@ func sections(f file) map[string]Config {
 		out[id] = c
 	}
 	if _, ok := out[profiles.Default]; !ok && f.Items != nil {
-		out[profiles.Default] = Config{Items: f.Items}
+		out[profiles.Default] = Config{Items: f.Items, Pin: f.Pin}
 	}
 	return out
 }
@@ -239,7 +293,8 @@ func (s *Store) write(profile string, c Config) (Config, error) {
 		}
 		seen[id] = true
 	}
-	out := Config{Items: withPinned(append([]string{}, c.Items...))}
+	items := withPinned(append([]string{}, c.Items...))
+	out := Config{Items: items, Pin: resolvePin(c.Pin, len(items))}
 	f, _ := s.read()
 	secs := sections(f)
 	secs[profile] = out
@@ -254,15 +309,15 @@ func (s *Store) Copy(from, to string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	f, ok := s.read()
-	src := Defaults()
+	src := DefaultConfig()
 	if ok {
-		if items, has := pick(f, from); has {
-			if cl := clean(items); len(cl) > 0 {
-				src = withPinned(cl)
+		if c, has := pick(f, from); has {
+			if cl := clean(c.Items); len(cl) > 0 {
+				src = Config{Items: withPinned(cl), Pin: c.Pin}
 			}
 		}
 	}
-	_, err := s.write(to, Config{Items: src})
+	_, err := s.write(to, src)
 	return err
 }
 
@@ -282,6 +337,51 @@ func (s *Store) Drop(profile string) error {
 		return nil
 	}
 	delete(secs, profile)
+	return s.flush(secs)
+}
+
+// Migrate 一次性迁移：**给还没有 chat 的那几套补一个 chat 钉在最右**。
+//
+// 为什么要迁移而不是只改 Defaults()：出厂那份只对新用户和「恢复默认」生效，而这份配置
+// 一存下来就跟着人走 —— 已经在用的人升上来顶栏一个字都不会变，「默认 chat 在最右」对他们
+// 等于没发生（这是用户点的：省一次手动）。
+//
+// 三条边界：
+//
+//   - **已经有 chat 的那一套一个字都不动**。人家自己把它排在哪儿是人家的事，挪到末尾就是
+//     替人改配置；而这时候再钉一个右，钉住的还是别的按钮。
+//   - **钉住只在从没设过的时候给**（Pin == nil）。已经调过钉住的人有自己的安排。
+//   - **只跑一次**，判据是文件里的 V 而不是「Pin 是不是 nil」：把钉住调回 0 之后 Pin 也是
+//     nil，拿它当判据就成了「删掉的 chat 每次启动又长回来」，而且完全静默。
+//
+// 文件不在就不跑（那是新用户，Load 给的出厂配置本来就带 chat）。chat 不在白名单里也不跑 ——
+// 塞一个存不进去的 id 进去，下次编辑器一保存就报「不认识的按钮」。
+func (s *Store) Migrate() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, ok := s.read()
+	if !ok || f.V >= curV || !known(chatID) {
+		return nil
+	}
+	secs := sections(f)
+	for id, c := range secs {
+		has := false
+		for _, it := range c.Items {
+			if it == chatID {
+				has = true
+				break
+			}
+		}
+		if has {
+			continue
+		}
+		items := withPinned(append(append([]string{}, c.Items...), chatID))
+		pin := c.Pin
+		if pin == nil {
+			pin = DefaultPin()
+		}
+		secs[id] = Config{Items: items, Pin: resolvePin(pin, len(items))}
+	}
 	return s.flush(secs)
 }
 
@@ -310,7 +410,10 @@ func (s *Store) PruneKeys(keep map[string]bool) error {
 			out = append(out, it)
 		}
 		if hit {
-			secs[id] = Config{Items: withPinned(out)}
+			// 行变短了，钉住的个数跟着夹一下（见 resolvePin）——
+			// 不夹的话尾几个「钉住」会悄悄圈进本来跟着滑的那几个
+			items := withPinned(out)
+			secs[id] = Config{Items: items, Pin: resolvePin(c.Pin, len(items))}
 			changed = true
 		}
 	}
@@ -322,9 +425,10 @@ func (s *Store) PruneKeys(keep map[string]bool) error {
 
 // flush 落盘：每套一段 + 默认那一套镜像到顶层（降级用，见 file 的注释）。
 func (s *Store) flush(secs map[string]Config) error {
-	f := file{Profiles: secs}
+	f := file{Profiles: secs, V: curV}
 	if d, ok := secs[profiles.Default]; ok {
 		f.Items = d.Items
+		f.Pin = d.Pin
 	} else {
 		f.Items = []string{} // 顶层不留 nil：nil 会被 read 当成「这份文件不能用」
 	}

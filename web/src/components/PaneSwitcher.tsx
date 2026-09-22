@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
-import { Search, X } from 'lucide-react'
-import type { Pane } from '@/lib/api'
+import { Plus, Search, X } from 'lucide-react'
+import type { Pane, Space } from '@/lib/api'
+import { Select } from './ui/select'
 import { Panel } from './ui/panel'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { STATUS_BUCKET, STATUS_DOT } from '@/lib/agentstatus'
 import { cn } from '@/lib/utils'
 import { paneTitle } from '@/lib/panename'
+import { panesSort, type PaneSort } from '@/lib/prefs'
 
 /**
  * 面板一览：**手机上换 pane 的那条路**。
@@ -27,20 +29,12 @@ import { paneTitle } from '@/lib/panename'
  */
 const LS_ZOOM = 'panesZoom'
 const LS_ONLY_AGENT = 'panesOnlyAgent'
-const LS_SORT = 'panesSort'
 
 /**
  * 「点了就全屏」这会儿开着没有。右上角那张提示卡点一下也是跳 pane，走的得是**同一个**
  * 开关 —— 两处各存各的话，同一个动作在两个入口下行为不一样，而用户只会记得自己关过一次。
  */
 export const paneZoomPref = () => localStorage.getItem(LS_ZOOM) !== '0'
-
-type Sort = 'priority' | 'group'
-
-const SORTS: { id: Sort; label: string; hint: string }[] = [
-  { id: 'priority', label: '优先级', hint: '要你看的在前（等你 > 完成 > 在跑 > 闲着），同档按最近动过' },
-  { id: 'group', label: '分组', hint: '按 workspace 分组，组里是 tab / pane 的原顺序 —— 和你在 herdr 里看到的一样' },
-]
 
 /**
  * 优先级分档：**等你 > 完成 > 在跑 > 闲着 > 非 agent**，同一档里按最近动过排。
@@ -82,9 +76,11 @@ export function ago(ms?: number, now = Date.now()) {
 }
 
 export function PaneSwitcher({
-  panes, watching, onClose, onGoto, onReload,
+  panes, spaces, watching, onClose, onGoto, onReload, onSpace, onNew,
 }: {
   panes: Pane[]
+  /** 工作空间那一层（和 panes 同一拍回来）。空 = 老后端 / 拿不到，那一行整条不画 */
+  spaces: Space[]
   /** 状态变化的订阅连着没有。没连着时时间列必然是空的，得说清不是坏了 */
   watching?: boolean
   onClose: () => void
@@ -92,6 +88,10 @@ export function PaneSwitcher({
   onGoto: (id: string, zoom: boolean) => void
   /** 重新拉一次列表。面板开着的时候自己按拍调，界面上没有刷新按钮 —— 见下面那个 interval */
   onReload: () => void
+  /** 切到一个工作空间（herdr 会落到它上次在的那个 tab 上） */
+  onSpace: (to: { workspace?: string; tab?: string }) => void
+  /** 新开一个 tab / 工作空间，建完就过去。label 不给就用 herdr 自己那套默认名 */
+  onNew: (b: { new: 'tab' | 'workspace'; workspace?: string; cwd?: string; label?: string }) => void
 }) {
   /**
    * 触屏上**不自动聚焦**筛选框。原来的判据是「手机竖屏」（`usePhone`，宽度 < 440px），
@@ -101,12 +101,40 @@ export function PaneSwitcher({
    */
   const coarse = matchMedia('(pointer: coarse)').matches
   const [q, setQ] = useState('')
+  /**
+   * 只看这个工作空间（空 = 全部）。**不进 localStorage**：它是「我这会儿在找什么」，
+   * 不是偏好 —— 下次打开面板还筛着上次那个，而那时人多半在别的项目里了。
+   */
+  const [ws, setWs] = useState('')
+  /** 「新开一个」那一小片展开了没有 */
+  const [adding, setAdding] = useState(false)
+  /**
+   * 新开的那个落在哪个目录。空 = 交给 herdr 自己的策略（跟着当前 pane 走）。
+   * 选项是**已经在用的那几个 cwd** —— 手机上打字最贵，能挑就别让人敲路径。
+   */
+  const [newCwd, setNewCwd] = useState('')
+  /**
+   * 点了「新 tab」/「新工作空间」之后停在「起个名字」这一步（null = 还没点）。
+   *
+   * **为什么多这一步**：herdr 自己那套默认名是序号（`3.` 这种），而这个列表上一行只认
+   * 得出三样东西 —— tab 名、agent、路径。新开的那个要是没名字，它在几十行里就是一条
+   * 认不出来的。手机上打字贵，所以名字**可以不填**（直接点「建」），但要给得出的地方。
+   */
+  const [naming, setNaming] = useState<'tab' | 'workspace' | null>(null)
+  const [newName, setNewName] = useState('')
   const [zoom, setZoom] = useState(paneZoomPref)
   const [onlyAgent, setOnlyAgent] = useState(() => localStorage.getItem(LS_ONLY_AGENT) === '1')
-  const [sort, setSort] = useState<Sort>(() => {
-    const v = localStorage.getItem(LS_SORT)
-    return SORTS.some((s) => s.id === v) ? (v as Sort) : 'priority'
-  })
+  /**
+   * 按什么排**不在这个面板里**（开关在设置 →「终端」，跟着排布那一套走，见 lib/prefs.ts）。
+   *
+   * 它原来是筛选那一排上的一颗按钮，占的还是最显眼的位置 —— 而九成人从头到尾只会用
+   * 「优先级」那一档：选一次就定了的事不该常驻在「谁在等我」这张表的上面。留在这儿的
+   * 两个（Agent / 全屏）是真会来回点的。
+   *
+   * 面板是条件渲染的（关掉就卸载），而面板和设置**互斥**（同一个 `panel` 状态），所以
+   * 直接读镜像就够：在设置里改完，下次打开这个面板就是新的。
+   */
+  const sort: PaneSort = panesSort()
 
   /**
    * 点一行**要一下就跳过去**，所以收工在 `pointerup` 上，不在 `click` 上。
@@ -212,6 +240,9 @@ export function PaneSwitcher({
     const kw = q.trim().toLowerCase()
     const hit = (p: Pane) =>
       (!onlyAgent || !!p.agent) &&
+      // 认 workspaceId 不认标签：两个工作空间同名是常态（标签多半就是目录名），
+      // 按名字筛等于没筛 —— 和改动面板、文件面板那两处同一条教训
+      (!ws || p.workspaceId === ws) &&
       (!kw || `${p.agent} ${p.status} ${p.workspace} ${p.tab} ${p.title} ${p.cwd} ${p.id}`.toLowerCase().includes(kw))
     const list = panes.map((p, i) => ({ p, i })).filter(({ p }) => hit(p))
     if (sort === 'group') return list
@@ -223,7 +254,7 @@ export function PaneSwitcher({
       (b.p.seq ?? 0) - (a.p.seq ?? 0) ||
       a.i - b.i,
     )
-  }, [panes, q, onlyAgent, sort])
+  }, [panes, q, onlyAgent, ws, sort])
 
   /*
    * **顺序是实时的**：4 秒一拍重拉之后跟着重排，谁刚开工 / 刚等你就当场浮上来。
@@ -250,16 +281,35 @@ export function PaneSwitcher({
     return out
   }, [rows, sort])
 
+  /** 已经在用的那几个目录（去重，焦点那个排最前 —— 多半就是要用的那个） */
+  const cwds = useMemo(() => {
+    const out: string[] = []
+    for (const p of [...panes].sort((a, b) => Number(b.focused) - Number(a.focused))) {
+      if (p.cwd && !out.includes(p.cwd)) out.push(p.cwd)
+    }
+    return out
+  }, [panes])
+
+  /** 真的建。名字空着就不传 —— 服务端那边空 label 就交给 herdr 自己的默认名 */
+  const create = () => {
+    if (!naming) return
+    const label = newName.trim()
+    setAdding(false)
+    setNaming(null)
+    setNewName('')
+    onNew({
+      new: naming,
+      // tab 建在**正在筛的那个**工作空间里（没筛就是当前那个）；工作空间没有上级
+      workspace: naming === 'tab' ? (ws || undefined) : undefined,
+      cwd: newCwd || undefined,
+      label: label || undefined,
+    })
+  }
+
   const flip = (key: string, v: boolean, set: (v: boolean) => void) => {
     set(v)
     localStorage.setItem(key, v ? '1' : '0')
   }
-  const cycleSort = () => {
-    const next = SORTS[(SORTS.findIndex((s) => s.id === sort) + 1) % SORTS.length].id
-    setSort(next)
-    localStorage.setItem(LS_SORT, next)
-  }
-  const cur = SORTS.find((s) => s.id === sort)!
 
   return (
     <Panel
@@ -285,14 +335,6 @@ export function PaneSwitcher({
         </div>
         <Button
           size="tiny"
-          data-testid="panes-sort"
-          title={`排序：${cur.hint}（点一下换下一种）`}
-          onClick={cycleSort}
-        >
-          {cur.label}
-        </Button>
-        <Button
-          size="tiny"
           on={onlyAgent}
           title="只看跑着 agent 的 pane（claude / codex）"
           onClick={() => flip(LS_ONLY_AGENT, !onlyAgent, setOnlyAgent)}
@@ -308,11 +350,26 @@ export function PaneSwitcher({
         >
           全屏
         </Button>
-        {/* 关闭并进这一排（面板没有标题栏了）。摆在最右边、和别的键留一点距离：
-            这是唯一一个「点了就没了」的按钮，别和筛选那几个挨成一片 */}
+        {/* 「新开一个」挨着关闭键放，不跟工作空间那一行混在一起：那一行是**选**
+            （点一个切过去），这个是**建** —— 一个是导航一个会改状态，摆在一起手指容易点错，
+            而且那一行是横滑的，滑到哪儿「+」就跑到哪儿。 */}
         <Button
           size="tiny"
           className="ml-0.5"
+          on={adding}
+          aria-label="新开"
+          title="新开一个 tab / 工作空间"
+          onClick={() => setAdding((v) => !v)}
+        >
+          <Plus className="size-3.5" />
+        </Button>
+        {/* 关闭并进这一排（面板没有标题栏了）。摆在最右边、**红的**：这是唯一一个
+            「点了就没了」的按钮，颜色把它和旁边那几个筛选键分开。
+            用 danger 那一档（红字 + 常态灰底）而不是整块涂红 —— 饱和填充在这套配色里
+            只留给一屏一个的主操作，见 CLAUDE.md 配色那节 */}
+        <Button
+          size="tiny"
+          variant="danger"
           aria-label="关闭"
           title="关闭（Esc 也行）"
           onClick={onClose}
@@ -320,6 +377,112 @@ export function PaneSwitcher({
           <X className="size-3.5" />
         </Button>
       </div>
+
+      {/*
+        **工作空间那一行**（herdr 的 workspace）。这是「我要去另一个项目」在手机上唯一
+        走得通的路 —— 实测这台机器上 9 个工作空间 / 51 个 tab / 56 个 pane，靠底下那张
+        平铺的表找项目，等于在 56 行里认标签。
+
+        点一个 = **切过去 + 只看它**。切走的是 herdr 的焦点（落在那个工作空间上次待着的
+        tab 上），而筛选让接下来还能在它里面挑别的 pane —— 两件事本来就是一起要的。
+
+        **tab 一级没有单独一行**：herdr 里每个 tab 至少有一个 pane，所以「点个 tab 过去」
+        已经被底下那张表完整覆盖了（点任意一行都把那个 tab 一起带过来），多铺一层只是
+        多一份要对齐的东西。
+      */}
+      {spaces.length > 0 && (
+        <div className="-mx-4 mb-1.5 flex items-center gap-1.5 overflow-x-auto px-4 pb-1
+                        [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <Button size="tiny" className="shrink-0" on={!ws} title="所有工作空间的 pane" onClick={() => setWs('')}>
+            全部
+          </Button>
+          {spaces.map((sp) => (
+            <Button
+              key={sp.id}
+              size="tiny"
+              className="shrink-0 gap-1.5"
+              on={ws === sp.id}
+              title={`切到「${sp.label}」并只看它的 pane（${sp.tabs} 个 tab / ${sp.panes} 个 pane）${sp.focused ? ' —— 你这会儿就在这儿' : ''}`}
+              onClick={() => { setWs(sp.id); onSpace({ workspace: sp.id }) }}
+            >
+              {/* 聚合过的状态点：这个工作空间里有没有人等你，一眼就看见 —— 和行上那颗
+                  是同一张表（herdr 自己聚的，不用把几十个 pane 铺出来数） */}
+              <span className={cn('size-1.5 shrink-0 rounded-full', STATUS_DOT[sp.status ?? ''] ?? 'bg-line-hi')} />
+              <span className="max-w-28 truncate">{sp.label}</span>
+              <span className="text-[10px] text-faint tabular-nums">{sp.panes}</span>
+              {sp.focused && <span className="text-[10px] text-brand">当前</span>}
+            </Button>
+          ))}
+        </div>
+      )}
+
+      {/*
+        「新开一个」。**只有加东西，没有关掉 / 改名** —— 那几件是不可逆的（关一个工作
+        空间连里面跑着的 agent 一起没），留在终端里做（docs/dev/TUI-VS-GUI.md §2①）。
+
+        目录给的是**已经在用的那几个**：手机上敲路径最贵，而新开多半就是去某个已有项目。
+      */}
+      {adding && (
+        <div className="mb-1.5 flex flex-wrap items-center gap-1.5 rounded-md border border-line bg-bg/40 p-2">
+          {/* 目录那一行两步都留着：起名字的时候还得看得见「建在哪儿」 */}
+          <span className="text-xs text-muted">在</span>
+          <Select
+            className="h-7 min-w-0 flex-1 text-xs"
+            value={newCwd}
+            aria-label="新开的那个用哪个目录"
+            onChange={(e) => setNewCwd(e.target.value)}
+          >
+            <option value="">跟当前 pane 同一个目录</option>
+            {cwds.map((c) => <option key={c} value={c}>{shortCwd(c)}</option>)}
+          </Select>
+          {naming === null ? (
+            <>
+              <Button
+                size="tiny"
+                title={ws ? '在这个工作空间里新开一个 tab' : '在当前工作空间里新开一个 tab'}
+                onClick={() => { setNewName(''); setNaming('tab') }}
+              >
+                新 tab
+              </Button>
+              <Button
+                size="tiny"
+                title="新开一个工作空间（herdr 里的 workspace）"
+                onClick={() => { setNewName(''); setNaming('workspace') }}
+              >
+                新工作空间
+              </Button>
+            </>
+          ) : (
+            /*
+              起个名字。**名字可以不填**（直接点「建」就是 herdr 那套默认名）——
+              手机上打字贵，而这一步的价值是「新开的那个在列表里认得出来」，不是强制。
+            */
+            <div className="flex w-full items-center gap-1.5">
+              <Input
+                className="h-7 min-w-0 flex-1"
+                // 这个框是**人主动点出来的**（点了「新 tab」才有），所以自动聚焦是对的 ——
+                // 和筛选框那条规矩不冲突：那个是面板一开就在，自动聚焦等于替人弹键盘
+                autoFocus
+                value={newName}
+                placeholder={naming === 'tab' ? 'tab 名字（可不填）' : '工作空间名字（可不填）'}
+                aria-label="新开的那个叫什么"
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') { setNaming(null); return }
+                  if (e.key !== 'Enter') return
+                  // **中文候选词就是按回车上屏的** —— 两个判据都要（安卓上不少输入法
+                  // 只给 keyCode 229）。漏了就是「选个词把 tab 建了」，和发件箱那条同源
+                  if (e.nativeEvent.isComposing || e.keyCode === 229) return
+                  e.preventDefault()
+                  create()
+                }}
+              />
+              <Button size="tiny" variant="primary" title="建好就切过去" onClick={create}>建</Button>
+              <Button size="tiny" title="不建了" onClick={() => setNaming(null)}>取消</Button>
+            </div>
+          )}
+        </div>
+      )}
 
       {rows.length === 0 && (
         <p className="px-1 py-6 text-center text-xs text-faint">

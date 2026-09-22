@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { X } from 'lucide-react'
-import { api, libMap, TOPBAR_KEY, topbarKeyRef, type SoftKey, type SoftkeysResponse, type TopbarResponse } from '@/lib/api'
+import { api, libMap, TOPBAR_KEY, topbarKeyRef, type Pin, type SoftKey, type SoftkeysResponse, type TopbarResponse } from '@/lib/api'
 import { useChipDrag, type ChipAt } from '@/lib/chipdrag'
 import { CAP_BY_ID, TOPBAR_ITEMS, type CapId } from '@/capabilities'
 import { Button } from './ui/button'
@@ -39,13 +39,28 @@ interface Face { label: string; hint: string; icon?: ReactNode; mono?: boolean; 
 export function TopbarPanel({
   onSaved, toast, profile,
 }: {
-  /** 存好之后把新顺序交回去，顶栏立刻跟着变（不用刷新页面） */
-  onSaved: (items: string[]) => void
+  /** 存好之后把新顺序和钉住几个交回去，顶栏立刻跟着变（不用刷新页面） */
+  onSaved: (items: string[], pin?: Pin | null) => void
   toast: (m: string) => void
   /** 改**哪一套**（见 internal/profiles 和 SoftkeysPanel 里同一个 prop 的注释） */
   profile: { id: string; name: string }
 }) {
   const [items, setItems] = useState<string[]>([])
+  /**
+   * 两端钉住几个（不跟着横滑）。存的是**个数**不是另一份列表 —— 顺序照旧只有 items 一份，
+   * 拖动 / 挪位置的语义一个字都不用改。见 internal/topbar 的 Pin。
+   */
+  const [pin, setPin] = useState<Pin | null>(null)
+  /**
+   * 顶栏里**选中的那一格**（下标）。这是手机上不用拖的那条路：点一格选中它，下面浮出
+   * 「← → 最前 最后 移除」，全程点。
+   *
+   * 为什么非做不可：这块面板在手机上高度有限，库和栏分成两屏 —— 从下面按住一个方块拖到
+   * 上面那一筐，中间要滚屏，而拖动期间页面是不滚的（拿起来那一下就把 touchmove 吃掉了，
+   * 见 lib/chipdrag）。也就是说**手机上拖这条路本来就走不通**（用户报的）。
+   * 拖动留着给桌面，那儿它最快。
+   */
+  const [sel, setSel] = useState<number | null>(null)
   /** 「我的按键」的定义（全局的，不分套）—— 顶栏上那些 `key:` 引用靠它落地 */
   const [keys, setKeys] = useState<SoftKey[]>([])
   const [pinned, setPinned] = useState<string[]>(['settings'])
@@ -74,6 +89,8 @@ export function TopbarPanel({
    */
   const take = (r: TopbarResponse) => {
     setItems(r.items.filter((id) => CAP_BY_ID.has(id as CapId) || !!topbarKeyRef(id)))
+    setPin(r.pin ?? null)
+    setSel(null)
     setPinned(r.pinned)
     setActions(r.actions ?? [])
     setMax(r.max || 24)
@@ -138,24 +155,42 @@ export function TopbarPanel({
 
     // 库 → 栏：上栏
     if (isLib(from.zone)) {
-      if (items.length >= max) { toast(`顶栏最多放 ${max} 个`); return }
-      setItems((prev) => [...prev.slice(0, to.i), id, ...prev.slice(to.i)])
-      setDirty(true)
+      add(id, to.i)
       return
     }
     // 栏 → 栏：排序
     if (to.zone === 'bar') {
-      setItems((prev) => {
-        const next = [...prev]
-        next.splice(from.i, 1)
-        next.splice(from.i < to.i ? to.i - 1 : to.i, 0, id)
-        return next
-      })
-      setDirty(true)
+      moveTo(from.i, from.i < to.i ? to.i - 1 : to.i)
       return
     }
     // 栏 → 库：下栏
     remove(from.i)
+  }
+
+  /** 上栏：插到第 at 格。拖和点都走这儿（点是「插到选中那一格后面」，见下面 addAt） */
+  const add = (id: string, at: number) => {
+    if (items.length >= max) { toast(`顶栏最多放 ${max} 个`); return }
+    setItems((prev) => [...prev.slice(0, at), id, ...prev.slice(at)])
+    // **选中跟到新加的那一格**：接着就能用工具条把它挪到想去的位置，不用再点一次
+    setSel(at)
+    setDirty(true)
+  }
+
+  /**
+   * 挪一格。`to` 是**目标下标**（不是插入位）—— 工具条上的 ← → / 最前 / 最后 都走这儿，
+   * 语义比插入位直观：点一下「←」就是「往左一格」。
+   */
+  const moveTo = (from: number, to: number) => {
+    const t = Math.max(0, Math.min(to, items.length - 1))
+    if (t === from) return
+    setItems((prev) => {
+      const next = [...prev]
+      const [x] = next.splice(from, 1)
+      next.splice(t, 0, x)
+      return next
+    })
+    setSel(t)
+    setDirty(true)
   }
 
   const remove = (i: number) => {
@@ -166,7 +201,24 @@ export function TopbarPanel({
       return
     }
     setItems((prev) => prev.filter((_, n) => n !== i))
+    // 选中的那一格没了：清掉，别让工具条指着一个不存在的下标（后面那些会整体前移一格，
+    // 留着就是「工具条上写的是 A，点 ← 挪的是 B」）
+    setSel(null)
     setDirty(true)
+  }
+
+  /**
+   * 钉住几个。夹在 [0, 剩下多少] 里 —— 和服务端 resolvePin 一个判据（那边也夹，
+   * 这儿夹是为了界面上当场就对，不用等存完那一趟回来）。
+   */
+  const setPinAt = (side: 'left' | 'right', n: number) => {
+    setPin((prev) => {
+      const cur = { left: prev?.left ?? 0, right: prev?.right ?? 0 }
+      const other = side === 'left' ? cur.right : cur.left
+      cur[side] = Math.max(0, Math.min(n, items.length - other))
+      setDirty(true)
+      return cur.left === 0 && cur.right === 0 ? null : cur
+    })
   }
 
   const { drag, over, onChipDown } = useChipDrag<Zone>({
@@ -203,9 +255,9 @@ export function TopbarPanel({
   const save = async () => {
     setErr('')
     try {
-      const r = await api.put<TopbarResponse>(`/topbar?profile=${encodeURIComponent(profile.id)}`, { items })
+      const r = await api.put<TopbarResponse>(`/topbar?profile=${encodeURIComponent(profile.id)}`, { items, pin })
       take(r)
-      onSaved(r.items)
+      onSaved(r.items, r.pin ?? null)
       return true
     } catch (e) {
       setErr((e as Error).message)
@@ -218,7 +270,7 @@ export function TopbarPanel({
     try {
       const r = await api.del<TopbarResponse>(`/topbar?profile=${encodeURIComponent(profile.id)}`)
       take(r)
-      onSaved(r.items)
+      onSaved(r.items, r.pin ?? null)
       toast('已恢复默认')
     } catch (e) {
       setErr((e as Error).message)
@@ -240,21 +292,38 @@ export function TopbarPanel({
           role="button"
           tabIndex={0}
           title={zone === 'bar'
-            ? `${f.hint} —— 按住拖动排序${fixed ? '（这个删不掉）' : '，✕ 从顶栏拿下来'}`
-            : `${f.hint} —— 按住拖到上面，或者点一下就上栏`}
+            ? `${f.hint} —— 点一下选中它（再用下面那排挪位置）${fixed ? '；这个删不掉' : '，✕ 从顶栏拿下来'}`
+            : `${f.hint} —— 点一下加到顶栏${sel === null ? '末尾' : '选中那个后面'}，也能按住拖到上面`}
           className={cn(
             'flex shrink-0 items-center gap-1.5 rounded-md border border-line bg-ctl px-2 py-1.5',
             'text-xs text-fg cursor-grab select-none active:cursor-grabbing',
             'transition-[background-color,border-color] duration-100 hover:border-line-hi hover:bg-ctl-hi',
             fixed && 'border-brand/40 bg-brand/10 text-brand',
+            // 选中的那一格：描一圈，别只换底色 —— ⚙ 那种「删不掉」的已经是淡绿底了，
+            // 两种状态在同一行里要分得开
+            zone === 'bar' && sel === i && 'ring-2 ring-brand/50',
             // 「我的按键」用 mono：和内置按钮（有图标）在同一个筐里也分得开
             f.mono && 'font-mono',
             f.gone && 'border-bad/45 bg-bad/10 text-bad',
           )}
           onPointerDown={(e) => onChipDown(e, { zone, i })}
           onKeyDown={(e) => onChipKey(e, { zone, i })}
-          // 库里的点一下就上栏（拖是给排序用的；「加一个」不该非得学会拖）
-          onClick={() => { if (isLib(zone)) drop({ zone, i }, { zone: 'bar', i: items.length }) }}
+          /*
+            点一下：库里的**上栏**，栏里的**选中**。
+
+            拖只剩「桌面上更快」这一个用处了 —— 手机上那条路走不通（库和栏分成两屏，而
+            拿起来之后页面不滚，见 sel 那段注释）。所以这两条点击路径要能单独走完全程：
+            点库里的加进来（插在选中那一格后面，不是永远丢到末尾），点栏里的选中它，
+            再用下面那排 ← → 挪。
+          */
+          onClick={() => {
+            if (isLib(zone)) {
+              const id = at(zone, i)
+              if (id) add(id, sel === null ? items.length : sel + 1)
+              return
+            }
+            setSel((cur) => (cur === i ? null : i))
+          }}
         >
           {f.icon}
           <span className="whitespace-nowrap">{f.label}</span>
@@ -306,7 +375,93 @@ export function TopbarPanel({
         </div>
       </div>
 
-      {box('bar', '顶栏', '空的 —— 从下面拖一个上来', items)}
+      {/*
+        「顶栏」那一筐**粘在分页条下面**。这是手机上那条路的另一半：库很长（内置按钮 +
+        我的按键二十来个），滚下去挑的时候栏要一直看得见 —— 不然点一下加进来，结果在
+        看不见的地方，人只能来回滚着确认。顺带拖动在手机上也重新成立了一点（目标可见）。
+
+        `top-[46px]` 是分页条的高度（`SettingsPanel` 那个 nav：pt-2 + py-2.5 的按钮 +
+        1px 下边框，量出来 47px，取 46 让两条边压在一起、别露缝）。**改了那边就得改这儿**
+        —— 和 nav 自己那三个 `-top-2 / -mt-2 / pt-2` 是一套的道理。
+        `-mx-4 px-4` 把底色铺到面板两边，不然滚过去的方块会从两侧的缝里露出来。
+      */}
+      <div className="sticky top-[46px] z-1 -mx-4 bg-bar px-4 pb-1">
+        {box('bar', '顶栏', '空的 —— 点下面一个就加上来', items)}
+
+        {/*
+          选中那一格的工具条。**只在选中时出现**：没选中时它是一排灰按钮，白占一行
+          （这块面板在手机上最缺的就是高度）。
+        */}
+        {sel !== null && items[sel] && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 pl-[72px] text-xs max-md:pl-0">
+            <span className="truncate text-muted">「{face(items[sel])?.label ?? items[sel]}」</span>
+            <div className="flex overflow-hidden rounded-md border border-line">
+              <Button
+                size="tiny" className="rounded-none border-0 border-r border-line px-2"
+                disabled={sel <= 0} title="往左挪一格" onClick={() => moveTo(sel, sel - 1)}
+              >
+                ←
+              </Button>
+              <Button
+                size="tiny" className="rounded-none border-0 px-2"
+                disabled={sel >= items.length - 1} title="往右挪一格" onClick={() => moveTo(sel, sel + 1)}
+              >
+                →
+              </Button>
+            </div>
+            <Button size="tiny" disabled={sel <= 0} title="挪到最左边" onClick={() => moveTo(sel, 0)}>最前</Button>
+            <Button
+              size="tiny" disabled={sel >= items.length - 1} title="挪到最右边"
+              onClick={() => moveTo(sel, items.length - 1)}
+            >
+              最后
+            </Button>
+            {!pinned.includes(items[sel]) && (
+              <Button size="tiny" title="从顶栏拿下来" onClick={() => remove(sel)}>移除</Button>
+            )}
+            <Button size="tiny" className="ml-auto" title="取消选中" onClick={() => setSel(null)}>取消</Button>
+          </div>
+        )}
+      </div>
+
+      {/*
+        钉住几个。摆在顶栏那一筐下面、库上面：它讲的是「这一行两端怎么排」，不是某一个
+        按钮的事，所以**不进上面那个工具条**（那儿每一件都针对选中的那一格）。
+        存的是**个数**，顺序照旧只有 items 一份 —— 语义和快捷键条那边一字不差。
+      */}
+      {items.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 pl-[72px] text-xs text-faint max-md:pl-0">
+          <span>钉住</span>
+          {(['left', 'right'] as const).map((side) => {
+            const v = (side === 'left' ? pin?.left : pin?.right) ?? 0
+            const other = (side === 'left' ? pin?.right : pin?.left) ?? 0
+            return (
+              <span key={side} className="flex items-center gap-1">
+                {side === 'left' ? '左' : '右'}
+                <span className="flex overflow-hidden rounded-md border border-line">
+                  <Button
+                    size="tiny" className="rounded-none border-0 border-r border-line px-1.5"
+                    disabled={v <= 0} title="少钉一个" onClick={() => setPinAt(side, v - 1)}
+                  >
+                    −
+                  </Button>
+                  <span className="grid w-6 place-items-center bg-ctl text-xs tabular-nums">{v}</span>
+                  <Button
+                    size="tiny" className="rounded-none border-0 border-l border-line px-1.5"
+                    disabled={v + other >= items.length} title="多钉一个" onClick={() => setPinAt(side, v + 1)}
+                  >
+                    +
+                  </Button>
+                </span>
+              </span>
+            )
+          })}
+          <span className={pin ? 'text-muted' : ''}>
+            {pin ? '这几个不跟着横滑（出厂钉的是最右那个「对话」）' : '头几个 / 尾几个可以不跟着横滑 —— 顶栏放不下时它们不滑走'}
+          </span>
+        </div>
+      )}
+
       {box('lib', '内置按钮', '都在顶栏上了', lib.map((it) => it.id))}
       {box('keys', '我的按键', '「我的按键」里的都在顶栏上了 —— 去「快捷键条」那页加', keyLib.map((k) => TOPBAR_KEY + k.id))}
 
@@ -319,8 +474,12 @@ export function TopbarPanel({
                       [&_code]:px-1 [&_code]:py-px [&_code]:font-mono [&_code]:text-[11px] [&_code]:text-fg
                       [&_strong]:font-medium [&_strong]:text-fg">
         <ul className="ml-3.5 list-disc space-y-0.5">
-          <li>下面的方块<strong>点一下</strong>就加到顶栏末尾，<strong>按住拖</strong>能放到指定位置。</li>
-          <li>顶栏里拖是排序；拖下来（或点 ✕）就是去掉。⚙ 设置去不掉。</li>
+          <li>下面的方块<strong>点一下</strong>就加到顶栏（加在选中那个后面，没选中就加到末尾）。</li>
+          <li>顶栏里<strong>点一格选中它</strong>，下面那排 <code>←</code> <code>→</code> <code>最前</code> <code>最后</code> 挪位置、
+            <code>移除</code> 拿下来 —— 手机上不用拖。⚙ 设置去不掉。</li>
+          <li><strong>钉住</strong>：头几个 / 尾几个不跟着横滑。顶栏放不下时它们留在原地 ——
+            出厂钉的是最右那个<strong>对话</strong>（chat 模式），滑走了就等于没有。</li>
+          <li>桌面上<strong>按住拖</strong>更快：库里拖上来能直接放到指定位置，顶栏里拖是排序，拖下来是去掉。</li>
           <li><strong>「我的按键」</strong>那一筐是快捷键条上那份定义：拖上来就多一个键。
             改一处按键谱（在「快捷键条」那页）两边一起变，在那儿删掉一个，顶栏上也跟着没了 ——
             所以 <code>ctrl+b z</code> 这种自己配一个拖上来就行。</li>

@@ -30,7 +30,7 @@ export const PREF_KEYS = [
   'kbdFull',
   'noticeDot', 'noticeCard', 'noticeOS', 'noticeOSFg', 'noticeCardMs',
   'keyStyle', 'popupClear', 'holdRate',
-  'diffWrap',
+  'diffWrap', 'panesSort',
   'composeEnter', 'composeLive', 'composeRich',
 ] as const
 export type PrefKey = (typeof PREF_KEYS)[number]
@@ -60,6 +60,27 @@ export function pushPref(profile: string, k: PrefKey, v: string, fail?: (m: stri
   void api.put(`/profiles/${encodeURIComponent(profile)}/prefs`, { prefs: { [k]: v } })
     .catch((e: Error) => fail?.(`这台设备上改好了，但没同步到「排布」里：${e.message}`))
 }
+
+/**
+ * 面板一览按什么排。**「优先级」是九成人唯一会用的那档**，所以它不在面板里 ——
+ * 原来那颗按钮占着筛选那一排（面板一开就在眼前、还挨着筛选框），换来的是一件
+ * 几乎不会再动的事：选一次就定了。设成开关之后那一排只剩「真的会来回点」的两个
+ * （Agent / 全屏）。
+ *
+ * 「分组」那档留着是因为它答的是另一个问题：不是「谁在等我」，而是「我在 herdr 里
+ * 摆的那几个 workspace 长什么样」—— 按原顺序铺开，和终端里看到的一样。
+ *
+ * 跟着**这一套排布**走（手机上多半要优先级、桌面上可能想看分组），认不出的值退回优先级。
+ */
+export const PANE_SORTS = [
+  { id: 'priority', label: '优先级', hint: '要你看的在前（等你 > 完成 > 在跑 > 闲着），同档按最近动过' },
+  { id: 'group', label: '分组', hint: '按 workspace 分组，组里是 tab / pane 的原顺序 —— 和你在 herdr 里看到的一样' },
+] as const
+export type PaneSort = (typeof PANE_SORTS)[number]['id']
+
+/** 这台设备上面板一览怎么排。**同步读镜像**（见上面那段），面板每次打开读一次 */
+export const panesSort = (): PaneSort =>
+  (localStorage.getItem('panesSort') === 'group' ? 'group' : 'priority')
 
 /** 按键样式：`solid` = 有底色有边（默认），`plain` = 只有字/图标，没底色没边 */
 export type KeyStyle = 'solid' | 'plain'

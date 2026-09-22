@@ -11,7 +11,7 @@
  * 跑：`node web/src/term/paths.test.ts`（`make test` 里有）。
  */
 import type { Terminal } from '@xterm/xterm'
-import { linkAtCell, pathLinkProvider } from './paths.ts'
+import { linkAtCell, pathLinkProvider, stripLineAnchor } from './paths.ts'
 
 /**
  * 手搓一个假 buffer。
@@ -277,6 +277,26 @@ const ab = mk([
 check('中文直接粘着的 URL：A 那条', linkAtCell(ab, 30, 1)?.text, 'https://p7boof571u9u.preview.creght.cn/')
 check('中文直接粘着的 URL：B 那条（首行 tap）', linkAtCell(ab, 30, 3)?.text, HERO)
 check('中文直接粘着的 URL：B 那条（续行 tap）', linkAtCell(ab, 6, 4)?.text, HERO)
+
+/* 19. **行号锚点**（用户报的那一条：`…VIDEO.md#L21` 点开报「找不到」）。
+   agent 引用一个位置时爱把行号挂在路径后面 —— markdown 链接里是 `#L21`，编译错误
+   / grep 输出里是 `:42`。那几位不是文件名的一部分，stat 一定找不到。
+   **只认挂在最后的**：路径中间的 `#` `:` 是文件名的一部分，动了就把好路径弄坏了。
+   而 `notes#1.md` 这种真带 `#` 的文件名靠调用方兜住（先按原样问一次，见 App.openPath）。 */
+for (const [raw, want] of [
+  ['/a/CONTENT-041-REFERENCE.md#L21', '/a/CONTENT-041-REFERENCE.md'],
+  ['/a/b.md#L21-L30', '/a/b.md'],
+  ['/a/b.md#21', '/a/b.md'],
+  ['/a/main.go:42', '/a/main.go'],
+  ['/a/App.tsx:42:7', '/a/App.tsx'],
+  // 剥不掉的几种：不是数字、在中间、根本没有
+  ['/a/b.md#section', '/a/b.md#section'],
+  ['/a/notes#1.md', '/a/notes#1.md'],
+  ['/a/b#2/c.md', '/a/b#2/c.md'],
+  ['/a/b.md', '/a/b.md'],
+] as const) {
+  check(`剥行号锚点：${raw}`, stripLineAnchor(raw), want)
+}
 
 if (fails) {
   console.error(`\n${fails} 处不对`)

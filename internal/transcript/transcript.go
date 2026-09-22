@@ -100,7 +100,19 @@ type AskQuestion struct {
 	Question string `json:"question"`
 	// Multi 能多选。**能不能一键作答要看它** —— 多选在 TUI 里是空格勾选再回车，
 	// 和单选那套键完全不同，所以多选只显示、不给点。
-	Multi   bool        `json:"multi,omitempty"`
+	Multi bool `json:"multi,omitempty"`
+	// Preview 这一题的选项带 `preview`（工具那边给的 ASCII 预览图）。
+	//
+	// **它决定作答要不要多发一下 `enter`**：带 preview 的题在 TUI 里是**左右分栏**
+	// （左边一列选项、右边画预览），那一屏里数字键只把光标**移过去**，要再按一下 enter
+	// 才算选中 —— 而不带 preview 的题按数字就直接选中并跳到下一题。判据是屏幕最下面那行
+	// 提示自己说的：普通题是「Enter to select · Tab/Arrow keys to navigate」，带 preview
+	// 的是「Enter to select · ↑/↓ to navigate · n to add notes · Tab to switch questions」。
+	//
+	// 漏了这一下是**完全静默**的：herdr 不报错、我们回 200、界面上说「提交成功」，而那串
+	// 键从这一题起全变成「在同一题里挪光标」—— 一题都没提交，TUI 停在原地（用户报的
+	// 「点了提交终端里什么都没反应，还停留在第一个问题」）。见 internal/server 的 askKeys。
+	Preview bool        `json:"preview,omitempty"`
 	Options []AskOption `json:"options"`
 	// Picked 人当时选了哪个（选项的 label）。空 = 还没答。
 	//

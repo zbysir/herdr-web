@@ -91,6 +91,14 @@ const KNOWN: Record<number, [string, boolean]> = {
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
 
 // 冻帧的几个时长（毫秒），见下面 freeze()
+/**
+ * 字形纹理攒到几页就清一次（见装 WebglAddon 那段）。
+ *
+ * **8 是留了余量的**：合并的门槛是 `min(32, gl.MAX_TEXTURE_IMAGE_UNITS)`，手机 GPU 上
+ * 常见 16 —— 卡着那个数清等于赌「先清还是先合并」。
+ */
+const ATLAS_CLEAR_PAGES = 8
+
 const THAW_GRACE = 120 // 新画面画上之后再多盖一会儿 —— 那一帧还是旧内容，herdr 的 SIGWINCH 重绘还在路上
 const THAW_CAP = 500 // 一直等不到重绘也得撤，别糊着一张旧图不放
 const THAW_FADE = 200 // 淡出时长，跟内联的 transition 对齐
@@ -181,6 +189,55 @@ export class Session {
       // preserveDrawingBuffer：合成完别把绘制缓冲丢掉，不然改尺寸前读不出画面（见 freeze()）
       const webgl = new WebglAddon(true)
       webgl.onContextLoss(() => webgl.dispose())
+      /*
+        **字形纹理攒到一定量就清一次，绕开 xterm 的「页合并」。**
+
+        现象（真机上确认这套治法有效）：在终端里多滚几下，屏幕上零星几个字会变成**别的字形**
+        （用户报的那张截图里 `creght-eval` 画成了 `≯reghɪ-ev≜l`、`main` 成了 `mai↗`）——
+        不是花屏、不是缺字，是**拿错了纹理**：中英文都会中招，而同一行里别的字好好的。
+
+        出处在 `@xterm/addon-webgl` 的 `TextureAtlas._createNewPage()`：页数涨到
+        `maxAtlasPages`（= `min(32, gl.MAX_TEXTURE_IMAGE_UNITS)`，手机 GPU 上常见 16）时
+        它会把 4 个页合成一个大页，然后**平移所有 glyph 的 texturePage 索引**。索引一错，
+        那个字就从别的页/别的坐标取纹理，画出来就是另一个字。
+
+        **中文用户特别容易踩**：一个汉字一个 glyph，一屏几百个不同的字，滚几下就是上千个 ——
+        页数涨得飞快，合并于是反复发生。纯英文那点字形一辈子也填不满。
+
+        治法是**不让它合并**：数着新页，快到上限之前自己 `clearTextureAtlas()` 清一次
+        （清的是页里的内容和缓存映射，页本身不删，所以清完很久都不需要新页）。代价是重建
+        当前这一屏的字形 —— 而合并本身也要全量重绘（xterm 自己会 `_requestClearModel`），
+        两边差不多，但少了一次索引平移。
+
+        量级：一页 512×512，而手机上（DPR≈2.75、字号 13）一个**汉字**的格子约 40×40
+        设备像素 —— **一页只放得下一百多个汉字**。一屏中文就要一两页，滚几屏必然顶到上限。
+        英文的格子窄一半、字形又只有那几十个，一辈子填不满一页。
+
+        三条别改：
+        ① **数的是「现在有几页」，不是「新建过几次」**。清纹理**不删页**
+           （`clearTexture` 只把每页腾空 + 清缓存映射），所以拿「自上次清以来新建了几个」
+           计数的话，页数照旧一路涨到上限 —— 清了个寂寞，合并该来还是来。
+           腾空之后新字形填回已有的空页，所以稳态就停在这几页上，不会再涨。
+        ② **异步清**（`setTimeout 0`）。这个回调是在「正往新页里写一个字形」的中途 fire
+           的，同步清掉就是把正在写的那一页抽走，比原来的 bug 还乱（xterm 自己那个合并
+           也刻意推到 microtask 上，见它的注释）。
+        ③ **阈值要留余量**（8，而上限最少是 16）。合并的判据是「新建页时页数已经到上限」，
+           卡着上限清等于赌它先清还是先合并。
+      */
+      let pages = 0
+      let clearedAt = 0
+      webgl.onRemoveTextureAtlasCanvas(() => { pages = Math.max(0, pages - 1) })
+      webgl.onAddTextureAtlasCanvas(() => {
+        pages++
+        // 已经在这个页数上清过就别再清：腾空不减页数，不防一手会每新建一次都清一次
+        if (pages < ATLAS_CLEAR_PAGES || pages <= clearedAt) return
+        clearedAt = pages
+        setTimeout(() => {
+          try {
+            webgl.clearTextureAtlas()
+          } catch { /* 已经 dispose 了（换渲染器 / 丢上下文），忽略 */ }
+        }, 0)
+      })
       this.term.loadAddon(webgl)
     } catch {
       /* 没有 WebGL 就退回 DOM 渲染 */
@@ -683,6 +740,22 @@ export class Session {
   private wake = () => {
     if (!this.want || this.exited) return
     if (document.visibilityState !== 'visible' || navigator.onLine === false) return
+    /*
+      **回到前台先补一次重绘**，别只顾着探活。
+
+      不可见的那段时间里 rAF 完全不跑，xterm 只是把重绘请求收下（见上面「渲染看门狗」
+      那三条），字节照常进缓冲区、一帧都没画。回来时连接多半是好的（探针有回音），
+      于是这一路什么都不做 —— 而补画那条路是**收到新字节之后静默 180ms** 才跑。
+
+      「agent 停下来等你回答」恰恰是对面一个字节都不发的状态，于是画面就焊在息屏前
+      那一帧上，永远等不到下一次补画。用户报的是「点了提交终端里什么都没反应，还停留在
+      第一个问题」—— 而那一帧正是他息屏之前屏幕上的东西：**按键一直是通的，投出去的
+      选择也真的到了**（chat 里看得见结果），丢的只有画面。
+
+      放在 probe 前面：探针要 3 秒才判死，而这一下不花什么（2026 开着就补个 ESU，
+      否则 refresh 一屏）。真断了的话紧接着重连会 reset，多画这一次也不碍事。
+    */
+    this.repaint()
     const st = this.ws?.readyState
     if (st === WebSocket.CONNECTING) return
     if (st === WebSocket.OPEN) {

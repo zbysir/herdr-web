@@ -50,6 +50,29 @@ type Target struct {
 	Changed     int64  `json:"changed,omitempty"`
 }
 
+// Space 是一个工作空间（herdr 的 workspace）在界面上的样子。
+//
+// **为什么要单独给这一层**：手机上「我要去另一个项目」现在只能在几十行 pane 里翻
+// （实测 9 个工作空间 / 51 个 tab / 56 个 pane）。而 herdr 的 `workspace.list` 白给了
+// 三样这一层才有的东西：pane / tab 的**数量**、聚合过的 `Status`（这个项目里有没有人
+// 等你），以及 `Focused`（我这会儿在哪儿）—— 靠 pane 列表自己数是数得出来，但那要把
+// 几十行全铺出来，正是这块界面想省掉的事。
+//
+// **tab 一级故意不单独给**：herdr 里每个 tab 至少有一个 pane，所以「点一个 tab 切过去」
+// 这件事已经被 pane 列表完整覆盖了（点任意一行都会把那个 tab 一起带过来）。多铺一层
+// 只是多一份要对齐的东西。
+type Space struct {
+	ID      string `json:"id"`
+	Number  int    `json:"number"`
+	Label   string `json:"label"`
+	Focused bool   `json:"focused"`
+	Panes   int    `json:"panes"`
+	Tabs    int    `json:"tabs"`
+	// Status 这个工作空间里最要紧的那个 agent 状态（herdr 自己聚合的）。
+	// 和 Target.Status 同一套取值，所以前端那张状态表两处共用。
+	Status string `json:"status,omitempty"`
+}
+
 // Info 是一个 pane 的可显示身份（workspace / tab 的好看标签由前端用缓存补）。
 type Info struct {
 	Target      string `json:"target"`
@@ -154,22 +177,32 @@ func (o *Outbox) ReadComposer(id, agent string) (text string, ok bool, err error
 	return text, ok, nil
 }
 
-// ListTargets 目标列表：pane.list 的顺序 + workspace / tab 的可读标签。
-func (o *Outbox) ListTargets() ([]Target, error) {
+// ListTargets 目标列表：pane.list 的顺序 + workspace / tab 的可读标签，**外加工作空间
+// 那一层**（见 Space）。
+//
+// 两样一起给是因为它们来自同一批调用：标签本来就要问 `workspace.list` / `tab.list`，
+// 那份响应里 `focused` / `pane_count` / 聚合状态都是白拿的。分成两个口就是在跑着 agent
+// 的那台机器上多问一遍同样的东西，而这是**按秒轮询**的一拍（面板一览 1.5 秒）。
+func (o *Outbox) ListTargets() ([]Target, []Space, error) {
 	panes, err := o.C.PaneList()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	wsLabel, tabLabel := map[string]string{}, map[string]string{}
-	var wl herdr.WorkspaceList
-	if o.C.Call("workspace.list", nil, &wl) == nil { // 标签只是好看，拿不到就退回 id
-		for _, w := range wl.Workspaces {
-			wsLabel[w.WorkspaceID] = orElse(w.Label, fmt.Sprintf("w%d", w.Number))
+	var spaces []Space
+	if ws, err := o.C.WorkspaceList(); err == nil { // 标签只是好看，拿不到就退回 id
+		spaces = make([]Space, 0, len(ws))
+		for _, w := range ws {
+			label := orElse(w.Label, fmt.Sprintf("w%d", w.Number))
+			wsLabel[w.WorkspaceID] = label
+			spaces = append(spaces, Space{
+				ID: w.WorkspaceID, Number: w.Number, Label: label, Focused: w.Focused,
+				Panes: w.PaneCount, Tabs: w.TabCount, Status: w.AgentStatus,
+			})
 		}
 	}
-	var tl herdr.TabList
-	if o.C.Call("tab.list", nil, &tl) == nil {
-		for _, t := range tl.Tabs {
+	if tabs, err := o.C.TabList(); err == nil {
+		for _, t := range tabs {
 			tabLabel[t.TabID] = orElse(t.Label, fmt.Sprintf("t%d", t.Number))
 		}
 	}
@@ -182,7 +215,7 @@ func (o *Outbox) ListTargets() ([]Target, error) {
 		}
 	}
 	out := make([]Target, 0, len(panes))
-	for _, p := range panes {
+	for _, p := range panes { //nolint:dupl
 		t := Target{
 			ID: p.PaneID, Agent: p.Agent, Status: orUnknown(p.AgentStatus),
 			Workspace:   orElse(wsLabel[p.WorkspaceID], p.WorkspaceID),
@@ -196,7 +229,36 @@ func (o *Outbox) ListTargets() ([]Target, error) {
 		}
 		out = append(out, t)
 	}
-	return out, nil
+	return out, spaces, nil
+}
+
+// SpaceGoto 切到一个工作空间或一个 tab。
+//
+// **不带 zoom**（和 Goto 不一样）：那是 tab 级的开关，而这一层要的只是「过去」。
+// 两个 id 的形状在 herdr 里不一样（`w5` / `w5:t3`），但**这儿不靠形状分派** ——
+// 猜错就是切到别处去了，而两个字段各自显式给出来一个字都不含糊。
+func (o *Outbox) SpaceGoto(workspace, tab string) error {
+	if tab != "" {
+		return o.C.TabFocus(tab)
+	}
+	if workspace != "" {
+		return o.C.WorkspaceFocus(workspace)
+	}
+	return fmt.Errorf("要说切到哪儿（workspace 或 tab）")
+}
+
+// SpaceNew 新开一个 tab 或工作空间，建完就切过去（见 herdr.WorkspaceCreate）。
+//
+// cwd 给空就交给 herdr 自己的策略。前端给的是**已经在用的那几个 cwd**（从 pane 列表里
+// 来）——手机上打字最贵，能挑就别让人敲路径。
+func (o *Outbox) SpaceNew(kind, workspace, cwd, label string) (string, error) {
+	switch kind {
+	case "tab":
+		return o.C.TabCreate(workspace, cwd, label)
+	case "workspace":
+		return o.C.WorkspaceCreate(cwd, label)
+	}
+	return "", fmt.Errorf("只能新开 tab 或 workspace，不认识 %q", kind)
 }
 
 // GotoResult 是「跳到某个 pane」的结果。

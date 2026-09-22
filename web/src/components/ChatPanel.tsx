@@ -942,6 +942,14 @@ function Running({ status, turn, shells }: {
   const secs = working ? live : (turn?.ran ?? 0)
   if (secs > 0) bits.push(dur(secs))
   if (!working && turn?.doneAt) bits.push(clock(turn.doneAt))
+  // **这段是不是已经旧了**。服务端算的秒数（见 lib/api.ts 的 idle）。
+  //
+  // 两分钟以内不说 —— 刚跑完就挂一句「0 分钟前」是噪音。够旧了才有信息量，而最需要它的
+  // 是 codex 的 `/clear`：那一下**不新建 rollout、旧文件也不再长**，herdr 的会话 id 要
+  // 等新会话写盘才更新，于是这段窗口里 chat 显示的是**已经作废的上一段对话**（用户报的
+  // 「停留到 clear 之前的内容」）。数据层认不出那件事（没有结束标记），所以把「最后更新
+  // 是多久以前」摆出来让人自己判断 —— 说下一句话它就自己跟到新会话上了。
+  if (!working && (turn?.idle ?? 0) >= STALE_SEC) bits.push(`${sinceWord(turn!.idle!)}没更新`)
   if (turn?.tokens) bits.push(`↓ ${kilo(turn.tokens)} tokens`)
   if (working && turn?.effort) bits.push(`${turn.effort} effort`)
   // 还在跑的后台任务 —— 跑完之后这条最要紧（「它停了，但还有东西在后台跑」）
@@ -960,6 +968,22 @@ function Running({ status, turn, shells }: {
       {bits.length > 0 && <span className="min-w-0 truncate font-mono text-[11.5px]">({bits.join(' · ')})</span>}
     </p>
   )
+}
+
+/** 多久没更新了才值得说一句。刚跑完挂一句「0 分钟前」是噪音 */
+const STALE_SEC = 120
+
+/**
+ * 秒数 → `12 分钟`/`3 小时`/`2 天`。
+ *
+ * **只给一档精度**：这是「旧不旧」的量级判断，不是计时 —— `12 分钟 30 秒前` 里那个秒
+ * 一个字的信息都没有，还占宽度（这一行在手机上本来就要 truncate）。
+ */
+function sinceWord(s: number) {
+  const m = Math.round(s / 60)
+  if (m < 60) return `${m} 分钟`
+  const h = Math.round(m / 60)
+  return h < 24 ? `${h} 小时` : `${Math.round(h / 24)} 天`
 }
 
 /**

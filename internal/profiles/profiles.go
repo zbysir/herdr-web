@@ -84,7 +84,7 @@ var Prefs = []string{
 	"kbdFull",
 	"noticeDot", "noticeCard", "noticeOS", "noticeOSFg", "noticeCardMs",
 	"keyStyle", "popupClear", "holdRate",
-	"diffWrap",
+	"diffWrap", "panesSort",
 	"composeEnter", "composeLive", "composeRich",
 }
 

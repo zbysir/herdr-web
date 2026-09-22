@@ -5,7 +5,7 @@
 // 之后，对齐文本就等于草稿本身，于是草稿看起来「没改过」→ 解锁目标 → 下一拍把用户
 // 正在写的东西直接覆盖掉。所以 own 单独负责所有权，synced 只负责发现远端变化。
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, FOLLOW, type DraftResult, type GotoResult, type Pane, type PresetGroup, type SayResult, type SyncResult, type UploadResult } from '@/lib/api'
+import { api, FOLLOW, type DraftResult, type GotoResult, type Pane, type PresetGroup, type SayResult, type Space, type SyncResult, type UploadResult } from '@/lib/api'
 
 const HIST_KEY = 'composeHist'
 const HIST_MAX = 30
@@ -26,6 +26,8 @@ const SENT_MAX = 8
 export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toast: (m: string) => void) {
   const [text, setText] = useState('')
   const [panes, setPanes] = useState<Pane[]>([])
+  /** 工作空间那一层（和 panes 同一拍回来，见 lib/api.ts 的 Space） */
+  const [spaces, setSpaces] = useState<Space[]>([])
   // panes 的镜像：`jump` 是 useCallback，闭包里的 panes 会过期（而它的依赖里不能加 panes ——
   // 那会让「跳转」这个函数每拉一次列表就换一个身份，调用方那边全得跟着重建）
   const panesRef = useRef<Pane[]>([])
@@ -106,14 +108,17 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
   const loadPanes = useCallback(async (quiet = false) => {
     try {
       const q = rev.current ? `?rev=${encodeURIComponent(rev.current)}` : ''
-      const r = await api.get<{ panes?: Pane[]; watching?: boolean; rev?: string; same?: boolean }>('/herdr/panes' + q)
+      const r = await api.get<{ panes?: Pane[]; spaces?: Space[]; watching?: boolean; rev?: string; same?: boolean }>('/herdr/panes' + q)
       rev.current = r.rev ?? ''
       if (r.same) return
       setPanes(r.panes ?? [])
+      // 老后端不给这个字段：那就是空的一行，面板上那排 chip 整条不画（别退回一个假的）
+      setSpaces(r.spaces ?? [])
       setWatching(!!r.watching)
     } catch (e) {
       rev.current = ''
       setPanes([])
+      setSpaces([])
       // socket 在跑 herdr server 的那台机器上，不一定是跑 herdr-web 的这台
       say2(`连不上 herdr：${(e as Error).message}`, true)
       if (!quiet) toast('连不上 herdr：' + (e as Error).message)
@@ -551,7 +556,7 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
   }, [onChangeText])
 
   return {
-    text, setText: onChangeText, panes, watching, presets,
+    text, setText: onChangeText, panes, spaces, watching, presets,
     info, bad, busy, aimed,
     loadPanes, loadSoftkeyPresets, tick, pull, submit, recall, attach, upload, append, jump,
     sent, dropSent,

@@ -130,20 +130,41 @@ type PaneList struct {
 	Panes []Pane `json:"panes"`
 }
 
+// Workspace 是 workspace.list 里的一项。
+//
+// **比 pane.list 多的那几样是白拿的**：`pane_count` / `tab_count` / `focused` /
+// 聚合过的 `agent_status`（实测那条聚合是「里面最要紧的那个状态」：有 blocked 报
+// blocked、有 working 报 working）。手机上「这个项目里有没有人等我」靠的就是它 ——
+// 不用把几十个 pane 全铺出来自己数。
+type Workspace struct {
+	WorkspaceID string `json:"workspace_id"`
+	Number      int    `json:"number"`
+	Label       string `json:"label"`
+	Focused     bool   `json:"focused"`
+	PaneCount   int    `json:"pane_count"`
+	TabCount    int    `json:"tab_count"`
+	ActiveTabID string `json:"active_tab_id"`
+	AgentStatus string `json:"agent_status"`
+}
+
 type WorkspaceList struct {
-	Workspaces []struct {
-		WorkspaceID string `json:"workspace_id"`
-		Number      int    `json:"number"`
-		Label       string `json:"label"`
-	} `json:"workspaces"`
+	Workspaces []Workspace `json:"workspaces"`
+}
+
+// Tab 是 tab.list 里的一项。**不带 workspace_id 参数调就是全部 workspace 的 tab**
+// （实测），所以一次就能拿到整棵树。
+type Tab struct {
+	TabID       string `json:"tab_id"`
+	WorkspaceID string `json:"workspace_id"`
+	Number      int    `json:"number"`
+	Label       string `json:"label"`
+	Focused     bool   `json:"focused"`
+	PaneCount   int    `json:"pane_count"`
+	AgentStatus string `json:"agent_status"`
 }
 
 type TabList struct {
-	Tabs []struct {
-		TabID  string `json:"tab_id"`
-		Number int    `json:"number"`
-		Label  string `json:"label"`
-	} `json:"tabs"`
+	Tabs []Tab `json:"tabs"`
 }
 
 type readWrap struct {
@@ -331,6 +352,78 @@ func (c *Client) PaneZoom(id, mode string) (*Zoom, error) {
 // 代价要知道：herdr 只给了「拉所有客户端」这一个口子，没有「只拉我这一个」的公开方法
 // （`focus_shell_client_on_tab` 要 client_id，只在客户端自己那条 socket 上认）。所以
 // 手机上点一下，桌面上那个 herdr 窗口也跟着跳过去 —— 这正是 0.9.0 之前的行为。
+// WorkspaceList / TabList 列出工作空间和 tab。
+//
+// 两个都是**只读**的，而且很轻（实测这台机器上 9 个 workspace 1.4KB、51 个 tab 7KB，
+// 比 pane.list 的 30KB 小得多），所以跟着面板一览那一拍一起问，不另开轮询。
+func (c *Client) WorkspaceList() ([]Workspace, error) {
+	var l WorkspaceList
+	err := c.Call("workspace.list", nil, &l)
+	return l.Workspaces, err
+}
+
+func (c *Client) TabList() ([]Tab, error) {
+	var l TabList
+	err := c.Call("tab.list", nil, &l)
+	return l.Tabs, err
+}
+
+// WorkspaceFocus / TabFocus 切过去。
+//
+// **这两个和 pane.focus 一样在 herdr 那张「会把已经连着的客户端一起带过去」的表里**
+// （源码 `explicit_public_focus_target`，见 docs/dev/HERDR-API.md）—— 所以切完画面自己
+// 就跟过来了，不用像 pane.zoom 那样再补一跳。
+func (c *Client) WorkspaceFocus(id string) error {
+	return c.Call("workspace.focus", map[string]any{"workspace_id": id}, nil)
+}
+
+func (c *Client) TabFocus(id string) error {
+	return c.Call("tab.focus", map[string]any{"tab_id": id}, nil)
+}
+
+// WorkspaceCreate 新开一个工作空间。cwd / label 给空就交给 herdr 自己的策略
+// （它按 source_workspace_id 那个 pane 的 cwd 走）。
+//
+// **一律 focus:true**：从手机上新开一个，就是为了去那儿干活 —— 建完不过去的话，人还得
+// 再从列表里找一次，而那正是这条路要省掉的事。
+func (c *Client) WorkspaceCreate(cwd, label string) (string, error) {
+	p := map[string]any{"focus": true}
+	if cwd != "" {
+		p["cwd"] = cwd
+	}
+	if label != "" {
+		p["label"] = label
+	}
+	var w struct {
+		Workspace Workspace `json:"workspace"`
+	}
+	if err := c.Call("workspace.create", p, &w); err != nil {
+		return "", err
+	}
+	return w.Workspace.WorkspaceID, nil
+}
+
+// TabCreate 在某个工作空间里新开一个 tab（workspace 给空 = 当前那个）。
+func (c *Client) TabCreate(workspace, cwd, label string) (string, error) {
+	p := map[string]any{"focus": true}
+	if workspace != "" {
+		p["workspace_id"] = workspace
+	}
+	if cwd != "" {
+		p["cwd"] = cwd
+	}
+	if label != "" {
+		p["label"] = label
+	}
+	var w struct {
+		Tab Tab `json:"tab"`
+	}
+	if err := c.Call("tab.create", p, &w); err != nil {
+		return "", err
+	}
+	return w.Tab.TabID, nil
+}
+
 func (c *Client) PaneFocus(id string) error {
 	var w paneWrap
 	return c.Call("pane.focus", map[string]any{"pane_id": id}, &w)

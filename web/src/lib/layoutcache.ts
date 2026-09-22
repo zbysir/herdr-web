@@ -32,6 +32,8 @@ export interface LayoutCache {
   softkeys?: { lib: SoftKey[]; bar: string[][]; pin?: Pin[] | null }
   /** 顶栏那串 id（**已经过滤过**：认不出的按钮和坏引用不进镜像） */
   topbar?: string[]
+  /** 顶栏两端钉住几个。和 topbar 一起回来的，不一起存的话第一帧钉住的位置会跳一下 */
+  topbarPin?: Pin | null
 }
 
 const strs = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string')
@@ -59,6 +61,8 @@ export function readLayoutCache(): LayoutCache | null {
     }
   }
   if (strs(c.topbar)) out.topbar = c.topbar
+  // 形状对不上就当没有（退回出厂那份）—— 镜像是**只当初值用**的，服务端那份回来照旧整份盖上
+  if (c.topbarPin && typeof c.topbarPin === 'object') out.topbarPin = c.topbarPin
   return out
 }
 

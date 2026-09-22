@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { X } from 'lucide-react'
 import { AArrowDown, AArrowUp, CircleHalf } from '@/icons'
 import type { ProfilesResponse, SoftkeysConfig, State } from '@/lib/api'
-import { BRANDS, HOLD_RATES, POPUP_CLEARS, type BrandId, type HoldRate, type KeyStyle, type PopupClear } from '@/lib/prefs'
+import type { Pin } from '@/lib/api'
+import { BRANDS, HOLD_RATES, PANE_SORTS, POPUP_CLEARS, type BrandId, type HoldRate, type KeyStyle, type PaneSort, type PopupClear } from '@/lib/prefs'
 import { enableNotify, notifyState, testNotify, type NotifyState } from '@/lib/notify'
 import { installState, onInstallChange, promptInstall, type InstallState } from '@/lib/install'
 import { Panel } from './ui/panel'
@@ -63,6 +64,7 @@ const TABS: { id: SettingsTab; label: string }[] = [
 export function SettingsPanel({
   tab, onTab, onClose, opts, setOpt, card, onCard, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs,
   kbdFull, onKbdFull, keyStyle, onKeyStyle, popupClear, onPopupClear, holdRate, onHoldRate,
+  paneSort, onPaneSort,
   enterSend, onEnterSend, live, onLive, rich, onRich,
   heals, onSaved, onTopbar, toast, state,
   fontSize, onFont, chatFont, onChatFont, scheme, onScheme, brand, onBrand, profile, onProfiles,
@@ -99,6 +101,9 @@ export function SettingsPanel({
   /** 方向键按住不放的连发速度（次/秒）。同上 */
   holdRate: HoldRate
   onHoldRate: (v: HoldRate) => void
+  /** 面板一览按什么排（优先级 / 分组）。同上 */
+  paneSort: PaneSort
+  onPaneSort: (v: PaneSort) => void
   /** 发件箱里回车是投稿（true）还是换行。同上 */
   enterSend: boolean
   onEnterSend: (v: boolean) => void
@@ -111,8 +116,10 @@ export function SettingsPanel({
   heals: number
   onSaved: (c: SoftkeysConfig) => void
   /** 顶栏存好了：把新的那一串 id 交回去，顶栏立刻跟着变（不用刷新页面） */
-  /** 顶栏那一串：内置按钮的 id，也可能是 `key:<定义ID>`（「我的按键」上了顶栏） */
-  onTopbar: (items: string[]) => void
+  /** 顶栏那一串：内置按钮的 id，也可能是 `key:<定义ID>`（「我的按键」上了顶栏）；
+      第二个参数是两端钉住几个 —— **别漏掉它**：TS 那边少一个参数照样能赋值，
+      漏了是「存完钉住不生效，刷新一下又对了」这种查不出来的毛病 */
+  onTopbar: (items: string[], pin?: Pin | null) => void
   toast: (m: string) => void
   /** 启动时那次 /api/state 的结果，「终端」页底下当环境信息显示；没拿到就不显示 */
   state?: State | null
@@ -186,6 +193,7 @@ export function SettingsPanel({
           keyStyle={keyStyle} onKeyStyle={onKeyStyle}
           popupClear={popupClear} onPopupClear={onPopupClear}
           holdRate={holdRate} onHoldRate={onHoldRate}
+          paneSort={paneSort} onPaneSort={onPaneSort}
           enterSend={enterSend} onEnterSend={onEnterSend} live={live} onLive={onLive}
           rich={rich} onRich={onRich}
           osFg={osFg} onOSFg={onOSFg} cardMs={cardMs} onCardMs={onCardMs}
@@ -203,7 +211,7 @@ export function SettingsPanel({
 
 function TermSection({
   opts, setOpt, card, onCard, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs, kbdFull, onKbdFull,
-  keyStyle, onKeyStyle, popupClear, onPopupClear, holdRate, onHoldRate,
+  keyStyle, onKeyStyle, popupClear, onPopupClear, holdRate, onHoldRate, paneSort, onPaneSort,
   enterSend, onEnterSend, live, onLive, rich, onRich,
   heals, state, fontSize, onFont, chatFont, onChatFont, scheme, onScheme, brand, onBrand, toast,
 }: {
@@ -228,6 +236,9 @@ function TermSection({
   /** 方向键按住不放的连发速度（次/秒） */
   holdRate: HoldRate
   onHoldRate: (v: HoldRate) => void
+  /** 面板一览按什么排（优先级 / 分组） */
+  paneSort: PaneSort
+  onPaneSort: (v: PaneSort) => void
   /** 发件箱：回车是投稿还是换行 */
   enterSend: boolean
   onEnterSend: (v: boolean) => void
@@ -379,6 +390,48 @@ function TermSection({
       {/* 快捷键条长什么样。**无底色那一档只去掉静息态的底和边** —— 亮着（粘滞 Ctrl、面板
           开着）和二次确认举起来那一下照旧有填充，那是「按下去了必须一眼看见」的状态。
           全都不给底的话，一条无底色的键上分不出哪个是亮着的。 */}
+      {/* 「点 switch 开面板一览」和上面那串终端行为不是一类：它改的是「点 herdr 那个按钮会
+          发生什么」。和下面那个红点一样是「这类设备上顺手不顺手」的偏好（跟着排布那一套走，
+          见 lib/prefs.ts），所以并在同一条线下面。 */}
+      <label className="mt-2 flex cursor-pointer items-start gap-2.5 rounded-md border-t border-line pt-3 transition-colors hover:text-fg">
+        <span className="pt-px">
+          <Checkbox checked={opts.switchPanel} onCheckedChange={(v) => setOpt('switchPanel', !!v)} />
+        </span>
+        <span className="text-[13px]/relaxed">
+          点 herdr 的 switch 就开「面板一览」（手机 / 平板）
+          <span className="mt-0.5 block text-xs text-faint">
+            窄屏时 herdr 顶栏右上角有个 switch 按钮，点开的是它自己那张切换面板。开着这条时，
+            触屏上点它就不再发给 herdr，改开我们的面板一览（一行一个 pane，点一下跳过去并铺满）。
+            代价是 herdr 那张里的「+ new workspace / + new tab / settings / detach」这一路走不到 ——
+            要用就把这条关掉，或者从快捷键条走 herdr 的前缀键。
+          </span>
+        </span>
+      </label>
+
+      {/* 面板一览按什么排。**从面板里搬过来的**：它原来是筛选那一排上的一颗按钮，占着
+          最显眼的位置，而九成人只会用「优先级」那一档 —— 选一次就定了的事不该常驻在
+          「谁在等我」那张表的上面（面板里留下的两个 Agent / 全屏 是真会来回点的）。
+          摆在上面那条「点 switch 开面板一览」下面：讲的是同一块界面。 */}
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-[13px]">
+        面板一览排序
+        <div className="flex overflow-hidden rounded-md border border-line">
+          {PANE_SORTS.map((o) => (
+            <Button
+              key={o.id}
+              size="tiny" on={paneSort === o.id}
+              title={o.hint}
+              className="rounded-none border-0 border-r border-line last:border-r-0"
+              onClick={() => onPaneSort(o.id)}
+            >
+              {o.label}
+            </Button>
+          ))}
+        </div>
+        <span className="text-xs text-faint">
+          「优先级」是要你看的在前（等你 &gt; 完成 &gt; 在跑 &gt; 闲着）；「分组」是按 workspace 铺开，和 herdr 里看到的一样
+        </span>
+      </div>
+
       <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-line pt-3 text-[13px]">
         快捷键条按键
         <div className="flex overflow-hidden rounded-md border border-line">
@@ -507,24 +560,6 @@ function TermSection({
           <span className="mt-0.5 block text-xs text-faint">
             只对 claude / codex 这种有真输入框的 pane 生效 —— 普通 pane 里跑的可能是 vim，
             那里的字符是<b>命令</b>不是文本。开着时别同时在那个 pane 里手敲字
-          </span>
-        </span>
-      </label>
-
-      {/* 「点 switch 开面板一览」和上面那串终端行为不是一类：它改的是「点 herdr 那个按钮会
-          发生什么」。和下面那个红点一样是「这类设备上顺手不顺手」的偏好（跟着排布那一套走，
-          见 lib/prefs.ts），所以并在同一条线下面。 */}
-      <label className="mt-2 flex cursor-pointer items-start gap-2.5 rounded-md border-t border-line pt-3 transition-colors hover:text-fg">
-        <span className="pt-px">
-          <Checkbox checked={opts.switchPanel} onCheckedChange={(v) => setOpt('switchPanel', !!v)} />
-        </span>
-        <span className="text-[13px]/relaxed">
-          点 herdr 的 switch 就开「面板一览」（手机 / 平板）
-          <span className="mt-0.5 block text-xs text-faint">
-            窄屏时 herdr 顶栏右上角有个 switch 按钮，点开的是它自己那张切换面板。开着这条时，
-            触屏上点它就不再发给 herdr，改开我们的面板一览（一行一个 pane，点一下跳过去并铺满）。
-            代价是 herdr 那张里的「+ new workspace / + new tab / settings / detach」这一路走不到 ——
-            要用就把这条关掉，或者从快捷键条走 herdr 的前缀键。
           </span>
         </span>
       </label>

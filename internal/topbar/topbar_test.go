@@ -279,3 +279,101 @@ func TestPruneKeys(t *testing.T) {
 		t.Errorf("内置 id 不该被清掉：拿到 %v", got)
 	}
 }
+
+// TestPinRoundTripAndClamp 钉住存得下、读得回，而且**越界一律夹住不报错**。
+//
+// 夹住这条是有来路的：别的设备上删掉一个「我的按键」会让顶栏变短（PruneKeys），
+// 存着的个数当场越界 —— 那不是谁的 bug，报错只会让人存不下去。
+func TestPinRoundTripAndClamp(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	got, err := s.Save(profiles.Default, Config{Items: []string{"panes", "files", "settings", "chat"}, Pin: &Pin{Left: 1, Right: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Pin == nil || got.Pin.Left != 1 || got.Pin.Right != 1 {
+		t.Fatalf("钉住没存下来：%+v", got.Pin)
+	}
+	if p := s.Load(profiles.Default).Pin; p == nil || p.Left != 1 || p.Right != 1 {
+		t.Fatalf("钉住没读回来：%+v", p)
+	}
+
+	// 越界：4 个按钮却说钉 3+3。左边优先，右边让位
+	got, err = s.Save(profiles.Default, Config{Items: []string{"panes", "files", "settings", "chat"}, Pin: &Pin{Left: 3, Right: 3}})
+	if err != nil {
+		t.Fatalf("越界该夹住而不是报错：%v", err)
+	}
+	if got.Pin.Left != 3 || got.Pin.Right != 1 {
+		t.Fatalf("该夹成 3+1，拿到 %+v", got.Pin)
+	}
+
+	// 一个都不钉 = 文件里不留这个字段
+	got, err = s.Save(profiles.Default, Config{Items: []string{"panes", "settings"}, Pin: &Pin{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Pin != nil {
+		t.Fatalf("一个都没钉该是 nil，拿到 %+v", got.Pin)
+	}
+}
+
+// TestMigrateChat 一次性迁移：没有 chat 的补一个钉在最右，**已经有的一个字不动**，
+// 而且**只跑一次** —— 人把它删掉之后不该又长回来（那条靠文件里的 v，不是靠 pin 是不是空）。
+func TestMigrateChat(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	body := `{"items":["panes","settings"],"profiles":{"default":{"items":["panes","settings"]},"p2":{"items":["chat","panes","settings"]}}}`
+	if err := os.WriteFile(filepath.Join(s.Dir, "topbar.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Migrate(); err != nil {
+		t.Fatal(err)
+	}
+	c := s.Load(profiles.Default)
+	if strings.Join(c.Items, ",") != "panes,settings,chat" {
+		t.Fatalf("该在末尾补一个 chat，拿到 %v", c.Items)
+	}
+	if c.Pin == nil || c.Pin.Right != 1 {
+		t.Fatalf("补上的 chat 该钉在右边，拿到 %+v", c.Pin)
+	}
+	// 已经有 chat 的那一套：顺序和钉住都不该被动过（人家自己排过了）
+	p2 := s.Load("p2")
+	if strings.Join(p2.Items, ",") != "chat,panes,settings" {
+		t.Fatalf("已经有 chat 的那一套不该动，拿到 %v", p2.Items)
+	}
+	if p2.Pin != nil {
+		t.Fatalf("已经有 chat 的那一套不该被钉上，拿到 %+v", p2.Pin)
+	}
+
+	// 人把 chat 删掉 + 钉住调回 0，再跑一次迁移：不该又长回来
+	if _, err := s.Save(profiles.Default, Config{Items: []string{"panes", "settings"}, Pin: &Pin{}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Migrate(); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Load(profiles.Default).Items; strings.Join(got, ",") != "panes,settings" {
+		t.Fatalf("删掉的 chat 不该再长回来，拿到 %v", got)
+	}
+}
+
+// TestPrunePinClamped 删定义让顶栏变短时，钉住的个数要跟着夹 —— 不夹的话尾几个
+// 「钉住」会悄悄圈进本来跟着滑的那几个。
+func TestPrunePinClamped(t *testing.T) {
+	s := &Store{Dir: t.TempDir(), Keys: func() map[string]bool { return map[string]bool{"k1": true, "k2": true} }}
+	if _, err := s.Save(profiles.Default, Config{
+		Items: []string{"panes", "key:k1", "key:k2", "settings"},
+		Pin:   &Pin{Right: 3},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// k1 / k2 都被删了（别的设备上）
+	if err := s.PruneKeys(map[string]bool{}); err != nil {
+		t.Fatal(err)
+	}
+	c := s.Load(profiles.Default)
+	if strings.Join(c.Items, ",") != "panes,settings" {
+		t.Fatalf("引用该清掉，拿到 %v", c.Items)
+	}
+	if c.Pin == nil || c.Pin.Right != 2 {
+		t.Fatalf("钉住该夹成 2，拿到 %+v", c.Pin)
+	}
+}

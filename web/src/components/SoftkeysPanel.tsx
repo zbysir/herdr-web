@@ -113,6 +113,17 @@ export function SoftkeysPanel({
   const [err, setErr] = useState('')
   /** 选中的那个定义（id），下面那条编辑它 */
   const [selId, setSelId] = useState<string | null>(null)
+  /**
+   * 条上**选中的那一格**（哪一行、第几个）。手机上不用拖的那条路，和顶栏编辑器同一套。
+   *
+   * **它是位置不是定义 id**：同一个定义在条上可以出现好几次（Esc 两行各放一个是常见
+   * 排法），拿 id 当选中就成了「点第二行那个 Esc，挪的是第一行那个」。
+   *
+   * 为什么非做不可：这块面板在手机上高度有限，库和条分成两屏 —— 从下面按住一个键拖到
+   * 上面那一行，中间要滚屏，而拿起来之后页面是不滚的（见 lib/chipdrag）。也就是说
+   * **手机上拖这条路本来就走不通**（用户报的）。拖留着给桌面。
+   */
+  const [spot, setSpot] = useState<At | null>(null)
 
   const take = (c: SoftkeysConfig) => {
     // send 回填成**用户写的按键谱**：服务端回来的 send 是解析好的字节（Tab 是 "\t"），
@@ -185,6 +196,55 @@ export function SoftkeysPanel({
       next[ti].splice(i, 0, id)
       return next
     })
+  }
+
+  /**
+   * 把选中那一格挪到本行第 to 个。工具条上的 ← → / 最前 / 最后 都走这儿 ——
+   * `to` 是**目标下标**（不是插入位），「往左一格」直接写成 i-1 就行。
+   */
+  const moveSpot = (to: number) => {
+    if (!spot || !isRow(spot.zone)) return
+    const ri = spot.zone - 1
+    const len = bar[ri]?.length ?? 0
+    const t = Math.max(0, Math.min(to, len - 1))
+    if (t === spot.i) return
+    setBar((prev) => {
+      const next = prev.map((r) => [...r])
+      const [x] = next[ri].splice(spot.i, 1)
+      next[ri].splice(t, 0, x)
+      return next
+    })
+    setSpot({ zone: spot.zone, i: t })
+  }
+
+  /**
+   * 把**库里选中的那个定义**放到条上：插在选中那一格后面，没选中就放到那一行末尾。
+   *
+   * 库里那份不动（条上存的是引用），所以同一个键能放好几处 —— 这正是「库 / 排布」
+   * 分开的意义。
+   */
+  const addToRow = (z: 1 | 2) => {
+    if (!selId) return
+    const i = spot && spot.zone === z ? spot.i + 1 : (bar[z - 1]?.length ?? 0)
+    putInRow(z, i, selId)
+    setSpot({ zone: z, i })
+  }
+
+  /**
+   * 条上选中那一格的**已窄化**形态：哪一行（1/2）、第几个、那一行多长。
+   *
+   * 单独算一份是给 TS 看的 —— `spot.zone` 是 `1|2|'lib'|'group'`，而窄化过不了 JSX 里
+   * 那几个闭包（state 的属性访问每次都要重新判断）。顺带也让下面那排少写几遍长表达式。
+   */
+  const spotRow = spot && isRow(spot.zone)
+    ? { z: spot.zone, i: spot.i, len: bar[spot.zone - 1]?.length ?? 0 }
+    : null
+
+  /** 从条上拿下来（定义还在库里）。选中那一格跟着清掉 —— 后面几个会整体前移 */
+  const removeSpot = () => {
+    if (!spot) return
+    dropFromRow(spot)
+    setSpot(null)
   }
 
   /** 落一次拖动 */
@@ -260,7 +320,12 @@ export function SoftkeysPanel({
     elOf: (z) => zoneEl.current[z],
     slots: isSlots, // 弹出组的格子是定长网格，落哪一格就是哪一格
     onDrop: drop,
-    onTap: (a) => setSelId(at(a.zone, a.i)?.id ?? null), // 没拿起来就松手 = 选中它，下面那条改它
+    // 没拿起来就松手 = 点一下。库里点是「选中这个定义」（下面那条改它），
+    // 条上点还要记住**是哪一格**（下面那排 ← → 挪的就是它）
+    onTap: (a) => {
+      setSelId(at(a.zone, a.i)?.id ?? null)
+      setSpot(isRow(a.zone) ? a : null)
+    },
   })
 
   /** 键盘也要能排：← → 本筐里挪，↑ ↓ 换筐，Delete 从条上拿下来 / 在库里删掉 */
@@ -478,11 +543,16 @@ export function SoftkeysPanel({
                 data-chip
                 role="button"
                 tabIndex={0}
-                className={chipCls(selId === k.id)}
+                className={cn(
+                  chipCls(selId === k.id),
+                  // 条上选中的那一格：描一圈。**不能只靠 selId** —— 同一个定义在条上可能
+                  // 有好几处，那样会一起亮，而工具条挪的只有一处
+                  spot?.zone === zone && spot.i === i && 'ring-2 ring-brand/50',
+                )}
                 title={
                   zone === 'lib'
-                    ? `${kindOf(k)} —— 点一下改它，按住拖到上面就上条（库里这个还在）`
-                    : `${kindOf(k)}${k.confirm ? '（要点两下）' : ''} —— 按住拖动排序，✕ 从条上拿下来`
+                    ? `${kindOf(k)} —— 点一下选中（下面能改它、也能加到条上），按住拖到上面也行`
+                    : `${kindOf(k)}${k.confirm ? '（要点两下）' : ''} —— 点一下选中这一格（下面那排挪位置），✕ 拿下来`
                 }
                 onPointerDown={(e) => onChipDown(e, { zone, i })}
                 onKeyDown={(e) => onChipKey(e, { zone, i })}
@@ -672,11 +742,100 @@ export function SoftkeysPanel({
         <SaveButton size="tiny" onSave={save}>保存</SaveButton>
       </div>
 
-      <div className="flex flex-col gap-2">
-        {box(1, rows === 2 ? '第一行' : '按键', '从下面「我的按键」拖上来', bar[0]?.length ?? 0)}
-        {rows === 2 && box(2, '第二行', '拖上来的键排在第二行', bar[1]?.length ?? 0)}
+      {/*
+        条那一两行**粘在分页条下面**（`top-[46px]` 是那个 nav 的高度，见 SettingsPanel
+        里那三个 `-top-2 / -mt-2 / pt-2` 的注释 —— 改了那边要改这儿）。
 
-        {/* 钉住：每行两端不跟着横滑的那几个。控件放在行下面，因为它管的是**那一行** */}
+        为什么：库很长（载入预设之后六十多个），在手机上挑的时候条早就滚出屏幕了。而
+        **手机上拖根本走不通**（拿起来之后页面不滚，见 spot 那段），所以点一下加进去之后
+        必须当场看得见结果，不然人只能来回滚着确认。
+      */}
+      <div className="sticky top-[46px] z-1 -mx-4 bg-bar px-4 pb-1">
+        <div className="flex flex-col gap-2">
+          {box(1, rows === 2 ? '第一行' : '按键', '从下面「我的按键」点一个加上来', bar[0]?.length ?? 0)}
+          {rows === 2 && box(2, '第二行', '加上来的键排在第二行', bar[1]?.length ?? 0)}
+        </div>
+
+        {/*
+          这一排覆盖两种状态，位置固定不跳：
+
+            · 选中条上某一格 → 挪它 / 拿下来
+            · 只在库里选中一个定义 → 把它加到第几行
+
+          全程点，不用拖。两种都没有时整排不画（一排灰按钮白占一行，而这块面板在手机上
+          最缺的就是高度）。
+        */}
+        {(spot || selId) && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 pl-[52px] text-xs max-md:pl-0">
+            {spotRow ? (
+              <>
+                <span className="truncate text-muted">
+                  {rows === 2 ? `第${spotRow.z === 1 ? '一' : '二'}行 ` : ''}第 {spotRow.i + 1} 个
+                </span>
+                <div className="flex overflow-hidden rounded-md border border-line">
+                  <Button
+                    size="tiny" className="rounded-none border-0 border-r border-line px-2"
+                    disabled={spotRow.i <= 0} title="往左挪一格" onClick={() => moveSpot(spotRow.i - 1)}
+                  >
+                    ←
+                  </Button>
+                  <Button
+                    size="tiny" className="rounded-none border-0 px-2"
+                    disabled={spotRow.i >= spotRow.len - 1}
+                    title="往右挪一格" onClick={() => moveSpot(spotRow.i + 1)}
+                  >
+                    →
+                  </Button>
+                </div>
+                <Button size="tiny" disabled={spotRow.i <= 0} title="挪到最左边" onClick={() => moveSpot(0)}>最前</Button>
+                <Button
+                  size="tiny" disabled={spotRow.i >= spotRow.len - 1}
+                  title="挪到最右边" onClick={() => moveSpot(spotRow.len - 1)}
+                >
+                  最后
+                </Button>
+                {rows === 2 && (
+                  <Button
+                    size="tiny"
+                    title={`搬到第${spotRow.z === 1 ? '二' : '一'}行末尾`}
+                    onClick={() => {
+                      const other: 1 | 2 = spotRow.z === 1 ? 2 : 1
+                      const id = at(spotRow.z, spotRow.i)?.id
+                      if (!id) return
+                      dropFromRow({ zone: spotRow.z, i: spotRow.i })
+                      const i = bar[other - 1]?.length ?? 0
+                      putInRow(other, i, id)
+                      setSpot({ zone: other, i })
+                    }}
+                  >
+                    换行
+                  </Button>
+                )}
+                <Button size="tiny" title="从条上拿下来（定义还在库里）" onClick={removeSpot}>拿下来</Button>
+                <Button size="tiny" className="ml-auto" title="取消选中" onClick={() => setSpot(null)}>取消</Button>
+              </>
+            ) : (
+              <>
+                <span className="truncate text-muted">「{sel?.label || sel?.send || '这个键'}」</span>
+                {Array.from({ length: rows }, (_, ri) => (
+                  <Button
+                    key={ri}
+                    size="tiny"
+                    title={rows === 2 ? `加到第${ri === 0 ? '一' : '二'}行` : '加到条上'}
+                    onClick={() => addToRow((ri + 1) as 1 | 2)}
+                  >
+                    {rows === 2 ? `加到第${ri === 0 ? '一' : '二'}行` : '加到条上'}
+                  </Button>
+                ))}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* 钉住：每行两端不跟着横滑的那几个。控件放在行下面，因为它管的是**那一行**。
+          留在粘顶那一块**外面** —— 它是设一次就不动的，不值得一直占着屏幕顶上那点高度 */}
+      <div className="mt-1.5 flex flex-col gap-2">
         {Array.from({ length: rows }, (_, ri) => pinRow(ri))}
       </div>
 
@@ -851,8 +1010,11 @@ export function SoftkeysPanel({
                       [&_strong]:font-medium [&_strong]:text-fg">
         <p className="mb-1 font-medium text-fg">怎么用</p>
         <ul className="mb-3 ml-3.5 list-disc space-y-0.5">
-          <li>库里的键<strong>点一下改它</strong>，<strong>按住拖到上面</strong>就上条。
-            条上的 ✕ 只是拿下来，同一个键两行各放一个也行。</li>
+          <li>库里的键<strong>点一下选中</strong> —— 下面能改它，上面那排「加到第…行」把它放上条。
+            同一个键两行各放一个也行（条上存的是引用，库里那份不动）。</li>
+          <li>条上<strong>点一格选中它</strong>，上面那排 <code>←</code> <code>→</code> <code>最前</code>
+            <code>最后</code> <code>换行</code> 挪位置、<code>拿下来</code> 从条上去掉 —— 手机上不用拖。</li>
+          <li>桌面上<strong>按住拖</strong>更快：库里拖上来能直接放到指定位置，条上拖是排序，拖回库里是拿下来。</li>
           <li>改一处定义，条上（和顶栏上）所有引用一起变。</li>
           <li><strong>图标</strong>：挑一个内置的，再选摆哪儿（只图标 / 图标+字 / 字+图标）。
             名字一直留着。</li>

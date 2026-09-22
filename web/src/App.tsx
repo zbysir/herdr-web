@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Maximize, Minimize } from './icons'
-import { api, deviceKind, filesApi, libMap, resolveRows, SESSION, topbarKeyRef, UNAUTHED, type ClipResult, type FileStat, type Notice, type ProfilesResponse, type RowSegments, type SoftKey, type SoftkeysConfig, type SoftkeysResponse, type State, type TopbarResponse, type UnauthedDetail, type WhoAmI } from '@/lib/api'
-import { applyBrand, applyPrefs, brandId, composeEnter, composeRich, holdRate, keyStyle, popupClear, pushPref, type BrandId, type HoldRate, type KeyStyle, type PopupClear } from '@/lib/prefs'
+import { api, deviceKind, filesApi, libMap, resolveRows, SESSION, spaceApi, topbarKeyRef, topbarSegments, UNAUTHED, type ClipResult, type FileStat, type Notice, type Pin, type ProfilesResponse, type RowSegments, type SoftKey, type SoftkeysConfig, type SoftkeysResponse, type State, type TopbarResponse, type UnauthedDetail, type WhoAmI } from '@/lib/api'
+import { applyBrand, applyPrefs, brandId, composeEnter, composeRich, holdRate, keyStyle, panesSort, popupClear, pushPref, type BrandId, type HoldRate, type KeyStyle, type PaneSort, type PopupClear } from '@/lib/prefs'
 import { cacheLayout, readLayoutCache } from '@/lib/layoutcache'
 import { readClipboard, writeClipboard } from '@/lib/clipboard'
 import { Session } from '@/term/session'
+import { stripLineAnchor } from '@/term/paths'
 import { initialScheme, type Scheme } from '@/term/themes'
 import { useViewportHeight } from '@/hooks/useViewportHeight'
 import { useCompose } from '@/hooks/useCompose'
@@ -26,10 +27,11 @@ import { Softkeys } from '@/components/Softkeys'
 import { Compose } from '@/components/Compose'
 import { SettingsPanel, type SettingsTab, type TermOpts } from '@/components/SettingsPanel'
 import { PaneSwitcher, paneZoomPref } from '@/components/PaneSwitcher'
-import { CAP_BY_ID, TOPBAR_DEFAULT, type CapId, type PanelId } from '@/capabilities'
+import { CAP_BY_ID, TOPBAR_DEFAULT, TOPBAR_PIN_DEFAULT, type CapId, type PanelId } from '@/capabilities'
 
 /** chat 模式开着没有（localStorage）。模式熬不过刷新就不叫模式 */
 const LS_CHAT = 'chatOpen'
+
 
 /**
  * 对话区字号夹在这个范围里，出厂 13（原来写死的那个值）。
@@ -407,6 +409,9 @@ export default function App() {
   // 长按连发多快（次/秒）。这个 state **只为了设置面板上那排按钮亮哪一个** —— 真正用它的
   // 地方是在 pointerdown 里现读镜像的（见 hooks/useHold），不经过 React
   const [holdRateS, setHoldRateS] = useState<HoldRate>(holdRate)
+  // 面板一览按什么排。和上面那几个一样，这个 state **只为了设置面板上那排按钮亮哪一个** ——
+  // 面板一览自己是打开那一下现读镜像的（见 PaneSwitcher），两块界面互斥，不会同时开着
+  const [paneSortS, setPaneSortS] = useState<PaneSort>(panesSort)
   /** 「跑完了」那种卡片挂多久（ms）；0 = 一直挂着。「等你回答」的永远挂着，不受这个管 */
   const [noticeMs, setNoticeMs] = useState(
     () => Number(localStorage.getItem('noticeCardMs') ?? AUTO_MS_DEFAULT) || 0,
@@ -441,6 +446,12 @@ export default function App() {
    * 那个入口也不在，连改都没法改）。
    */
   const [topbar, setTopbar] = useState<string[]>(() => CACHED?.topbar ?? TOPBAR_DEFAULT)
+  /**
+   * 顶栏两端**钉住几个**（不跟着横滑）。和 `topbar` 一起从同一个口回来，所以一起进镜像 ——
+   * 只存 items 不存 pin 的话，第一帧钉住的位置是出厂那份、响应回来整条栏跳一下，
+   * 正是当初做镜像要治的那个「刷新页面顶部始终闪动」。
+   */
+  const [topbarPin, setTopbarPin] = useState<Pin | null>(() => CACHED?.topbarPin ?? TOPBAR_PIN_DEFAULT)
   /**
    * 这台设备用哪一套排布（profile，见 internal/profiles）。
    *
@@ -639,17 +650,42 @@ export default function App() {
     blurInput() // 终端里点路径那条路（触屏那层不让浏览器改焦点，键盘会一直挂着）
     const seq = ++openSeq.current
     setOpening(raw)
-    try {
-      const s = await filesApi.stat(raw, cwdRef.current || undefined)
-      if (seq !== openSeq.current) return // 取消过了 / 又点了别的
-      setOpening(null)
-      if (s.info.dir) openFiles(s.info.path)
-      else setViewing(s)
-    } catch (e) {
-      if (seq !== openSeq.current) return
-      setOpening(null)
-      toast((e as Error).message)
+    /*
+      **先按原样问一次，找不到再把行号锚点剥掉重试。**
+
+      agent 引用一个位置时很爱把行号挂在路径后面：markdown 链接里是 `…VIDEO.md#L21`
+      （chat 那条路），编译错误 / grep 输出里是 `main.go:42:7`。那几位**不是文件名的
+      一部分**，原样 stat 一定找不到 —— 用户报的就是这个（「这个文件是存在的，只是它
+      有 # 号」）。
+
+      顺序不能反：**文件名里真的可以有 `#`**（`notes#1.md` 是合法文件名），先剥再问的话
+      那种文件永远打不开，而且报的错和现在这条一模一样。先原样问一次就两种都对，代价是
+      失败时多一次 stat —— 只在打不开的那一下发生。
+
+      报错用**后一次**的（剥过锚点那次）：人看到的路径和他心里想打开的那个一致。
+
+      终端里那条路（term/paths.ts）自己剥 `:42` 行号，但下划线的范围要跟原文对齐，
+      所以 `#L21` 那种留在这儿统一处理 —— 一处修，三个入口（终端 / chat / 改动）都好。
+    */
+    const tries = [raw]
+    const bare = stripLineAnchor(raw)
+    if (bare && bare !== raw) tries.push(bare)
+    let err: Error | null = null
+    for (const one of tries) {
+      try {
+        const s = await filesApi.stat(one, cwdRef.current || undefined)
+        if (seq !== openSeq.current) return // 取消过了 / 又点了别的
+        setOpening(null)
+        if (s.info.dir) openFiles(s.info.path)
+        else setViewing(s)
+        return
+      } catch (e) {
+        if (seq !== openSeq.current) return
+        err = e as Error
+      }
     }
+    setOpening(null)
+    toast(err?.message ?? '打不开这个路径')
   }, [openFiles, toast])
 
   /**
@@ -932,9 +968,11 @@ export default function App() {
   }, [])
 
   /** 顶栏那串 id 同理：读回来和编辑器存完都走这一条，顺手更新第一帧用的镜像 */
-  const applyTopbar = useCallback((items: string[]) => {
+  const applyTopbar = useCallback((items: string[], pin?: Pin | null) => {
     setTopbar(items)
-    cacheLayout({ topbar: items })
+    // pin 不传 = 这一次只改了顺序（老调用方），钉住那份不动
+    if (pin !== undefined) setTopbarPin(pin)
+    cacheLayout(pin === undefined ? { topbar: items } : { topbar: items, topbarPin: pin })
   }, [])
 
   const loadLayout = useCallback(async () => {
@@ -946,7 +984,7 @@ export default function App() {
       // 认不出的直接跳过（服务端不该给，防一手 —— 新版本存的配置在旧前端上读到过）。
       // `key:` 引用只查形状：那个定义在不在，渲染时拿 keyLib 查（服务端读盘也不核，
       // 见 internal/topbar 的包注释）
-      applyTopbar(tb.items.filter((id) => CAP_BY_ID.has(id as CapId) || !!topbarKeyRef(id)))
+      applyTopbar(tb.items.filter((id) => CAP_BY_ID.has(id as CapId) || !!topbarKeyRef(id)), tb.pin ?? null)
     } catch { /* 拿不到就用出厂顺序，顶栏不能空 */ }
   }, [])
 
@@ -971,6 +1009,7 @@ export default function App() {
     setKeyStyleS(keyStyle())
     setPopupClearS(popupClear())
     setHoldRateS(holdRate())
+    setPaneSortS(panesSort())
     setLive(lsBool('composeLive', false))
     setEnterSend(composeEnter())
     setRich(composeRich())
@@ -1402,6 +1441,43 @@ export default function App() {
     return (p.tab || p.id) + (p.agent ? ` · ${p.agent}` : '')
   }
 
+  /**
+   * 切到一个工作空间（面板一览顶上那一行）。
+   *
+   * **不弹成功提示**：切过去之后那一行上的「当前」和终端画面自己就变了，那本身就是反馈
+   * —— 和 gotoPane 在 chat 模式下不弹同一条道理。失败照旧要说（静默失败最难查）。
+   *
+   * 切完**立刻重拉一次列表**：herdr 那边 focused 变了，而这一拍本来要等 1.5 秒，
+   * 那段时间里「当前」还标在老地方，看着像没切过去。
+   */
+  const gotoSpace = async (to: { workspace?: string; tab?: string }) => {
+    try {
+      await spaceApi.goto(to)
+      reloadPanes()
+    } catch (e) {
+      toast(`切不过去：${(e as Error).message}`)
+    }
+  }
+
+  /**
+   * 新开一个 tab / 工作空间，**建完就过去**（herdr 那边 focus:true）。
+   *
+   * 这是这块界面上唯一会改状态的事，而且只加不减 —— 关掉 / 改名没有入口
+   * （docs/dev/TUI-VS-GUI.md §2①）。建完**关掉面板**：人新开一个就是要去那儿干活，
+   * 留着面板盖住的正是刚开出来的那一屏。
+   */
+  const newSpace = async (b: { new: 'tab' | 'workspace'; workspace?: string; cwd?: string; label?: string }) => {
+    try {
+      const r = await spaceApi.create(b)
+      setPanel(null)
+      reloadPanes()
+      // 起过名字就报名字（那是人刚敲进去的东西），没起就报 herdr 给的 id
+      toast(`已新开${b.new === 'tab' ? ' tab' : '工作空间'}「${b.label || r.id}」`)
+    } catch (e) {
+      toast(`新开不了：${(e as Error).message}`)
+    }
+  }
+
   const gotoPane = async (id: string, zoom: boolean) => {
     // 浮层照旧收掉（挑完了就该让路）。**chat 不在这个槽里，所以不受影响** ——
     // 它是个模式，切 pane 不该退出（用户报过两次）。
@@ -1663,6 +1739,34 @@ export default function App() {
     )
   }
 
+  /**
+   * 顶栏上的一格。认不出的 id、指到空处的 `key:` 引用、这个部署关掉的功能一律**整项不画**
+   * （不是画一个空 span —— 外面有 gap-1，空 span 会留下一道说不清来路的缝）。
+   *
+   * 抽出来是因为顶栏现在分三段（钉左 / 滑 / 钉右），三段画的是同一种格子。
+   */
+  const topbarBtn = (item: string) => {
+    // 「我的按键」：定义此刻不在（在别的设备上删掉了）就整项跳过，别画一个点了没反应的
+    // 方块。服务端读盘故意不核这个，见 internal/topbar 的包注释
+    const ref = topbarKeyRef(item)
+    if (ref) {
+      const k = keyLib.get(ref)
+      const el = k && keyBtn(item, k)
+      return el ? <span key={item} className="shrink-0">{el}</span> : null
+    }
+    const it = CAP_BY_ID.get(item as CapId)
+    const act = topbarAct[item as CapId]
+    if (!it || !act || act.hide) return null
+    return (
+      <span key={item} className="shrink-0">
+        {iconBtn(act.title ?? `${it.label}：${it.hint}`, !!act.on, act.run, act.icon ?? it.icon, undefined, act.dot, act.tone)}
+      </span>
+    )
+  }
+
+  /** 顶栏切成三段（钉左 / 跟着滑 / 钉右）。个数在这儿也夹一次，见 topbarSegments */
+  const topSeg = topbarSegments(topbar, topbarPin)
+
   // 还在查凭据：什么都别渲染。这一步是本机调用，快到看不见；而要是先把主界面铺出来，
   // 就会白建一个 Session —— 服务端那边等于白起一个登录 shell、还按 HERDR_WEB_ONCONNECT
   // 敲一遍 herdr，whoami 一回来又立刻拆掉。
@@ -1815,31 +1919,29 @@ export default function App() {
             一行不换行、放不下自己横滑 —— 和手机上的快捷键条一个做法。换行的话顶栏会长出
             第二行，白吃掉两行终端；而「拖上去的按钮被藏起来」是最难解释的一种行为，
             所以这儿一个都不藏（原来字号 ± / 明暗在手机竖屏是 CSS 藏掉的，去掉了）。 */}
-        <div
-          data-testid="topbar-items"
-          className="flex min-w-0 shrink items-center gap-1 overscroll-contain
-                     [scrollbar-width:none] flex-nowrap overflow-x-auto [&::-webkit-scrollbar]:hidden"
-        >
-          {topbar.map((item) => {
-            // 「我的按键」：定义此刻不在（在别的设备上删掉了）就整项跳过，别画一个
-            // 点了没反应的方块。服务端读盘故意不核这个，见 internal/topbar 的包注释
-            const ref = topbarKeyRef(item)
-            if (ref) {
-              const k = keyLib.get(ref)
-              // 整项都不画（不是画一个空的 span）—— 外面那层有 gap-1，空 span 会留下一道
-              // 说不清来路的缝
-              const el = k && keyBtn(item, k)
-              return el ? <span key={item} className="shrink-0">{el}</span> : null
-            }
-            const it = CAP_BY_ID.get(item as CapId)
-            const act = topbarAct[item as CapId]
-            if (!it || !act || act.hide) return null
-            return (
-              <span key={item} className="shrink-0">
-                {iconBtn(act.title ?? `${it.label}：${it.hint}`, !!act.on, act.run, act.icon ?? it.icon, undefined, act.dot, act.tone)}
-              </span>
-            )
-          })}
+        {/* **三段**：钉左 / 跟着滑 / 钉右。钉住的那两段 `shrink-0`，只有中间那段滚
+            —— 和快捷键条那一行是同一个做法（见 lib/api.ts 的 topbarSegments / resolveRows）。
+            为什么要这一档：顶栏放不下就横滑，而「切进对话流」「呼键盘」这种最常按的
+            一滑走就等于没有。出厂钉的是尾一个（chat），个数在设置 →「顶栏」里改。 */}
+        {/* **整块占满剩余宽度**（flex-1），里面滑动那段也 grow —— 这样钉右那几个贴的是
+            **屏幕右边**，不是「内容的右边」。少了这两个 grow，按钮不够多时右段就紧跟在
+            滑动段后面挤在左边，钉不钉右看不出区别（用户报的「还是从左到右排列」）。 */}
+        <div className="flex min-w-0 flex-1 items-center gap-1">
+          {topSeg.left.length > 0 && (
+            <div className="flex shrink-0 items-center gap-1">{topSeg.left.map(topbarBtn)}</div>
+          )}
+          <div
+            data-testid="topbar-items"
+            className="flex min-w-0 flex-1 items-center gap-1 overscroll-contain
+                       [scrollbar-width:none] flex-nowrap overflow-x-auto [&::-webkit-scrollbar]:hidden"
+          >
+            {topSeg.scroll.map(topbarBtn)}
+          </div>
+          {topSeg.right.length > 0 && (
+            <div data-testid="topbar-pinned" className="flex shrink-0 items-center gap-1">
+              {topSeg.right.map(topbarBtn)}
+            </div>
+          )}
         </div>
       </header>
       )}
@@ -1897,10 +1999,13 @@ export default function App() {
         {panesOpen && (
           <PaneSwitcher
             panes={compose.panes}
+            spaces={compose.spaces}
             watching={compose.watching}
             onClose={() => setPanel(null)}
             onGoto={(id, zoom) => void gotoPane(id, zoom)}
             onReload={reloadPanes}
+            onSpace={(to) => void gotoSpace(to)}
+            onNew={(b) => void newSpace(b)}
           />
         )}
         {filesOpen && (
@@ -1981,6 +2086,8 @@ export default function App() {
             onPopupClear={(v) => { setPopupClearS(v); pushPref(profile.id, 'popupClear', String(v), toast) }}
             holdRate={holdRateS}
             onHoldRate={(v) => { setHoldRateS(v); pushPref(profile.id, 'holdRate', String(v), toast) }}
+            paneSort={paneSortS}
+            onPaneSort={(v) => { setPaneSortS(v); pushPref(profile.id, 'panesSort', v, toast) }}
             enterSend={enterSend}
             onEnterSend={(v) => { setEnterSend(v); pushPref(profile.id, 'composeEnter', v ? 'send' : 'newline', toast) }}
             rich={rich}

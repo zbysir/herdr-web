@@ -483,7 +483,11 @@ func writeAskQs(t *testing.T, st *transcript.Store, slug, id string, qs []askQ) 
 	for i, q := range qs {
 		options := make([]map[string]any, 0, len(q.opts))
 		for _, o := range q.opts {
-			options = append(options, map[string]any{"label": o})
+			opt := map[string]any{"label": o}
+			if q.preview {
+				opt["preview"] = "┌──┐\n│ " + o + " │\n└──┘"
+			}
+			options = append(options, opt)
 		}
 		questions = append(questions, map[string]any{
 			"header": fmt.Sprintf("题%d", i+1), "question": fmt.Sprintf("第 %d 问？", i+1),
@@ -505,6 +509,8 @@ func writeAskQs(t *testing.T, st *transcript.Store, slug, id string, qs []askQ) 
 type askQ struct {
 	multi bool
 	opts  []string
+	// preview 这一题的选项带预览图（TUI 里换成左右分栏，数字键只移光标 —— 见 askKeys）
+	preview bool
 }
 
 func writeAsk(t *testing.T, st *transcript.Store, slug, id string, opts []string, multi, answered bool) {
@@ -592,33 +598,52 @@ func TestChatAnswerKeys(t *testing.T) {
 	}{
 		{
 			"单题单选（老前端那条 index 路）：只发序号，不补提交键",
-			[]askQ{{false, []string{"a", "b", "c"}}},
+			[]askQ{{multi: false, opts: []string{"a", "b", "c"}}},
 			`{"pane":"p1","index":1}`,
 			[]string{"2"},
 		},
 		{
 			"单题单选（picks 路）",
-			[]askQ{{false, []string{"a", "b", "c"}}},
+			[]askQ{{multi: false, opts: []string{"a", "b", "c"}}},
 			`{"pane":"p1","picks":[[2]]}`,
 			[]string{"3"},
 		},
 		{
 			"两题单选：两个序号 + 一个提交键",
-			[]askQ{{false, []string{"a", "b"}}, {false, []string{"x", "y", "z"}}},
+			[]askQ{{multi: false, opts: []string{"a", "b"}}, {multi: false, opts: []string{"x", "y", "z"}}},
 			`{"pane":"p1","picks":[[1],[0]]}`,
 			[]string{"2", "1", "1"},
 		},
 		{
 			"单题多选：两个序号 + tab 翻页 + 提交键",
-			[]askQ{{true, []string{"a", "b", "c"}}},
+			[]askQ{{multi: true, opts: []string{"a", "b", "c"}}},
 			`{"pane":"p1","picks":[[0,2]]}`,
 			[]string{"1", "3", "tab", "1"},
 		},
 		{
 			"多选在前、单选在后：多选那题要 tab，单选那题自己跳",
-			[]askQ{{true, []string{"a", "b", "c"}}, {false, []string{"x", "y"}}},
+			[]askQ{{multi: true, opts: []string{"a", "b", "c"}}, {multi: false, opts: []string{"x", "y"}}},
 			`{"pane":"p1","picks":[[0,2],[1]]}`,
 			[]string{"1", "3", "tab", "2", "1"},
+		},
+		{
+			// 带 preview 的题在 TUI 里是左右分栏：数字键**只把光标移过去**，enter 才算选中
+			// 并跳到下一题。漏了这一下是完全静默的（回 200、界面说成功，而一题都没提交，
+			// TUI 停在原地）—— 用户报的那次就是这个形状：四题全单选，中间一题带 preview。
+			"带 preview 的单选：序号后面要补一下 enter",
+			[]askQ{
+				{multi: false, opts: []string{"a", "b"}},
+				{multi: false, opts: []string{"x", "y"}, preview: true},
+				{multi: false, opts: []string{"m", "n"}},
+			},
+			`{"pane":"p1","picks":[[0],[1],[0]]}`,
+			[]string{"1", "2", "enter", "1", "1"},
+		},
+		{
+			"单题单选 + preview：序号 + enter 就提交了，不补 Submit 那一下",
+			[]askQ{{multi: false, opts: []string{"a", "b", "c"}, preview: true}},
+			`{"pane":"p1","picks":[[2]]}`,
+			[]string{"3", "enter"},
 		},
 	} {
 		s, store, keys := chatServerKeys(t, true, askPanes())
@@ -659,7 +684,7 @@ func TestChatAnswerKeys(t *testing.T) {
 // 选择给得不对时**一个键都不许发**：发了一半停在半填的选择器上，比什么都没发更糟
 // （Submit 页要求全答完）。
 func TestChatAnswerRejectsBadPicks(t *testing.T) {
-	two := []askQ{{false, []string{"a", "b"}}, {true, []string{"x", "y"}}}
+	two := []askQ{{multi: false, opts: []string{"a", "b"}}, {multi: true, opts: []string{"x", "y"}}}
 	for _, tc := range []struct{ why, body string }{
 		{"少给一题", `{"pane":"p1","picks":[[0]]}`},
 		{"某题一个都没选", `{"pane":"p1","picks":[[0],[]]}`},

@@ -152,6 +152,12 @@ func New(cfg *config.Config, web fs.FS, a *auth.Store, g *auth.Gate, opt Options
 	// 那个定义还在不在，而 topbar 那个包**故意不 import softkeys**（两个文件两个口），
 	// 所以在这儿把线接上。
 	s.Topbar.Keys = s.Softkeys.LibIDs
+	// 一次性迁移：给还没有 chat 的那几套补一个 chat 钉在最右（见 topbar.Migrate）。
+	// **必须在这儿跑**，在任何一次保存之前 —— 保存会把文件版本推到当前版，跑在后面
+	// 就永远轮不到。失败只记一行：迁移不成不该拦着服务起来，顶栏照旧能用。
+	if err := s.Topbar.Migrate(); err != nil {
+		log.Printf("顶栏配置迁移没成（不影响使用）：%v", err)
+	}
 	// 看 diff 复用同一个 Files：那是唯一的鉴权点（HERDR_WEB_FILES=0 / FILE_ROOTS 一起生效，
 	// 见 internal/gitdiff 的包注释）。关掉这项就干脆不建 Runner —— Enabled() 为假，
 	// 前端不画那个按钮，三个口一律 404。
@@ -502,7 +508,7 @@ func (s *Server) apiTopbar(w http.ResponseWriter, r *http.Request) {
 	prof := s.profileOf(r)
 	out := func(c topbar.Config) {
 		writeJSON(w, 200, map[string]any{
-			"items": c.Items, "actions": topbar.Actions, "pinned": topbar.Pinned,
+			"items": c.Items, "pin": c.Pin, "actions": topbar.Actions, "pinned": topbar.Pinned,
 			"max": topbar.MaxItems, "profile": prof,
 		})
 	}
@@ -567,7 +573,7 @@ func (s *Server) apiHerdr(w http.ResponseWriter, r *http.Request, seg []string) 
 	}
 	switch {
 	case seg[1] == "panes" && r.Method == http.MethodGet:
-		list, err := sess.outbox.ListTargets()
+		list, spaces, err := sess.outbox.ListTargets()
 		if err != nil {
 			fail(w, 400, err)
 			return
@@ -577,6 +583,9 @@ func (s *Server) apiHerdr(w http.ResponseWriter, r *http.Request, seg []string) 
 		body := map[string]any{
 			"panes": list, "socket": sess.socket, "session": sess.name,
 			"watching": sess.watching(),
+			// 工作空间那一层跟着同一拍走（数据来自同一批调用，见 outbox.ListTargets）。
+			// 它也进下面那个指纹 —— 指纹算的是**整份报文**，所以加字段不用改那儿
+			"spaces": spaces,
 		}
 		/*
 			**没变就只回一个指纹**（`?rev=` 带上次那个，一样就回 `{rev, same:true}`）。
@@ -615,6 +624,48 @@ func (s *Server) apiHerdr(w http.ResponseWriter, r *http.Request, seg []string) 
 		}
 		out, err := sess.outbox.Goto(b.Target, b.Zoom == nil || *b.Zoom)
 		respond(w, out, err)
+
+	/*
+		工作空间那一层：**切过去**，或者**新开一个** tab / 工作空间。
+
+		为什么值得一个口（TUI-VS-GUI.md 的判据）：手机上换项目只能在几十行 pane 里翻
+		（实测 9 个工作空间 / 51 个 tab / 56 个 pane），而按键那条通道只说得出「下一个」；
+		新开一个 tab 更是只能盲敲前缀键。两件都是「能力在协议里，只是键盘表达不出来」。
+
+		**这个口只发得出四种形状**：workspace.focus / tab.focus / tab.create /
+		workspace.create。请求里给的是 id 和 cwd，不是按键、也不是要跑的命令 —— 和
+		chat 那个 answer 口一个道理（见 chatapi.go）。
+
+		**会改状态的只有「新开」那两下，而且都是加东西**：关掉 / 改名 / 换顺序**没有**
+		留入口（herdr 的协议全给得到）—— 那几件是不可逆的（workspace.close 连里面跑着的
+		agent 一起没），而不可逆的事留在终端里，见 docs/dev/TUI-VS-GUI.md §2①。
+	*/
+	case seg[1] == "space" && r.Method == http.MethodPost:
+		var b struct {
+			Workspace string // 切到这个工作空间
+			Tab       string // 切到这个 tab
+			New       string // "tab" / "workspace"：新开一个（建完就过去）
+			CWD       string
+			Label     string
+		}
+		if err := readJSON(r, &b); err != nil {
+			fail(w, 400, err)
+			return
+		}
+		if b.New != "" {
+			id, err := sess.outbox.SpaceNew(b.New, b.Workspace, b.CWD, b.Label)
+			if err != nil {
+				fail(w, 400, err)
+				return
+			}
+			writeJSON(w, 200, map[string]any{"id": id, "kind": b.New})
+			return
+		}
+		if err := sess.outbox.SpaceGoto(b.Workspace, b.Tab); err != nil {
+			fail(w, 400, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
 
 	// 提示：agent 变成「等你回答」/「跑完了」时攒下的那些（右上角那个弹窗 + 面板图标上的
 	// 红点）。`since` 是上一拍拿到的 seq，做增量 —— 不带就把环里还留着的都给你。

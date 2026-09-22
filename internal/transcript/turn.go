@@ -55,6 +55,18 @@ type Turn struct {
 	// 这儿给的是**绝对时刻**而不是「多少秒前」：显示一个钟点不需要做差，所以手机和这台
 	// 机器的时钟偏差不影响它（和 Secs 那个正相反，那个必须服务端算）。
 	DoneAt string `json:"doneAt,omitempty"`
+	// Idle agent 最后一次落笔到**现在**多少秒。**服务端算的**（和 Secs 同理：手机和这台
+	// 机器的时钟差几分钟是常事，前端拿 DoneAt 减 Date.now() 会得出一个看着像真的错数字）。
+	//
+	// 界面上它答的是「我现在看的这段，是不是已经旧了」。有两种情况非它不可：
+	//
+	//   - codex 的 `/clear`：**不新建 rollout、旧文件也不再长**，而 herdr 的
+	//     `agent_session` 要等新会话写盘才更新（hook 挂在 SessionStart 上，而 codex 的
+	//     clear 不触发它）—— 这段窗口里 chat 显示的是**已经作废的上一段对话**，而数据
+	//     层面没有任何东西能认出这件事（实测：没有结束标记，`.codex` 下也没有「当前活跃
+	//     会话」的记录）。能做的就是把「最后更新是多久以前」摆出来让人自己判断。
+	//   - 回头看一个昨天的会话：同一条信息，顺带也有用。
+	Idle int `json:"idle,omitempty"`
 	// Tokens 这一轮吐出来多少 token（只算输出，和 claude 自己那条状态行的 `↓` 一致）。
 	Tokens int `json:"tokens,omitempty"`
 	// Effort 这一轮的思考档位（claude 的 `effort`，如 `xhigh`）。拿不到就空着。
@@ -235,7 +247,7 @@ func (c *claudeTurn) line(raw []byte) bool {
 
 func (c *claudeTurn) turn() *Turn {
 	return &Turn{
-		Secs: since(c.startAt), Ran: span(c.startAt, c.lastAt), DoneAt: stamp(c.lastAt),
+		Secs: since(c.startAt), Ran: span(c.startAt, c.lastAt), DoneAt: stamp(c.lastAt), Idle: since(c.lastAt),
 		Tokens: c.tokens, Effort: c.effort, Model: c.model,
 	}
 }
@@ -304,7 +316,7 @@ func (c *codexTurn) turn() *Turn {
 		n = 0 // 累计变小了（换了会话之类）—— 给 0 而不是负数
 	}
 	return &Turn{
-		Secs: since(c.startAt), Ran: span(c.startAt, c.lastAt), DoneAt: stamp(c.lastAt),
+		Secs: since(c.startAt), Ran: span(c.startAt, c.lastAt), DoneAt: stamp(c.lastAt), Idle: since(c.lastAt),
 		Tokens: n, Model: c.model,
 	}
 }
