@@ -6,6 +6,8 @@ import { cacheLayout, readLayoutCache } from '@/lib/layoutcache'
 import { readClipboard, writeClipboard } from '@/lib/clipboard'
 import { Session } from '@/term/session'
 import { stripLineAnchor } from '@/term/paths'
+import { LOCK_CLS, STICKY_HINT } from '@/lib/sticky'
+import type { StickyState } from '@/term/session'
 import { initialScheme, type Scheme } from '@/term/themes'
 import { useViewportHeight } from '@/hooks/useViewportHeight'
 import { useCompose } from '@/hooks/useCompose'
@@ -157,7 +159,8 @@ export default function App() {
   // 说「后端没在跑」，弹配对页只会让人以为是凭据坏了。
   const [gate, setGate] = useState<'checking' | 'ok' | 'pair' | 'reauth'>('checking')
   const [heals, setHeals] = useState(0)
-  const [sticky, setSticky] = useState({ ctrl: false, alt: false })
+  /** 粘滞修饰键的三档（关 / 一次性 / 锁住），见 term/session.ts 的 StickyMode */
+  const [sticky, setSticky] = useState<StickyState>({ ctrl: 'off', alt: 'off' })
   const [kbdUp, setKbdUp] = useState(false)
   const [scheme, setScheme] = useState<Scheme>(initialScheme)
   const [brand, setBrand] = useState<BrandId>(brandId)
@@ -1712,13 +1715,16 @@ export default function App() {
         variant={keyStyle() === 'plain' ? 'keyPlain' : 'key'}
         // 按住不放就连发（方向键那几个）。**一下点照旧走 onClick**，理由同快捷键条
         {...hold.bind(canHold(k) ? () => sess.current?.sendKey(k.send!) : null)}
-        on={isGroup ? openGroup?.item === item : (k.sticky ? sticky[k.sticky] : !!ta?.on)}
+        // 粘滞键：once 和 lock 都算「亮着」，两者的差别画在 LOCK_CLS 那条小横杠上
+        on={isGroup ? openGroup?.item === item : (k.sticky ? sticky[k.sticky] !== 'off' : !!ta?.on)}
         title={up ? '再点一次才真的发出去'
           : isGroup ? `${k.label}：点开一小片键（浮在下面，不占顶栏的地方）`
-            : `${k.label} —— ${k.spec || k.sticky || k.act || ''}${k.confirm ? '（要点两下）' : ''}`}
+            : k.sticky ? `${k.label} —— ${STICKY_HINT[sticky[k.sticky]]}`
+              : `${k.label} —— ${k.spec || k.act || ''}${k.confirm ? '（要点两下）' : ''}`}
         className={cn('relative',
           // 举起来只换颜色，**不换文字**：改字会让按键变宽，手指底下的键当场挪位置
-          up && 'border-bad bg-bad text-white hover:border-bad hover:bg-bad')}
+          up && 'border-bad bg-bad text-white hover:border-bad hover:bg-bad',
+          k.sticky && sticky[k.sticky] === 'lock' && LOCK_CLS)}
         onMouseDown={(e) => e.preventDefault()}
         onClick={(e) => {
           if (hold.swallow()) return          // 刚按住连发过，这一下是松手补的 click

@@ -10,6 +10,8 @@ import { canHold, useHold } from '@/hooks/useHold'
 import { keyStyle } from '@/lib/prefs'
 import { keyFace } from '@/keyicons'
 import { cn } from '@/lib/utils'
+import { LOCK_CLS, STICKY_HINT } from '@/lib/sticky'
+import type { StickyState } from '@/term/session'
 
 /**
  * 快捷键条：**只出键本身**，外壳（边框 / 宽度 / 高度 / 把手）归底部面板管（见 Dock）。
@@ -37,7 +39,8 @@ export function Softkeys({
 }: {
   /** 每行三段（已按 id 解析好、个数也夹过）。一到两行。见 lib/api.ts 的 resolveRows */
   rows: RowSegments[]
-  sticky: { ctrl: boolean; alt: boolean }
+  /** 粘滞修饰键的三档（关 / 一次性 / 锁住），见 term/session.ts 的 StickyMode */
+  sticky: StickyState
   onSend: (bytes: string) => void
   onSticky: (which: 'ctrl' | 'alt') => void
   /**
@@ -103,7 +106,9 @@ export function Softkeys({
     // 这个部署没有这项（比如服务端关掉了文件浏览）：整个键不画。
     // 画出来点了没反应比没有这个键更糟
     if (a?.hide) return null
-    const on = k.sticky ? sticky[k.sticky] : !!a?.on
+    // 粘滞键：once 和 lock 都算「亮着」，差别画在下面那条 lockCls 上
+    const mode = k.sticky ? sticky[k.sticky] : undefined
+    const on = mode ? mode !== 'off' : !!a?.on
     const up = armed === at   // 举起来了，等第二下
     return (
       <Button
@@ -124,11 +129,13 @@ export function Softkeys({
           // 长键的字就直接漏到边框外面去（用户报的）。条本来就是横滑的，压窄没有任何好处。
           'relative shrink-0',
           up && 'border-bad bg-bad text-white hover:border-bad hover:bg-bad',
+          mode === 'lock' && LOCK_CLS,
         )}
         title={up ? '再点一次才真的发出去'
           : isGroup ? `${k.label}：点开一小片键（浮在上面，不占条上的地方）`
             // 挑了图标之后条上不画字了，名字得进 title —— 否则那个键是什么全靠猜
-            : `${k.icon ? `${k.label} —— ` : ''}${k.spec || k.sticky || k.act || ''}${k.confirm ? '（要点两下）' : ''}`}
+            : k.sticky ? `${k.label} —— ${STICKY_HINT[mode ?? 'off']}`
+              : `${k.icon ? `${k.label} —— ` : ''}${k.spec || k.act || ''}${k.confirm ? '（要点两下）' : ''}`}
         // 这一个不能顺手 focus 终端，否则没法收起键盘
         onMouseDown={(e) => e.preventDefault()}
         onClick={(e) => {

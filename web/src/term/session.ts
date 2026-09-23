@@ -99,6 +99,26 @@ const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
  */
 const ATLAS_CLEAR_PAGES = 8
 
+/**
+ * 粘滞修饰键（Ctrl / Alt）的三档：
+ *
+ *	off   没按着
+ *	once  **下一个键**生效，发完自动松开 —— 物理键盘上「按住 Ctrl 再敲一下」的等价物
+ *	lock  一直按着，直到再点一下关掉
+ *
+ * 为什么要第三档（用户点名的）：`Ctrl+C` 常常要连按好几下（打断一个不听话的进程），
+ * 而 once 每发一次就松开，等于每按一次 C 都要先去点一次 Ctrl。手机上那是两倍的点击，
+ * 而且两个键离得远。
+ *
+ * 为什么 once 仍然是默认那一档：绝大多数修饰键组合就发一次（`Ctrl+D`、`Ctrl+Z`），
+ * 让它自动松开才不会把后面敲的字都变成控制字符 —— 「锁住了忘关」是这类键最常见的翻车。
+ */
+export type StickyMode = 'off' | 'once' | 'lock'
+export type StickyState = Record<'ctrl' | 'alt', StickyMode>
+
+/** 点一下走到下一档 */
+const NEXT_STICKY: Record<StickyMode, StickyMode> = { off: 'once', once: 'lock', lock: 'off' }
+
 const THAW_GRACE = 120 // 新画面画上之后再多盖一会儿 —— 那一帧还是旧内容，herdr 的 SIGWINCH 重绘还在路上
 const THAW_CAP = 500 // 一直等不到重绘也得撤，别糊着一张旧图不放
 const THAW_FADE = 200 // 淡出时长，跟内联的 transition 对齐
@@ -126,7 +146,7 @@ export class Session {
   private ws: WebSocket | null = null
   private caps = new Map<string, Cap>()
   private kitty = { flags: 0, stack: [] as number[] }
-  private sticky = { ctrl: false, alt: false }
+  private sticky: StickyState = { ctrl: 'off', alt: 'off' }
   private scheme: Scheme
   private alive = false
   private exited = false
@@ -492,36 +512,46 @@ export class Session {
 
   // 手机的虚拟键盘不一定给出可靠的 keydown，所以粘滞修饰键在数据层做
   private applySticky(d: string) {
-    if (!this.sticky.ctrl && !this.sticky.alt) return d
+    const ctrl = this.sticky.ctrl !== 'off'
+    const alt = this.sticky.alt !== 'off'
+    if (!ctrl && !alt) return d
     if (d.length !== 1) {
-      this.setSticky('ctrl', false)
-      this.setSticky('alt', false)
+      // 多字符（粘贴、输入法上屏）不套修饰符：`\x03` 只对单个字符有意义。
+      // **一次性的那档到此为止，锁住的留着** —— 锁住就是「我要连着用」
+      this.dropOnce()
       return d
     }
     let out = d
-    if (this.sticky.ctrl) {
+    if (ctrl) {
       const c = d.toLowerCase().charCodeAt(0)
       if (c >= 97 && c <= 122) out = String.fromCharCode(c - 96)
       else if (d === ' ') out = '\x00'
       else if ('[\\]^_'.includes(d)) out = String.fromCharCode(d.charCodeAt(0) - 64)
       else if (d === '?') out = '\x7f'
     }
-    if (this.sticky.alt) out = '\x1b' + out
-    this.setSticky('ctrl', false)
-    this.setSticky('alt', false)
+    if (alt) out = '\x1b' + out
+    this.dropOnce()
     return out
   }
 
-  private stickyListener: ((s: { ctrl: boolean; alt: boolean }) => void) | null = null
-  onSticky(fn: (s: { ctrl: boolean; alt: boolean }) => void) {
+  /** 发完一个键：**只清「一次性」那档**，锁住的留着（见 StickyMode） */
+  private dropOnce() {
+    for (const k of ['ctrl', 'alt'] as const) {
+      if (this.sticky[k] === 'once') this.setSticky(k, 'off')
+    }
+  }
+
+  private stickyListener: ((s: StickyState) => void) | null = null
+  onSticky(fn: (s: StickyState) => void) {
     this.stickyListener = fn
   }
-  setSticky(which: 'ctrl' | 'alt', on: boolean) {
-    this.sticky[which] = on
+  setSticky(which: 'ctrl' | 'alt', mode: StickyMode) {
+    this.sticky[which] = mode
     this.stickyListener?.({ ...this.sticky })
   }
+  /** 点一下：关 → 一次性 → 锁住 → 关。见 StickyMode */
   toggleSticky(which: 'ctrl' | 'alt') {
-    this.setSticky(which, !this.sticky[which])
+    this.setSticky(which, NEXT_STICKY[this.sticky[which]])
   }
 
   /**
@@ -605,7 +635,7 @@ export class Session {
     this.thaw(true) // 冻帧是上一个 shell 的画面，reset 之后留着只会误导
     this.term.reset()
     this.kitty = { flags: 0, stack: [] }
-    this.sticky = { ctrl: false, alt: false }
+    this.sticky = { ctrl: 'off', alt: 'off' }
     this.stickyListener?.({ ...this.sticky })
     this.caps.clear()
     this.paintHeals = 0
