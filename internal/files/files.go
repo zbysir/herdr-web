@@ -171,6 +171,7 @@ func (b *Browser) Check(p string) error {
 const (
 	KindDir     = "dir"
 	KindImage   = "image"   // 魔数认出来的 png/jpg/gif/webp，能 inline 渲染
+	KindVideo   = "video"   // 魔数认出来的 mp4/mov/webm/mkv/3gp，走 <video> 播（见 VideoType）
 	KindText    = "text"    // 采样看着像 UTF-8 文本，走 /api/files/text 预览
 	KindBinary  = "binary"  // 只能下载
 	KindSpecial = "special" // 设备 / socket / fifo —— 列出来但打不开
@@ -192,6 +193,70 @@ func imageMIME(b []byte) string {
 		return "image/webp"
 	}
 	return ""
+}
+
+// VideoType 按**魔数**认视频，给出 MIME 和落盘用的扩展名；认不出给两个空串。
+//
+// 上传那条路（internal/uploads）和看文件那条路共用这一份 —— 图片那边是两份平行的
+// 魔数表，这儿别再抄第二份：视频的判据比图片绕（见下面 ftyp 那段），两份迟早对不上，
+// 表现是「传得上去、点开却说是二进制」或者反过来。
+//
+// **能 inline 放是安全的**：`video/*` 配着 `nosniff` + `sandbox` CSP，浏览器只会把它交给
+// 媒体管线，不会当文档解析 —— 和「吐内容那条路绝不能是 text/html」那条规矩不冲突。
+//
+// 两种容器：
+//
+//   - ISO BMFF（mp4 / mov / m4v / 3gp）：第 4..8 字节是 `ftyp`，后面跟主品牌 + 兼容品牌表。
+//     **HEIC / AVIF 也是这个容器**（iPhone 的照片就是），所以先按主品牌排掉那几种图片，
+//     再看主品牌或任一兼容品牌是不是视频那一族 —— 只看主品牌会漏掉一些手机录出来的
+//     怪品牌（兼容表里照样写着 isom / mp42）。
+//   - EBML（webm / mkv）：`1A 45 DF A3` 开头，DocType 写在头部里，是 `webm` 就是 webm。
+func VideoType(b []byte) (mime, ext string) {
+	if len(b) >= 4 && b[0] == 0x1a && b[1] == 0x45 && b[2] == 0xdf && b[3] == 0xa3 {
+		if bytes.Contains(b[:min(len(b), 64)], []byte("webm")) {
+			return "video/webm", "webm"
+		}
+		return "video/x-matroska", "mkv"
+	}
+	if len(b) < 12 || !bytes.Equal(b[4:8], []byte("ftyp")) {
+		return "", ""
+	}
+	major := string(b[8:12])
+	if heifBrand[major] {
+		return "", "" // 那是照片（HEIC / AVIF），不是视频
+	}
+	brands := []string{major}
+	// ftyp 盒子的长度在前 4 字节（大端）；主品牌之后是 4 字节的次版本号，再后面是兼容品牌
+	end := int(uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3]))
+	end = min(end, len(b))
+	for i := 16; i+4 <= end; i += 4 {
+		brands = append(brands, string(b[i:i+4]))
+	}
+	for _, br := range brands {
+		switch {
+		case br == "qt  ":
+			return "video/quicktime", "mov"
+		case strings.HasPrefix(br, "3gp") || strings.HasPrefix(br, "3g2"):
+			return "video/3gpp", "3gp"
+		case mp4Brand[br]:
+			return "video/mp4", "mp4"
+		}
+	}
+	return "", ""
+}
+
+// heifBrand ftyp 容器里「这其实是张图」的那几个主品牌。
+var heifBrand = map[string]bool{
+	"heic": true, "heix": true, "heim": true, "heis": true, "hevc": true, "hevx": true,
+	"heif": true, "mif1": true, "msf1": true, "avif": true, "avis": true,
+}
+
+// mp4Brand 常见的 mp4 家族品牌。手机录的视频主品牌多半是 isom / mp42，
+// 剩下这些是编码器和系统各自爱写的。
+var mp4Brand = map[string]bool{
+	"isom": true, "iso2": true, "iso3": true, "iso4": true, "iso5": true, "iso6": true,
+	"mp41": true, "mp42": true, "avc1": true, "M4V ": true, "M4VH": true, "M4VP": true,
+	"mmp4": true, "MSNV": true, "dash": true, "f4v ": true, "XAVC": true,
 }
 
 // SVGMIME 单独拎出来：HTTP 那层要认它来决定发哪条 CSP（见 server/filesapi.go）。
@@ -249,11 +314,15 @@ var textExt = map[string]bool{
 
 var imageExt = map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true, ".svg": true}
 
+var videoExt = map[string]bool{".mp4": true, ".m4v": true, ".mov": true, ".webm": true, ".mkv": true, ".3gp": true}
+
 func extKind(name string) string {
 	ext := strings.ToLower(filepath.Ext(name))
 	switch {
 	case imageExt[ext]:
 		return KindImage
+	case videoExt[ext]:
+		return KindVideo
 	case textExt[ext]:
 		return KindText
 	// 没有扩展名的常见是 README / Makefile / Dockerfile 这类纯文本
@@ -431,6 +500,8 @@ func (b *Browser) Peek(p string) (*Info, error) {
 
 	if mime := imageMIME(head); mime != "" {
 		out.Kind, out.Mime = KindImage, mime
+	} else if mime, _ := VideoType(head); mime != "" {
+		out.Kind, out.Mime = KindVideo, mime
 	} else if isSVG(head) {
 		out.Kind, out.Mime = KindImage, SVGMIME
 	} else if looksText(head, n == sniffLen) {

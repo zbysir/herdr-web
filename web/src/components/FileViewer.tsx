@@ -130,9 +130,9 @@ export function FileViewer({
           )}
           {url && (
             <Button variant="ghost" size="icon" asChild
-              title={info.kind === 'image' ? '在新标签打开（那儿能长按存到相册）' : '下载'}>
+              title={info.kind === 'image' || info.kind === 'video' ? '在新标签打开（那儿能长按存到相册）' : '下载'}>
               <a href={url} target="_blank" rel="noopener noreferrer">
-                {info.kind === 'image' ? <ExternalLink className="size-4" /> : <Download className="size-4" />}
+                {info.kind === 'image' || info.kind === 'video' ? <ExternalLink className="size-4" /> : <Download className="size-4" />}
               </a>
             </Button>
           )}
@@ -147,7 +147,7 @@ export function FileViewer({
         </div>
       </div>
 
-      <div className={cn('min-h-0 flex-1 overflow-auto overscroll-contain', info.kind === 'image' && 'grid place-items-center bg-black/20 p-2')}>
+      <div className={cn('min-h-0 flex-1 overflow-auto overscroll-contain', (info.kind === 'image' || info.kind === 'video') && 'grid place-items-center bg-black/20 p-2')}>
         {err && <Note bad>{err}</Note>}
 
         {info.kind === 'image' && url && (
@@ -176,6 +176,21 @@ export function FileViewer({
           />
         )}
 
+        {info.kind === 'video' && url && (
+          // 走短时签名链接（和图一样），服务端按魔数给真 MIME + 支持 Range —— 拖进度条、
+          // iOS 那种分段请求都靠它。**`playsInline` 别去掉**：iPhone 上没它会一点就强制全屏，
+          // 退出来整个查看器的状态就丢了。`preload="metadata"`：几百 MB 的录屏别一打开就整份拉
+          // （这条是穿隧道走蜂窝网络的），先拿到时长和首帧，点播放才真的读
+          <video
+            src={url}
+            controls
+            playsInline
+            preload="metadata"
+            onError={() => void renew()}
+            className="max-h-full max-w-full"
+          />
+        )}
+
         {info.kind === 'text' && !err && (
           text ? (
             <>
@@ -192,7 +207,7 @@ export function FileViewer({
           <Note>
             这是二进制文件，页面里没法预览 —— 上面那个下载按钮把它取下来。
             <br />
-            （只有认出来的图才会在页面里渲染：png / jpg / gif / webp 按魔数认，SVG 按开头认。
+            （只有认出来的图和视频才会在页面里放：png / jpg / gif / webp / mp4 / mov / webm 按魔数认，SVG 按开头认。
             别的一律当附件下载 —— 从本站的源上渲染一个 agent 写的文件，就等于让它跑在这个页面里。）
           </Note>
         )}

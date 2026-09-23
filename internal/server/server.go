@@ -707,18 +707,11 @@ func (s *Server) apiHerdr(w http.ResponseWriter, r *http.Request, seg []string) 
 		out, err := sess.outbox.Draft(b.Target, b.Text)
 		respond(w, out, err)
 
-	// 图片落盘，返回绝对路径 —— 前端把路径插进提示词，agent 自己去读文件
+	// 图片 / 视频落盘，返回绝对路径 —— 前端把路径插进提示词，agent 自己去读文件。
+	// **流式**：body 直接交给 SaveReader 边读边写（视频几百 MB，别整份读进内存），
+	// 上限按类型在那边定（图 25 MB / 视频 512 MB）
 	case seg[1] == "upload" && r.Method == http.MethodPost:
-		buf, err := io.ReadAll(io.LimitReader(r.Body, uploads.MaxBytes+1))
-		if err != nil {
-			fail(w, 400, err)
-			return
-		}
-		if len(buf) > uploads.MaxBytes {
-			fail(w, 400, errf("上传超过上限 25 MB"))
-			return
-		}
-		out, err := s.Uploads.Save(buf)
+		out, err := s.Uploads.SaveReader(r.Body)
 		respond(w, out, err)
 
 	default:

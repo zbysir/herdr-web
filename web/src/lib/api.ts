@@ -167,16 +167,33 @@ export const api = {
   post: <T>(p: string, b?: unknown) => req<T>('POST', p, b),
   put: <T>(p: string, b?: unknown) => req<T>('PUT', p, b),
   del: <T>(p: string) => req<T>('DELETE', p),
-  /** 上传裸字节（图片），不走 JSON。 */
-  async upload(blob: Blob) {
-    return handle<UploadResult>(
-      await fetch(url('/herdr/upload'), {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { ...CSRF, 'content-type': blob.type || 'application/octet-stream' },
-        body: blob,
-      }),
-    )
+  /**
+   * 上传裸字节（图片 / 视频），不走 JSON。
+   *
+   * **走 XHR 不走 fetch**：fetch 拿不到上传进度，而视频动辄几百 MB、从手机穿隧道上行要
+   * 好几分钟 —— 那段时间界面上一动不动，就是「点了没反应」，人会再点一次（又传一份）。
+   * 错误照 `handle()` 那一套解析（401 照样发 UNAUTHED、服务端的中文错误原样给出去）。
+   */
+  upload(blob: Blob, onProgress?: (sent: number, total: number) => void) {
+    return new Promise<UploadResult>((resolve, reject) => {
+      const x = new XMLHttpRequest()
+      x.open('POST', url('/herdr/upload')) // 同源相对路径：cookie 自己会带上，和 fetch 的 same-origin 一样
+      for (const [k, v] of Object.entries(CSRF)) x.setRequestHeader(k, v)
+      x.setRequestHeader('content-type', blob.type || 'application/octet-stream')
+      if (onProgress) x.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded, e.total) }
+      x.onerror = () => reject(new ApiError('网络断了，没传上去', 0))
+      x.onload = () => {
+        let j: { error?: string; reason?: string; need?: 'passkey' } & Partial<UploadResult> = {}
+        try { j = JSON.parse(x.responseText) } catch {
+          // 不是 JSON：多半是前面那层反代挡的（比如 413 请求体太大），不是我们的口回的
+          j = { error: x.status === 413 ? '文件太大，被前面那层代理拒了（413）' : `HTTP ${x.status}` }
+        }
+        if (x.status === 401) dispatchEvent(new CustomEvent<UnauthedDetail>(UNAUTHED, { detail: { need: j.need } }))
+        if (x.status < 200 || x.status >= 300) reject(new ApiError(j.error ?? `HTTP ${x.status}`, x.status, j.reason))
+        else resolve(j as UploadResult)
+      }
+      x.send(blob)
+    })
   },
 }
 
@@ -306,7 +323,16 @@ export interface PaneInfo {
 export interface SyncResult extends PaneInfo { text?: string; noBox?: boolean }
 export interface SayResult extends PaneInfo { chars: number; lines: number; cleared: { rounds: number; empty: boolean | null } }
 export interface DraftResult extends PaneInfo { pushed?: number; skipped?: 'not-agent' | 'busy' | 'no-box' }
-export interface UploadResult { path: string; name: string; bytes: number; kind: string; dir: string }
+export interface UploadResult {
+  path: string
+  name: string
+  bytes: number
+  /** 落盘的扩展名：png / jpg / mp4 / mov … */
+  kind: string
+  /** 图还是视频（服务端按魔数认的）。附件上的记号按它挑，别去猜扩展名 */
+  media?: 'image' | 'video'
+  dir: string
+}
 /** GET /api/clip：跑 herdr 那台机器的剪贴板（herdr 的复制落在那儿，不是浏览器里）。 */
 export interface ClipResult { text: string; bytes: number }
 
@@ -371,7 +397,7 @@ export interface NoticesResult {
  * **服务端按内容认，不按扩展名** —— 目录列表里的 kind 是按扩展名猜的（两千个文件
  * 不可能一个个读魔数），真打开时会重新认一次，所以列表里的图标偶尔会和实际不符。
  */
-export type FileKind = 'dir' | 'image' | 'text' | 'binary' | 'special'
+export type FileKind = 'dir' | 'image' | 'video' | 'text' | 'binary' | 'special'
 
 export interface FileEntry {
   name: string

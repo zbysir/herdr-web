@@ -135,7 +135,9 @@ export function ComposeRich({
     chip.title = `${r.name} · 点一下预览`
     chip.className = 'mx-0.5 inline-flex max-w-[9rem] items-center gap-1 truncate rounded '
       + 'border border-brand/40 bg-brand/12 px-1 align-[-2px] text-[11.5px] text-brand'
-    chip.textContent = `🖼 ${r.name}`
+    // 视频换个记号：chip 上一眼要分得出挂的是哪种（投出去之后 agent 对两者的处理不一样 ——
+    // 图它能直接看，视频要自己跑 ffmpeg）
+    chip.textContent = `${r.media === 'video' ? '🎞' : '🖼'} ${r.name}`
 
     const sel = getSelection()
     const at = sel && sel.rangeCount ? sel.getRangeAt(0) : null

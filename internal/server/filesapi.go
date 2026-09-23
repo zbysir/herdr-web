@@ -226,7 +226,10 @@ func (s *Server) handleFileRaw(w http.ResponseWriter, r *http.Request) {
 	// 这是别人磁盘上的文件，可能是任何东西 —— 别让它留在共用设备的磁盘缓存里。
 	// 票本来就只活十几分钟，缓存也没多少意义。
 	h.Set("cache-control", "no-store, private")
-	if info.Kind == files.KindImage {
+	if info.Kind == files.KindImage || info.Kind == files.KindVideo {
+		// 视频也 inline：`<video>` 要真 MIME 才肯放（octet-stream 在 Safari 上直接不播），
+		// 而 `video/*` 配 nosniff + sandbox 只会进媒体管线，不会被当文档解析。
+		// Range 靠下面的 ServeContent —— 拖进度条、iOS 的分段请求都要它。
 		h.Set("content-type", info.Mime)
 		h.Set("content-disposition", disposition("inline", info.Name))
 		if info.Mime == files.SVGMIME {

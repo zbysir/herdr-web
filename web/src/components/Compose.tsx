@@ -82,8 +82,8 @@ export function Compose({
         <button
           type="button"
           onClick={onDropAtt}
-          title={`带了 ${atts} 张图 · 点一下去掉最后一张（路径投出去时自动拼上）`}
-          aria-label={`带了 ${atts} 张图，点一下去掉最后一张`}
+          title={`带了 ${atts} 个附件（图 / 视频）· 点一下去掉最后一个（路径投出去时自动拼上）`}
+          aria-label={`带了 ${atts} 个附件，点一下去掉最后一个`}
           className="flex h-8 shrink-0 items-center gap-1 rounded-md border border-brand/40 bg-brand/12
                      px-1.5 text-xs text-brand"
         >

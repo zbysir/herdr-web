@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Maximize, Minimize } from './icons'
-import { api, deviceKind, filesApi, libMap, resolveRows, SESSION, spaceApi, topbarKeyRef, topbarSegments, UNAUTHED, type ClipResult, type FileStat, type Notice, type Pin, type ProfilesResponse, type RowSegments, type SoftKey, type SoftkeysConfig, type SoftkeysResponse, type State, type TopbarResponse, type UnauthedDetail, type WhoAmI } from '@/lib/api'
+import { api, deviceKind, filesApi, libMap, resolveRows, SESSION, spaceApi, topbarKeyRef, topbarSegments, UNAUTHED, type ClipResult, type FileStat, type Notice, type Pin, type ProfilesResponse, type RowSegments, type SoftKey, type SoftkeysConfig, type SoftkeysResponse, type State, type TopbarResponse, type UnauthedDetail, type UploadResult, type WhoAmI } from '@/lib/api'
 import { applyBrand, applyPrefs, brandId, composeEnter, composeRich, holdRate, keyStyle, panesSort, popupClear, pushPref, type BrandId, type HoldRate, type KeyStyle, type PaneSort, type PopupClear } from '@/lib/prefs'
 import { cacheLayout, readLayoutCache } from '@/lib/layoutcache'
 import { readClipboard, writeClipboard } from '@/lib/clipboard'
 import { Session } from '@/term/session'
 import { stripLineAnchor } from '@/term/paths'
+import { isImage, isVideo } from '@/hooks/useCompose'
 import { LOCK_CLS, STICKY_HINT } from '@/lib/sticky'
 import type { StickyState } from '@/term/session'
 import { initialScheme, type Scheme } from '@/term/themes'
@@ -33,6 +34,13 @@ import { CAP_BY_ID, TOPBAR_DEFAULT, TOPBAR_PIN_DEFAULT, type CapId, type PanelId
 
 /** chat 模式开着没有（localStorage）。模式熬不过刷新就不叫模式 */
 const LS_CHAT = 'chatOpen'
+
+/** 「2 张图」「1 段视频」「2 张图 + 1 段视频」—— 提示里说清传上去的是什么 */
+function countWord(rs: UploadResult[]) {
+  const v = rs.filter((r) => r.media === 'video').length
+  const i = rs.length - v
+  return [i && `${i} 张图`, v && `${v} 段视频`].filter(Boolean).join(' + ')
+}
 
 
 /**
@@ -1096,11 +1104,11 @@ export default function App() {
       // 富输入框那版是插一枚 chip 进框里，纯 textarea 那版是挂在框外面 —— 两处都不是「塞字」。
       if (rich) done.forEach((r) => richRef.current?.insertChip(r))
       else compose.hold(done)
-      toast(`已挂上 ${done.length} 张图 · 投稿时自动带上路径`)
+      toast(`已挂上 ${countWord(done)} · 投稿时自动带上路径`)
     } else {
       // 发件箱关着：只能把路径敲进终端（那是给 TUI 自己的输入框用的，没有「附件」这回事）
       sess.current?.send(done.map((r) => r.path).join(' ') + ' ')
-      toast(`已把 ${done.length} 张的路径敲进终端`)
+      toast(`已把 ${countWord(done)}的路径敲进终端`)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showCompose, toast, compose.upload, compose.hold, rich])
@@ -1116,7 +1124,7 @@ export default function App() {
    */
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
-      const files = [...(e.clipboardData?.files ?? [])].filter((f) => f.type.startsWith('image/'))
+      const files = [...(e.clipboardData?.files ?? [])].filter((f) => isImage(f) || isVideo(f))
       if (!files.length) return
       if ((e.target as Element | null)?.closest?.('[data-testid="compose"]')) return
       e.preventDefault()
@@ -1797,8 +1805,9 @@ export default function App() {
   return (
     <div className="flex h-full flex-col">
       {/*
-        传图用的文件框。顶栏不放按钮 —— 入口是快捷键条里的 act:img（自己配，位置随便放）
-        和全页粘贴。accept=image/* 在手机上会同时给出「相机」和「相册」。
+        传图 / 视频用的文件框。顶栏不放按钮 —— 入口是快捷键条里的 act:img（自己配，位置随便放）
+        和全页粘贴。accept 带上 video/* 之后，手机上那张选择面板会同时给出「拍照」「录像」
+        「相册」（相册里照片和视频都能挑）—— 只写 image/* 的话视频在相册里是灰的，挑不了。
 
         **必须挂在根一级，不能塞进顶栏**：手机上键盘一弹起来顶栏整段就不渲染了，藏在里面
         的 input 跟着一起卸掉，picker.current 变成 null —— 那时候点快捷键条上的「传图」
@@ -1808,7 +1817,7 @@ export default function App() {
         ref={picker}
         data-testid="top-file"
         type="file"
-        accept="image/*"
+        accept="image/*,video/*"
         multiple
         hidden
         onChange={(e) => { if (e.target.files) void putImages(e.target.files); e.target.value = '' }}

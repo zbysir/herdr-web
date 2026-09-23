@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowUp, File, FileImage, FileText, Folder, Link2, RefreshCw, Search, Clock, SortAsc, X } from 'lucide-react'
+import { ArrowUp, File, FileImage, FilePlay, FileText, Folder, Link2, RefreshCw, Search, Clock, SortAsc, X } from 'lucide-react'
 import { filesApi, type FileEntry, type FileListing, type FileRoot, type FileRoots, type Pane } from '@/lib/api'
 import { Panel } from './ui/panel'
 import { Button } from './ui/button'
@@ -57,6 +57,7 @@ const short = (p: string) => p.replace(/^\/(?:Users|home)\/[^/]+/, '~')
 const ICON = {
   dir: Folder,
   image: FileImage,
+  video: FilePlay,
   text: FileText,
   binary: File,
   special: File,

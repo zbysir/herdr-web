@@ -517,22 +517,31 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
    * 只负责上传，路径交给调用方处置 —— 发件箱开着就插进草稿，没开就直接打进终端。
    */
   const upload = useCallback(async (files: FileList | File[], onPath?: (r: UploadResult) => void) => {
-    const imgs = [...files].filter((f) => f.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|heic)$/i.test(f.name))
+    const picks = [...files].filter((f) => isImage(f) || isVideo(f))
     const out: UploadResult[] = []
-    if (!imgs.length) return out
+    if (!picks.length) return out
     setBusy(true)
     try {
-      for (let i = 0; i < imgs.length; i++) {
-        say2(`上传第 ${i + 1}/${imgs.length} 张…`)
-        const blob = await normalizeImage(imgs[i])
-        const r = await api.upload(blob)
+      for (let i = 0; i < picks.length; i++) {
+        const f = picks[i]
+        const nth = picks.length > 1 ? `第 ${i + 1}/${picks.length} 个 · ` : ''
+        say2(`${nth}上传中…`)
+        // **视频原样传**：normalizeImage 那条路是 canvas 重编码，对视频无从谈起；
+        // 大小交给服务端按类型卡（图 25 MB / 视频 512 MB）
+        const blob = isVideo(f) ? f : await normalizeImage(f)
+        const r = await api.upload(blob, (sent, total) => {
+          // 小图一眨眼就传完，进度只对大文件有意义 —— 1 MB 以下不刷，免得状态行闪
+          if (total > 1 << 20) say2(`${nth}上传中 ${Math.floor((sent / total) * 100)}%（${mb(sent)} / ${mb(total)}）`)
+        })
         out.push(r)
         onPath?.(r)
-        say2(`已插入 ${r.name}（${(r.bytes / 1024).toFixed(0)} KB）· 路径已给出去，agent 会去读这个文件`)
+        say2(r.media === 'video'
+          ? `已插入 ${r.name}（${mb(r.bytes)}）· 路径已给出去 —— agent 要看内容得自己用 ffmpeg 抽帧`
+          : `已插入 ${r.name}（${(r.bytes / 1024).toFixed(0)} KB）· 路径已给出去，agent 会去读这个文件`)
       }
     } catch (e) {
-      say2('传图失败：' + (e as Error).message, true)
-      toast('传图失败：' + (e as Error).message)
+      say2('上传失败：' + (e as Error).message, true)
+      toast('上传失败：' + (e as Error).message)
     } finally {
       setBusy(false)
     }
@@ -563,6 +572,13 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
     atts, hold, dropAtt,
   }
 }
+
+/** 认「这是图」：MIME 靠不住的时候（有的安卓相册给空串）退回扩展名，最后由服务端按魔数定 */
+export const isImage = (f: File) => f.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|heic)$/i.test(f.name)
+/** 认「这是视频」，同上 */
+export const isVideo = (f: File) => f.type.startsWith('video/') || /\.(mp4|m4v|mov|webm|mkv|3gp)$/i.test(f.name)
+
+const mb = (n: number) => `${(n / (1 << 20)).toFixed(n < 10 << 20 ? 1 : 0)} MB`
 
 // 手机照片动辄 4000px / 几 MB。能解码就先缩到长边 2400 再传，顺便把 HEIC 这种
 // agent 读不了的格式统一成 PNG / JPEG。解不了就原样传，让服务端按魔数去认。
