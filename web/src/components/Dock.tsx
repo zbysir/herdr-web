@@ -271,7 +271,11 @@ export function Dock({
               data-testid="softkeys"
               className={cn(
                 'flex min-w-0 flex-col gap-1.5 select-none',
-                phone ? 'shrink-0 pt-1.5' : 'overflow-y-auto overscroll-contain',
+                phone ? 'shrink-0 pt-1.5'
+                  // 滚动条**不画**（和条上那段横滑同一条）：这一片全是可点的键，一条
+                  // 8px 的滚动条压在最右边那个键上，手指点下去是滚条不是键。
+                  // 「还有更多」由拖把手回答 —— 把它拉高就全看见了
+                  : 'overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
               )}
               style={phone ? undefined : (h ? { height: h } : { maxHeight: DEF_MAX })}
             >
