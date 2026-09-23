@@ -223,6 +223,21 @@
   是不可信文本，而这个页面能调 `/api/herdr/say`），中文加粗靠 `remark-cjk-friendly`
   （CommonMark 的 flanking 规则让紧贴中文标点的 `**` 不算强调符，不接就是满屏星号）。
   详见 [CHAT.md](docs/dev/CHAT.md) §9。
+- **文件查看器能改文本 + 渲染 md**（`files.WriteText` + `POST /api/files/save`、`FileViewer.tsx`）：
+  只有点「保存」才写盘（**故意不自动保存**，对面的 agent 也在写这些文件），保存带着打开时的
+  `mtime`，对不上回 409 让人挑「重新载入 / 照样覆盖」—— 别去掉这道，去掉就是人在手机上改一个字
+  把 agent 几分钟的输出整份盖掉、一个字都不报。写法是同目录临时文件 + rename，**先解开符号链接**
+  （不然链接本身被换成普通文件），权限位照抄；截断过的（> `MaxText`）不给存。md 用 chat 那个
+  `ChatMarkdown` 的 `variant="doc"`（chat 气泡那套标题只大 8%，排整份文档时标题和正文分不开）。
+  一条**静默**的：markdown 链接的 href 到手时**已经被 micromark 百分号编码了**（CommonMark 的
+  `normalizeUri`），`[稿.md](/Users/x/旁白稿.md)` 进来是 `/Users/x/%E6%97%81…`，不解码就是
+  「带中文 / 空格的文件永远找不到」（`localPath`）；正文里拆出来的 `herdr-path:` 那条没被编码，
+  别解（会弄坏文件名里真的 `%`）。
+- **底部面板能挪到右边**（`Dock` 的 `useDockSide` + 面板上那个按钮，横竖屏各存一份，手机竖屏
+  钉在底下、不出按钮）。两条跟着来的：① 面板（`ui/panel.tsx`）的宽度断点看的是**视口**，
+  而它压在 `main` 里 —— 所以还夹了一道 `max-w-[calc(100%-20px)]`，不然横屏手机上贴右的面板
+  左边溢出屏幕；② 快捷键条放右边时每行要**横滑**（`Softkeys` 的 `slide`），按宽屏那档换行的话
+  两排会折成三四排。
 - **「我现在在哪个项目」= 焦点 pane 那个工作空间**（`DiffPanel` 的 `dirKey`、`FilesPanel` 的
   `starts`、App 里那个 `diffRepo`）。用户报的是「改动面板打开，看到的是另一个项目的 diff」。
   三处是同一件事：herdr 里同时开着好几个工作空间、几十个 pane 是常态（实测 48 个 pane / 34 个

@@ -35,7 +35,7 @@ import type { StickyState } from '@/term/session'
  * 打了 `confirm` 的键要点**两下**（见 hooks/useArm —— 顶栏那边放「我的按键」时共用同一份）。
  */
 export function Softkeys({
-  rows, sticky, act, onSend, onSticky,
+  rows, sticky, act, onSend, onSticky, slide,
 }: {
   /** 每行三段（已按 id 解析好、个数也夹过）。一到两行。见 lib/api.ts 的 resolveRows */
   rows: RowSegments[]
@@ -60,8 +60,16 @@ export function Softkeys({
    * 那就是顶栏那两个按钮的语义，两处不一样才是怪事。
    */
   act: (id: KeyAct) => { run: () => void; on?: boolean; dot?: boolean; hide?: boolean } | undefined
+  /**
+   * 每行中间那段**横滑、不换行**。手机竖屏那一档本来就是（`usePhone`）；另一个要它的是
+   * 软键盘挪到右边的时候（Dock 上那个按钮）—— 那一条才两三百像素宽，按宽屏那一档换行排的话
+   * 设了两排的键会折成三四排（用户报的「我设的两排，怎么变成了三排」）。排数是人设的，
+   * 宽度不够就滑，别替人多折一行。
+   */
+  slide?: boolean
 }) {
   const phone = usePhone()
+  const scroll = phone || !!slide
   // 按键样式跟着 profile 走（设置 →「终端」）。**同步读镜像** —— 每个键都要它，
   // 绕一圈 React state 不值当，见 lib/prefs.ts
   const kv = keyStyle() === 'plain' ? 'keyPlain' : 'key'
@@ -175,7 +183,7 @@ export function Softkeys({
           ? cn('min-w-0 flex-1 overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
             // 手机：这一段不换行、自己横滑（滚动条不出，会盖住键）
             // 宽屏：照旧换行排，放不下的部分由外面那层上下滚
-            phone ? 'flex-nowrap overflow-x-auto' : 'flex-wrap content-start')
+            scroll ? 'flex-nowrap overflow-x-auto' : 'flex-wrap content-start')
           : 'shrink-0',
       )}
     >

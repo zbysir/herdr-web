@@ -320,7 +320,7 @@ export function PaneSwitcher({
     >
       {/* 这一排粘在顶上：滚到第三个 workspace 还得能改筛选（-top-2/-mt-2/pt-2 那三个一套，
           和设置面板的分页条同理 —— 外层滚动容器有 pt-2，只写 top-0 会漏一条缝） */}
-      <div className="sticky -top-2 z-1 -mx-4 -mt-2 mb-1.5 flex flex-wrap items-center gap-1.5 border-b border-line bg-bar px-4 pt-2 pb-1.5">
+      <div className="sticky -top-2 z-1 -mx-2 -mt-2 mb-1.5 flex flex-wrap items-center gap-1.5 border-b border-line bg-bar px-2 pt-2 pb-1.5">
         <div className="relative min-w-0 flex-1">
           <Search className="pointer-events-none absolute top-1/2 left-2 size-3 -translate-y-1/2 text-faint" />
           <Input
@@ -363,13 +363,12 @@ export function PaneSwitcher({
         >
           <Plus className="size-3.5" />
         </Button>
-        {/* 关闭并进这一排（面板没有标题栏了）。摆在最右边、**红的**：这是唯一一个
-            「点了就没了」的按钮，颜色把它和旁边那几个筛选键分开。
-            用 danger 那一档（红字 + 常态灰底）而不是整块涂红 —— 饱和填充在这套配色里
-            只留给一屏一个的主操作，见 CLAUDE.md 配色那节 */}
+        {/* 关闭并进这一排（面板没有标题栏了），摆在最右边。**ghost，不是红的**：原来用
+            danger 那一档想把它和旁边的筛选键分开，结果是整排里最扎眼的那个（用户报的）——
+            关面板不是危险操作，点错了再开一次就是。和文件 / 改动 / 设置那几个面板的 × 一个样 */}
         <Button
           size="tiny"
-          variant="danger"
+          variant="ghost"
           aria-label="关闭"
           title="关闭（Esc 也行）"
           onClick={onClose}
@@ -391,7 +390,7 @@ export function PaneSwitcher({
         多一份要对齐的东西。
       */}
       {spaces.length > 0 && (
-        <div className="-mx-4 mb-1.5 flex items-center gap-1.5 overflow-x-auto px-4 pb-1
+        <div className="-mx-2 mb-1.5 flex items-center gap-1.5 overflow-x-auto px-2 pb-1
                         [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <Button size="tiny" className="shrink-0" on={!ws} title="所有工作空间的 pane" onClick={() => setWs('')}>
             全部

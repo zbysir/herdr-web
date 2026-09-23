@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { PanelBottom, PanelRight } from 'lucide-react'
 import { clearOriented, readOriented, useOrient, writeOriented } from '@/lib/oriented'
 import { usePhone } from '@/hooks/usePhone'
 import { cn } from '@/lib/utils'
@@ -36,6 +37,42 @@ const EDGE_W = 16
 /** 键没拖过的时候：自动高度，最多两排 —— 一眼能看出「会换行」，又不吃掉半个屏幕 */
 const DEF_MAX = 96
 const MIN_H = 38
+
+/**
+ * 摆在哪边：`bottom`（默认）/ `right`。**横竖屏各存一份**，所以横屏挪到右边之后转回竖屏
+ * 还是在下面 —— 用户要的就是「手机横屏时键放右边」：横屏的高度本来就少得可怜，底下
+ * 再压一块面板，终端只剩三四行；而右边那一条宽度是富余的。
+ *
+ * 是面板**自己身上的一个按钮**，不是设置项（用户点名的）：这是看着屏幕当场想挪一下的事，
+ * 绕进设置里翻一页就没人用了。手机竖屏那一档（`usePhone`）永远在下面、也不出按钮 ——
+ * 四百来像素宽的屏上再竖着切一条出去，两边都不能用。
+ */
+export type DockSide = 'bottom' | 'right'
+const SIDE_KEY = 'dockSide'
+/** 右边那一条的宽度（px），横竖屏各一份。没拖过 = DEF_W */
+const W_KEY = 'dockW'
+const DEF_W = 300
+const MIN_W = 200
+/** 右边那条最多占六成宽：再宽终端就成一条缝了 */
+const capW = () => Math.round(window.innerWidth * 0.6)
+const readSide = (): DockSide => (readOriented<string>(SIDE_KEY, (v) => v === 'right' || v === 'bottom') === 'right' ? 'right' : 'bottom')
+const readW = () => readOriented<number>(W_KEY, (v) => typeof v === 'number' && v > 0)
+
+/**
+ * App 那边要知道面板在哪边（外面那层是横排还是竖排由它定），所以状态在这个 hook 里，
+ * App 拿着再递给 Dock。转屏就重读当前朝向那一份。
+ */
+export function useDockSide(): [DockSide, (s: DockSide) => void] {
+  const phone = usePhone()
+  const orient = useOrient()
+  const [side, setSide] = useState(readSide)
+  useEffect(() => setSide(readSide()), [orient])
+  const put = (s: DockSide) => {
+    setSide(s)
+    writeOriented(SIDE_KEY, s)
+  }
+  return [phone ? 'bottom' : side, put]
+}
 
 /** 键那一区上限半屏。再高就没终端可看了，而快捷键条本来是终端的配角 */
 const capH = () => Math.round((window.visualViewport?.height ?? window.innerHeight) / 2)
@@ -84,8 +121,11 @@ const fitInset = (i: Inset): Inset => {
  * 和存着的那份尺寸自己就回来了，两边互不影响。
  */
 export function Dock({
-  keys, onLayout, children,
+  keys, onLayout, children, side = 'bottom', onSide,
 }: {
+  /** 摆在哪边（useDockSide 出的）。手机竖屏那一档调用方已经钉成 bottom 了 */
+  side?: DockSide
+  onSide?: (s: DockSide) => void
   /** 快捷键条（`<Softkeys>`，只出键本身）。不显示就传 null */
   keys?: ReactNode
   /** 面板尺寸变了要重排终端（面板占的地方是从终端那儿借的） */
@@ -97,8 +137,9 @@ export function Dock({
   const orient = useOrient()
   const [h, setH] = useState(readH)
   const [inset, setInset] = useState(readInset)
+  const [w, setW] = useState(readW)
   const keysBox = useRef<HTMLDivElement>(null)
-  useEffect(() => { onLayout() }, [h, inset, phone, onLayout])
+  useEffect(() => { onLayout() }, [h, inset, phone, side, w, onLayout])
 
   // 转屏 / 换窗口大小之后：**重新读**当前朝向那一份（不是把手上这份挪一挪），再收边。
   // 横屏调的高度和留白跟竖屏无关，各读各的。
@@ -106,6 +147,7 @@ export function Dock({
     const fix = () => {
       setInset(fitInset(readInset()))
       setH(readH())
+      setW(readW())
     }
     fix()
     addEventListener('resize', fix)
@@ -177,6 +219,86 @@ export function Dock({
     target.addEventListener('pointermove', move)
     target.addEventListener('pointerup', stop)
     target.addEventListener('pointercancel', stop)
+  }
+
+  /** 挪到另一边的那个按钮。两种摆法里都在「键区上面那一行」的最右 */
+  const flip = onSide && !phone && (
+    <button
+      type="button"
+      data-testid="dock-flip"
+      className="flex h-5 w-7 shrink-0 cursor-pointer items-center justify-center rounded text-faint hover:bg-ctl hover:text-fg"
+      title={side === 'right' ? '把这块挪回底下（只记这个朝向）' : '把这块挪到右边（只记这个朝向，横屏时终端能多出好几行）'}
+      aria-label={side === 'right' ? '挪到底下' : '挪到右边'}
+      // 别抢焦点：点它不该把输入法顶出来 / 从终端手里拿走键盘
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => onSide(side === 'right' ? 'bottom' : 'right')}
+    >
+      {side === 'right' ? <PanelBottom className="size-3.5" /> : <PanelRight className="size-3.5" />}
+    </button>
+  )
+
+  if (side === 'right') {
+    /** 左边那条竖把手：左右拖改宽度，双击复位 */
+    const startW = (e: React.PointerEvent) => {
+      const box = (e.currentTarget as HTMLElement).parentElement
+      const w0 = box?.getBoundingClientRect().width ?? DEF_W
+      const x0 = e.clientX
+      const target = e.currentTarget as HTMLElement
+      try { target.setPointerCapture(e.pointerId) } catch { /* 没这个指针就不捕获 */ }
+      e.preventDefault()
+      const move = (ev: PointerEvent) => {
+        const dx = ev.clientX - x0
+        if (Math.abs(dx) <= 3) return
+        const v = Math.round(Math.min(Math.max(w0 - dx, MIN_W), capW()))
+        setW(v)
+        writeOriented(W_KEY, v)
+      }
+      const stop = () => {
+        target.removeEventListener('pointermove', move)
+        target.removeEventListener('pointerup', stop)
+        target.removeEventListener('pointercancel', stop)
+      }
+      target.addEventListener('pointermove', move)
+      target.addEventListener('pointerup', stop)
+      target.addEventListener('pointercancel', stop)
+    }
+    return (
+      <div
+        data-testid="dock"
+        className="relative flex min-h-0 shrink-0 flex-col border-l border-line bg-bar"
+        style={{
+          width: Math.min(w ?? DEF_W, capW()),
+          // 刘海 / 挖孔横过来常常就在右边，还有底下那条手势条
+          paddingRight: 'max(6px, env(safe-area-inset-right))',
+          paddingBottom: 'calc(6px + env(safe-area-inset-bottom))',
+          paddingTop: 6,
+        }}
+      >
+        <span
+          data-testid="dock-side-l"
+          className="group absolute inset-y-0 left-0 z-1 flex w-4 cursor-ew-resize touch-none items-center justify-center select-none"
+          title="左右拖：改这一条的宽度。双击复位"
+          onPointerDown={startW}
+          onDoubleClick={() => { setW(null); clearOriented(W_KEY) }}
+        >
+          <span className="h-8 w-1 rounded-full bg-line-hi transition-colors group-hover:bg-faint" />
+        </span>
+        <div className="@container flex min-h-0 flex-1 flex-col" style={{ paddingLeft: EDGE_W }}>
+          {children}
+          <div className="flex shrink-0 justify-end py-0.5">{flip}</div>
+          {keys && (
+            // 竖着一条：键换行排，放不下就上下滚（滚动条不画，理由同底下那种摆法）
+            <div
+              ref={keysBox}
+              data-testid="softkeys"
+              className="flex min-h-0 min-w-0 flex-1 flex-col gap-1.5 overflow-y-auto overscroll-contain select-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            >
+              {keys}
+            </div>
+          )}
+        </div>
+      </div>
+    )
   }
 
   // 把手离屏幕边不够 EDGE_SAFE 就往里让（安卓侧滑区），面板内容跟着让出同样的内边距，
@@ -260,6 +382,7 @@ export function Dock({
                     />
                   </span>
                 ))}
+                {flip}
               </div>
             )}
 

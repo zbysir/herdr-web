@@ -31,6 +31,11 @@ export function Panel({
         // 里面真正滚的是下面那个 div，这一层裁掉不影响 sticky。
         'overflow-hidden rounded-card border border-line bg-bar shadow-[0_24px_60px_-16px_rgba(0,0,0,.75)]',
         'max-md:inset-x-2 max-md:w-auto',
+        // **宽度再按容器夹一道**：上面那个 `max-md:` 断点看的是**视口**，而面板是压在终端
+        // 那一格（main）里的 —— 软键盘挪到右边之后（Dock 上那个按钮），手机横屏视口 870px
+        // 算「宽屏」、面板按 460/560px 画，终端那格却只剩 570px 上下，贴右摆的面板左边
+        // 就溢出屏幕了（用户报的）。百分比算的是 main，所以怎么让都不会出界
+        'max-w-[calc(100%-20px)]',
         className,
       )}
     >
@@ -42,7 +47,10 @@ export function Panel({
           </Button>
         </div>
       )}
-      <div className="overflow-auto overscroll-contain px-4 pt-2 pb-4">{children}</div>
+      {/* 内边距四边一样（8px）。原来是左右 16 / 上 8 / 下 16，用户看着「左右太宽、跟上下
+          不一样」—— 手机上左右各多吃 8px 也是实打实少一截内容。里面有几处 `-mx-2 … px-2`
+          是把粘顶工具条的底色铺到两边的，**跟这个数配套**，改一个就得改那几个 */}
+      <div className="overflow-auto overscroll-contain p-2">{children}</div>
     </aside>
   )
 }

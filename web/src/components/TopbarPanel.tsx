@@ -383,9 +383,9 @@ export function TopbarPanel({
         `top-[46px]` 是分页条的高度（`SettingsPanel` 那个 nav：pt-2 + py-2.5 的按钮 +
         1px 下边框，量出来 47px，取 46 让两条边压在一起、别露缝）。**改了那边就得改这儿**
         —— 和 nav 自己那三个 `-top-2 / -mt-2 / pt-2` 是一套的道理。
-        `-mx-4 px-4` 把底色铺到面板两边，不然滚过去的方块会从两侧的缝里露出来。
+        `-mx-2 px-2` 把底色铺到面板两边，不然滚过去的方块会从两侧的缝里露出来。
       */}
-      <div className="sticky top-[46px] z-1 -mx-4 bg-bar px-4 pb-1">
+      <div className="sticky top-[46px] z-1 -mx-2 bg-bar px-2 pb-1">
         {box('bar', '顶栏', '空的 —— 点下面一个就加上来', items)}
 
         {/*

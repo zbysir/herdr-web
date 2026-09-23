@@ -154,10 +154,45 @@ const NO_PLUGINS: [] = []
 /** 本地路径要放进来（`Anchor` 会把它接走），只挡伪协议 */
 const urlOK = (u: string) => (WEB.test(u) || LOCAL.test(u) ? u : '')
 
-export default function ChatMarkdown({ text, onPath }: {
+/**
+ * 两套排版。**同一套插件、同一套安全规矩，只有样式分开。**
+ *
+ *	chat   气泡里的一段话：标题只比正文大一点点、段距很紧 —— 气泡本来就窄，
+ *	       agent 回复里的 `##` 多半只是个小节提示，放大了一屏装不下几句
+ *	doc    文件查看器里的整份 md：要能一眼扫出结构。用户报的「正文和标题根本无法区分」
+ *	       就是拿 chat 那套去排一份文档 —— h2 只大 8% 又是 medium 字重，
+ *	       在 16px 上跟正文差一两个像素
+ *
+ * 字号都用 em：外面那层给的是 chat 字号那个设置（`chatFont`），这里只定比例。
+ */
+const CHAT_CLS = `[&_p]:my-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0
+                   [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-4
+                   [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5
+                   [&_li]:my-0.5
+                   [&_h1]:my-1.5 [&_h1]:text-[1.15em] [&_h1]:font-medium
+                   [&_h2]:my-1.5 [&_h2]:text-[1.08em] [&_h2]:font-medium
+                   [&_h3]:my-1 [&_h3]:text-[1em] [&_h3]:font-medium
+                   [&_blockquote]:my-1 [&_hr]:my-2 [&_table]:my-1
+                   [&_strong]:font-medium`
+const DOC_CLS = `[&_p]:my-[0.8em] [&>*:first-child]:mt-0 [&>*:last-child]:mb-0
+                   [&_ul]:my-[0.8em] [&_ul]:list-disc [&_ul]:pl-5
+                   [&_ol]:my-[0.8em] [&_ol]:list-decimal [&_ol]:pl-6
+                   [&_li]:my-[0.3em]
+                   [&_h1]:mt-[1.2em] [&_h1]:mb-[0.6em] [&_h1]:text-[1.6em] [&_h1]:font-semibold [&_h1]:leading-snug
+                   [&_h1]:border-b [&_h1]:border-line [&_h1]:pb-[0.3em]
+                   [&_h2]:mt-[1.6em] [&_h2]:mb-[0.5em] [&_h2]:text-[1.3em] [&_h2]:font-semibold [&_h2]:leading-snug
+                   [&_h2]:border-b [&_h2]:border-line [&_h2]:pb-[0.25em]
+                   [&_h3]:mt-[1.3em] [&_h3]:mb-[0.4em] [&_h3]:text-[1.12em] [&_h3]:font-semibold
+                   [&_h4]:mt-[1.2em] [&_h4]:mb-[0.4em] [&_h4]:font-semibold
+                   [&_h5]:font-semibold [&_h6]:font-semibold [&_h6]:text-muted
+                   [&_blockquote]:my-[0.8em] [&_hr]:my-[1.5em] [&_table]:my-[0.8em]
+                   [&_strong]:font-semibold`
+
+export default function ChatMarkdown({ text, onPath, variant = 'chat' }: {
   text: string
   /** 点了一条本地路径。不给的话路径照旧渲染成普通文字（不画成可点的） */
   onPath?: (p: string) => void
+  variant?: 'chat' | 'doc'
 }) {
   /*
     **按 `text` memo 住。** 光把组件身份固定下来只治了「重挂」，没治「重算」：面板在
@@ -179,24 +214,17 @@ export default function ChatMarkdown({ text, onPath }: {
   return (
     <PathHit.Provider value={onPath}>
       <div
-        className="min-w-0 break-words
-                   [&_p]:my-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0
-                   [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-4
-                   [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5
-                   [&_li]:my-0.5
-                   [&_h1]:my-1.5 [&_h1]:text-[1.15em] [&_h1]:font-medium
-                   [&_h2]:my-1.5 [&_h2]:text-[1.08em] [&_h2]:font-medium
-                   [&_h3]:my-1 [&_h3]:text-[1em] [&_h3]:font-medium
+        className={cn('min-w-0 break-words', variant === 'doc' ? DOC_CLS : CHAT_CLS, `
                    [&_a]:text-brand [&_a]:underline [&_a]:underline-offset-2
-                   [&_strong]:font-medium [&_strong]:text-fg
-                   [&_blockquote]:my-1 [&_blockquote]:border-l-2 [&_blockquote]:border-line
+                   [&_strong]:text-fg
+                   [&_blockquote]:border-l-2 [&_blockquote]:border-line
                    [&_blockquote]:pl-2 [&_blockquote]:text-muted
-                   [&_hr]:my-2 [&_hr]:border-line
+                   [&_hr]:border-line
                    [&_code]:rounded [&_code]:bg-bg [&_code]:px-1 [&_code]:py-0.5
                    [&_code]:font-mono [&_code]:text-[0.88em]
-                   [&_table]:my-1 [&_table]:block [&_table]:w-full [&_table]:overflow-x-auto
+                   [&_table]:block [&_table]:w-full [&_table]:overflow-x-auto
                    [&_th]:border [&_th]:border-line [&_th]:px-1.5 [&_th]:py-0.5 [&_th]:text-left [&_th]:font-medium
-                   [&_td]:border [&_td]:border-line [&_td]:px-1.5 [&_td]:py-0.5"
+                   [&_td]:border [&_td]:border-line [&_td]:px-1.5 [&_td]:py-0.5`)}
       >
         {body}
       </div>
@@ -212,11 +240,17 @@ export default function ChatMarkdown({ text, onPath }: {
  *	`/Users/x` / `~/x`      原样
  *
  * 解不开的 %xx 就原样给回去（`openPath` 那边会报找不到，比在这儿吞掉好）。
+ *
+ * **markdown 链接里的 `/Users/…` 也要解码，不只是 `file://`**（用户报的「找不到
+ * /Users/…/%E6%97%81…md」）：agent 写的是中文原样 `[稿.md](/Users/x/旁白稿.md)`，
+ * 但 micromark 按 CommonMark 把链接目标**百分号编码**了（`normalizeUri`），到这儿的
+ * href 已经是 `%E6%97%81…`，原样拿去 stat 一定找不到 —— 带中文或空格的文件名全中。
+ * `herdr-path:` 那条不解：它是 rehype 那一步直接塞进 hast 的，没被编码过，解了反而会
+ * 把文件名里真的 `%` 弄坏。
  */
 function localPath(h: string) {
   if (h.startsWith(PATH_SCHEME)) return h.slice(PATH_SCHEME.length)
-  if (!h.startsWith('file://')) return h
-  const raw = h.slice('file://'.length)
+  const raw = h.startsWith('file://') ? h.slice('file://'.length) : h
   try {
     return decodeURIComponent(raw)
   } catch {

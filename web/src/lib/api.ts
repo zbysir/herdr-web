@@ -440,7 +440,7 @@ export interface FileInfo {
  * （重启即全废）—— 所以过期之后要用 /files/link 换一张，别把它当固定地址存起来。
  */
 export interface FileStat { info: FileInfo; url?: string; expires?: number }
-export interface FileText { path: string; text: string; bytes: number; truncated: boolean }
+export interface FileText { path: string; text: string; bytes: number; truncated: boolean; mtime: number }
 export interface FileLink { url: string; path: string; expires: number }
 export interface FileRoot { path: string; label: string }
 export interface FileRoots {
@@ -467,6 +467,12 @@ export const filesApi = {
     api.get<FileStat>(`/files/stat?path=${encodeURIComponent(path)}${base ? `&base=${encodeURIComponent(base)}` : ''}`),
   text: (path: string) => api.get<FileText>(`/files/text?path=${encodeURIComponent(path)}`),
   link: (path: string) => api.post<FileLink>('/files/link', { path }),
+  /**
+   * 写回一个文本文件。`mtime` 是打开时读到的那个 —— 磁盘上的对不上服务端回 409
+   * （agent 在这期间改过它），`force` 是「我知道，照样盖」。
+   */
+  save: (path: string, text: string, mtime: number, force?: boolean) =>
+    api.post<FileText>('/files/save', { path, text, mtime, force: !!force }),
 }
 
 /* ------------------------------------------------------------------ 看 diff */

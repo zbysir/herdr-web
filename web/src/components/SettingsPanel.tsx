@@ -157,7 +157,7 @@ export function SettingsPanel({
           而「我在改哪一套」是看那两页时必须一直看得见的（见 ProfilePicker 的注释） */}
       <ProfilePicker onChanged={onProfiles} toast={toast} />
 
-      <nav className="sticky -top-2 z-1 -mx-4 -mt-2 mb-3 flex items-center gap-5 border-b border-line bg-bar px-4 pt-2">
+      <nav className="sticky -top-2 z-1 -mx-2 -mt-2 mb-3 flex items-center gap-5 border-b border-line bg-bar px-2 pt-2">
         {TABS.map((t) => (
           <button
             key={t.id}

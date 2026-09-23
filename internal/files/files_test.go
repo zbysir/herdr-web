@@ -333,6 +333,65 @@ func TestReadText(t *testing.T) {
 	}
 }
 
+// 写回：冲突要拒、符号链接要写穿、权限位要保住、截断过的不给存。
+func TestWriteText(t *testing.T) {
+	dir := t.TempDir()
+	b := open()
+	real := write(t, filepath.Join(dir, "real.md"), []byte("old"))
+	if err := os.Chmod(real, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.md")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := b.ReadText(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 别人在你打开之后改过了（mtime 往后挪一秒模拟）
+	later := time.UnixMilli(tx.Mtime).Add(time.Second)
+	if err := os.Chtimes(real, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.WriteText(link, "mine", tx.Mtime, false); !errors.Is(err, ErrConflict) {
+		t.Fatalf("mtime 对不上该报冲突，拿到 %v", err)
+	}
+	out, err := b.WriteText(link, "mine", 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Text != "mine" {
+		t.Errorf("存完读回来是 %q", out.Text)
+	}
+	if fi, _ := os.Lstat(link); fi.Mode()&os.ModeSymlink == 0 {
+		t.Error("符号链接被换成了普通文件")
+	}
+	if got, _ := os.ReadFile(real); string(got) != "mine" {
+		t.Errorf("真文件里是 %q", got)
+	}
+	if fi, _ := os.Stat(real); fi.Mode().Perm() != 0o600 {
+		t.Errorf("权限位变成了 %v", fi.Mode().Perm())
+	}
+	if ents, _ := os.ReadDir(dir); len(ents) != 2 {
+		t.Errorf("目录里留了临时文件：%d 项", len(ents))
+	}
+
+	big := write(t, filepath.Join(dir, "big.log"), []byte(strings.Repeat("x", MaxText+1)))
+	bt, _ := b.ReadText(big)
+	if _, err := b.WriteText(big, "x", bt.Mtime, true); err == nil {
+		t.Error("截断过的文件不该给存")
+	}
+	img := write(t, filepath.Join(dir, "a.png"), pngHead)
+	if _, err := b.WriteText(img, "x", 0, true); err == nil {
+		t.Error("图片不该给存")
+	}
+	if _, err := b.WriteText(filepath.Join(dir, "nope.txt"), "x", 0, true); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("不存在的文件不该新建：%v", err)
+	}
+}
+
 /* ------------------------------------------------------------------ 签名 */
 
 func TestSign(t *testing.T) {

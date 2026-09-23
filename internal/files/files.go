@@ -519,6 +519,9 @@ type Text struct {
 	Text      string `json:"text"`
 	Bytes     int64  `json:"bytes"`
 	Truncated bool   `json:"truncated"`
+	// Mtime 是读的那一刻的修改时间（毫秒）。保存时原样带回来当「基准」，
+	// 见 WriteText 的冲突检查。
+	Mtime int64 `json:"mtime"`
 }
 
 // ReadText 读文本预览。
@@ -546,7 +549,7 @@ func (b *Browser) ReadText(p string) (*Text, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := &Text{Path: p, Bytes: info.Size}
+	out := &Text{Path: p, Bytes: info.Size, Mtime: info.Mtime}
 	if len(buf) > MaxText {
 		buf, out.Truncated = buf[:MaxText], true
 	}
@@ -554,6 +557,73 @@ func (b *Browser) ReadText(p string) (*Text, error) {
 	// 而那会让整个 JSON 响应变成一串问号（json 包自己也会替换，这里说清楚而已）
 	out.Text = strings.ToValidUTF8(string(buf), "�")
 	return out, nil
+}
+
+/* ------------------------------------------------------------------ 写回 */
+
+// ErrConflict 是「你打开之后磁盘上的文件被别人改过了」。HTTP 层翻成 409。
+var ErrConflict = errors.New("文件在你打开之后被改过了")
+
+// WriteText 把编辑过的文本写回去。**只改已有的文本文件**，不新建、不改二进制。
+//
+// 几条取舍：
+//
+//   - **base 是打开时的 mtime，对不上就拒**。对面那台机器上正跑着 agent，它随时可能
+//     往同一个文件里写 —— 不核的话，人在手机上改一个字点保存，就把 agent 这几分钟
+//     写的东西整份盖掉了，而且一个字都不报。拒了之后人自己决定（重新打开 / 硬存）。
+//     force 就是那条「我知道，照样存」。
+//   - **截断过的不给存**（超过 MaxText）。页面里只有前半截，存回去等于把后半截删了。
+//   - **写到符号链接指向的真文件上**，而且是「同目录临时文件 + rename」：直接
+//     O_TRUNC 写的话写到一半断了（磁盘满、进程被杀）留下的是半截文件；rename
+//     原子替换则要先解开链接，不然会把链接本身换成一个普通文件。权限位照抄原文件。
+func (b *Browser) WriteText(p, text string, base int64, force bool) (*Text, error) {
+	info, err := b.Peek(p)
+	if err != nil {
+		return nil, err
+	}
+	if info.Dir {
+		return nil, fmt.Errorf("%s 是目录", p)
+	}
+	if info.Kind != KindText {
+		return nil, fmt.Errorf("%s 看着不是文本（%s），不给在这儿改", info.Name, info.Kind)
+	}
+	if info.Size > MaxText {
+		return nil, fmt.Errorf("%s 太大（超过 %d KB），页面里只读到了前半截，存回去会把后半截丢掉", info.Name, MaxText>>10)
+	}
+	if len(text) > MaxText {
+		return nil, fmt.Errorf("改完超过 %d KB 了，这个编辑器只管小文件", MaxText>>10)
+	}
+	if !force && base != info.Mtime {
+		return nil, ErrConflict
+	}
+	real, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return nil, nice(p, err)
+	}
+	st, err := os.Stat(real)
+	if err != nil {
+		return nil, nice(p, err)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(real), "."+filepath.Base(real)+".herdr-web-*")
+	if err != nil {
+		return nil, nice(p, err)
+	}
+	defer os.Remove(tmp.Name()) // rename 成功之后这是个空操作
+	if _, err := tmp.WriteString(text); err != nil {
+		tmp.Close()
+		return nil, err
+	}
+	if err := tmp.Chmod(st.Mode().Perm()); err != nil {
+		tmp.Close()
+		return nil, err
+	}
+	if err := tmp.Close(); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(tmp.Name(), real); err != nil {
+		return nil, nice(p, err)
+	}
+	return b.ReadText(p)
 }
 
 // Open 打开一个文件给 HTTP 直接吐。第二个返回值是 Info（调用方据此决定

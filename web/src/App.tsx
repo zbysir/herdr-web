@@ -25,7 +25,7 @@ import { keyFace } from '@/keyicons'
 import { Button } from '@/components/ui/button'
 import { Toast } from '@/components/ui/toast'
 import { NoticeDot } from '@/components/ui/dot'
-import { Dock } from '@/components/Dock'
+import { Dock, useDockSide } from '@/components/Dock'
 import { Softkeys } from '@/components/Softkeys'
 import { Compose } from '@/components/Compose'
 import { SettingsPanel, type SettingsTab, type TermOpts } from '@/components/SettingsPanel'
@@ -346,6 +346,9 @@ export default function App() {
   const [diffRepo, setDiffRepo] = useState<string | null>(null)
   const [filesAt, setFilesAt] = useState<string | undefined>(undefined)
   const [viewing, setViewing] = useState<FileStat | null>(null)
+  // 底部面板摆在下面还是右边（面板自己身上那个按钮切，横竖屏各一份，见 Dock）
+  const [dockSide, setDockSide] = useDockSide()
+  const viewerClose = useRef<(() => void) | null>(null)
   // 记住上次看的那一页
   const [tab, setTab] = useState<SettingsTab>('term')
   const [showCompose, setShowCompose] = useState(() => lsBool('compose', true))
@@ -570,24 +573,6 @@ export default function App() {
   }, [compose.panes])
 
 
-  /**
-   * 把一个路径投出去。和「传图」是**同一个模型**：herdr 的 socket 里没有文件通道，
-   * 能投的只有文本，agent 自己去读磁盘。所以传图是「路径进去」，文件浏览是「路径出来」。
-   *
-   * 带空格的路径加一层单引号 —— 这段字符串下一步可能被敲进 shell 的输入行，
-   * 不加的话 `~/My Files/a.png` 会被当成两个参数。
-   */
-  const sendPath = useCallback((p: string) => {
-    const chunk = (/[\s]/.test(p) && !p.includes("'") ? `'${p}'` : p) + ' '
-    if (showCompose) {
-      compose.append(chunk)
-      toast('路径已插入发件箱')
-    } else {
-      sess.current?.send(chunk)
-      toast('路径已敲进终端')
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showCompose, toast, compose.append])
 
   /**
    * 开文件浏览面板。at 给了就直接定位到那个目录（点到一个目录、查看器的「所在目录」
@@ -879,7 +864,9 @@ export default function App() {
         return
       }
       if (viewing) {
-        setViewing(null)
+        // 走查看器自己那道关：有没存的修改时第一下只是举起来（见 FileViewer 的 leave）
+        if (viewerClose.current) viewerClose.current()
+        else setViewing(null)
         e.preventDefault()
         e.stopPropagation()
         return
@@ -1978,7 +1965,9 @@ export default function App() {
         )
       })()}
 
-      <main className="relative min-h-0 flex-1">
+      {/* 终端 + 底部面板。面板挪到右边（Dock 上那个按钮，横竖屏各记一份）时这一层改横排 */}
+      <div className={cn('flex min-h-0 flex-1', dockSide === 'right' ? 'flex-row' : 'flex-col')}>
+      <main className="relative min-h-0 min-w-0 flex-1">
         {/* overflow-hidden：容器一缩（呼输入法）到终端重排完之间，xterm 的画布还是旧的高度，
             不裁的话它会画到发件箱上面去；冻帧那张图也靠这个裁 */}
         <div ref={host} className="term-host absolute inset-0 overflow-hidden pt-1.5 pr-1 pb-1 pl-2" />
@@ -2071,8 +2060,10 @@ export default function App() {
           <FileViewer
             stat={viewing}
             onClose={() => setViewing(null)}
-            onSend={(p) => { setViewing(null); sendPath(p) }}
+            closeRef={viewerClose}
             onBrowse={(d) => { setViewing(null); openFiles(d) }}
+            onOpenPath={(p) => void openPath(p)}
+            chatFont={chatFont}
             toast={toast}
           />
         )}
@@ -2167,6 +2158,8 @@ export default function App() {
       {(showCompose || showKeys) && (
         <Dock
           onLayout={relayout}
+          side={dockSide}
+          onSide={setDockSide}
           keys={showKeys ? (
             <Softkeys
               rows={bar}
@@ -2177,6 +2170,8 @@ export default function App() {
               // （internal/capability 那张表里 Key 那一列），同一个 id 就是同一件事 ——
               // 亮不亮、红点、「这个部署有没有这项」全都跟着走，不写第二份映射
               act={(a) => topbarAct[a]}
+              // 挪到右边时那一条很窄：每行横滑，别按宽屏那档折成三四排
+              slide={dockSide === 'right'}
             />
           ) : null}
         >
@@ -2216,6 +2211,7 @@ export default function App() {
             ))}
         </Dock>
       )}
+      </div>
     </div>
   )
 }

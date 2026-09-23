@@ -1,8 +1,10 @@
 package server
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -93,6 +95,32 @@ func (s *Server) apiFiles(w http.ResponseWriter, r *http.Request, seg []string) 
 		out, err := s.Files.ReadText(p)
 		respondFile(w, out, err)
 
+	// 写回一个文本文件。请求体自己读：readJSON 那道 256 KB 的上限比文本上限还小，
+	// 而 JSON 转义还会再撑大一点。
+	case seg[1] == "save" && r.Method == http.MethodPost:
+		var b struct {
+			Path  string `json:"path"`
+			Text  string `json:"text"`
+			Mtime int64  `json:"mtime"`
+			Force bool   `json:"force"`
+		}
+		raw, err := io.ReadAll(io.LimitReader(r.Body, 4*files.MaxText))
+		if err != nil {
+			fail(w, 400, err)
+			return
+		}
+		if err := json.Unmarshal(raw, &b); err != nil {
+			fail(w, 400, errf("请求体不是合法 JSON"))
+			return
+		}
+		p, err := files.Resolve(b.Path, "")
+		if err != nil {
+			fail(w, 400, err)
+			return
+		}
+		out, err := s.Files.WriteText(p, b.Text, b.Mtime, b.Force)
+		respondFile(w, out, err)
+
 	// 单独换一张票。stat 已经给过一张，这个口是给「开着看了十几分钟、票过期了」
 	// 那种情况续一张，不用重新走一遍 stat。
 	case seg[1] == "link" && r.Method == http.MethodPost:
@@ -131,6 +159,8 @@ func respondFile(w http.ResponseWriter, out any, err error) {
 		return
 	}
 	switch {
+	case errors.Is(err, files.ErrConflict):
+		fail(w, http.StatusConflict, err)
 	case errors.Is(err, files.ErrDisabled):
 		fail(w, http.StatusNotFound, err)
 	case errors.Is(err, os.ErrNotExist):

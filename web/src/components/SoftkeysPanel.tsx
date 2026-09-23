@@ -750,7 +750,7 @@ export function SoftkeysPanel({
         **手机上拖根本走不通**（拿起来之后页面不滚，见 spot 那段），所以点一下加进去之后
         必须当场看得见结果，不然人只能来回滚着确认。
       */}
-      <div className="sticky top-[46px] z-1 -mx-4 bg-bar px-4 pb-1">
+      <div className="sticky top-[46px] z-1 -mx-2 bg-bar px-2 pb-1">
         <div className="flex flex-col gap-2">
           {box(1, rows === 2 ? '第一行' : '按键', '从下面「我的按键」点一个加上来', bar[0]?.length ?? 0)}
           {rows === 2 && box(2, '第二行', '加上来的键排在第二行', bar[1]?.length ?? 0)}
