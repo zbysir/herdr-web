@@ -659,11 +659,24 @@ export function ChatPanel({
               <span className="min-w-0 flex-1 truncate text-[1em]">
                 {paneTitle(info) || info.tab || info.id}
               </span>
-              <span className="shrink-0 rounded border border-line bg-ctl px-1 py-px font-mono text-[10px] text-muted">
-                {info.agent}
-              </span>
-              <span className="min-w-0 shrink truncate text-xs text-faint">
-                {info.tab ? `${info.tab} · ` : ''}{shortPath(info.cwd)}
+              {/*
+                **tab 名和路径拆成两段，而且各自有上限。**
+
+                原来它俩是一个 span：标题 `flex-1`（basis 0，只分**剩余**空间），而这一段是
+                `shrink`（basis 按内容算）—— 于是路径先按 `2.herdr-web ll · ~/dev/bysir/herdr-web`
+                的完整宽度占位，标题被挤到只剩一个字。用户报的是「多出一个『手』字是什么东西」，
+                那其实是他这一轮的标题「**手**机端 tab 和 Space 管理」的头一个字，看着像个
+                莫名其妙的图标 —— 比纯粹截断更糟，因为它不像被截断的。
+
+                所以：tab 名封顶 40%（一行里它只是用来分开同项目的几个 tab），**路径在手机
+                竖屏上整个不画** —— 那儿它总是被截成 `~/dev/bys…`，说不出是哪个对话，而这
+                一行最该回答的就是「我在哪个对话里」（和标题占主位是同一条）。
+              */}
+              {info.tab && (
+                <span className="min-w-0 max-w-[40%] shrink truncate text-xs text-faint">{info.tab}</span>
+              )}
+              <span className="min-w-0 shrink truncate text-xs text-faint max-phone:hidden">
+                {shortPath(info.cwd)}
               </span>
             </>
           ) : (
@@ -672,7 +685,7 @@ export function ChatPanel({
             </span>
           )}
         </button>
-        <Status status={st} />
+        <Status status={st} model={meta?.turn?.model} agent={info?.agent} />
         {/*
           这儿原来还有一个 `>_`「回终端看这个 pane」。**去掉了**，它是 chat 还是浮动面板时的
           遗留：那会儿 chat 能通过下拉看**另一个** pane，所以需要「跳过去」这个动作。
@@ -1034,11 +1047,10 @@ function kilo(n: number) {
 const shortPath = (p: string) => (p || '').replace(/^\/(?:Users|home)\/[^/]+/, '~')
 
 /**
- * 头上那个状态：一个点 + 一个词。
+ * 头上那个状态：一个点 + 一句话。
  *
  * 颜色用共用那份（`lib/agentstatus.ts`）—— 面板一览那一列点是同一套语义
  * （红 = 等你，绿 = 跑完了，黄 = 在跑，灰 = 闲着），两份平行的色表迟早对不上。
- * 词在这儿自己写：这一条有整行宽度，要说的是能指路的话，而面板一览那一行只有几十像素。
  */
 const STATUS_WORD: Record<string, string> = {
   blocked: '在等你回答',
@@ -1047,10 +1059,48 @@ const STATUS_WORD: Record<string, string> = {
   idle: '闲着',
 }
 
-function Status({ status }: { status: string }) {
+/**
+ * 把模型 id 变成人看的名字。规则是照**真转录里的值**定的，不是猜的：
+ *
+ *	claude-opus-5             → Opus 5
+ *	claude-haiku-4-5-20251001 → Haiku 4.5
+ *	gpt-6-sol                 → GPT 6 Sol
+ *	gpt-5.6-luna              → GPT 5.6 Luna
+ *
+ * 认不出的形状**原样给出去**（截断留给 CSS）—— 模型 id 是别人定的，会一直变，
+ * 硬套规则不如把原文摆出来。
+ */
+export function modelName(raw?: string): string {
+  if (!raw) return ''
+  return raw
+    .replace(/-\d{6,}$/, '')        // 尾巴上那串日期（claude 的 -20251001）
+    .replace(/^claude-/, '')         // 「是哪家」由名字本身说，不用再挂个前缀
+    .replace(/(\d)-(\d)/g, '$1.$2') // 4-5 是 4.5，不是两段
+    .split('-')
+    .map((w) => (/^gpt$/i.test(w) ? 'GPT' : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(' ')
+}
+
+/**
+ * 那个药丸上写什么：**三档常规状态写模型名，只有「在等你」写中文**。
+ *
+ * 用户点名的，理由成立：灰 / 黄 / 绿三档光看颜色就分得清（闲着 / 在跑 / 完成），那三个
+ * 中文词等于把一格宽度花在颜色已经说过的话上；而「我这会儿跟哪个模型说话」原来根本没地方
+ * 看（左边那个 `claude` / `codex` 小标只说得出是哪家，说不出是 Opus 5 还是 Haiku）。
+ *
+ * **红的那档例外**：「等你回答」是要人动手的，它得是一句话，不能靠颜色去猜 —— 而且那时候
+ * 模型名正是最不重要的信息。
+ *
+ * 拿不到模型名（转录里还没出现过 model、或者那一轮回扫算不出来）就**退回状态词** ——
+ * 空着一个药丸比写个没用的词更糟，而这条退路顺带保住了老转录。
+ */
+function Status({ status, model, agent }: { status: string; model?: string; agent?: string }) {
   const dot = STATUS_DOT[status]
   // 认不出的状态（herdr 哪天加了一档）就什么都不画 —— 编一个词出来比空着糟。
   if (!dot) return null
+  const word = STATUS_WORD[status] ?? status
+  const name = modelName(model)
+  const showModel = status !== 'blocked' && !!name
   return (
     <span
       className={cn(
@@ -1059,10 +1109,13 @@ function Status({ status }: { status: string }) {
           : status === 'working' ? 'border-warn/40 bg-warn/12 text-warn'
             : 'border-line bg-ctl text-muted',
       )}
-      title={status === 'blocked' ? '有东西在等你回答 —— 审批和选择框都在终端里，点右边那个按钮过去' : undefined}
+      // 药丸上只剩模型名时，状态那句话挪到 title 里（桌面上悬停看得到）
+      title={status === 'blocked'
+        ? '有东西在等你回答 —— 审批和选择框都在终端里，点右边那个按钮过去'
+        : [word, model, agent].filter(Boolean).join(' · ')}
     >
       <span className={cn('size-1.5 rounded-full', dot, status === 'working' && 'animate-pulse')} />
-      {STATUS_WORD[status] ?? status}
+      <span className={cn('truncate', showModel && 'max-w-32 font-mono')}>{showModel ? name : word}</span>
     </span>
   )
 }
