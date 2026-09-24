@@ -1,4 +1,4 @@
-import { api } from './api'
+import { ApiError, api } from './api'
 
 /**
  * WebAuthn 的浏览器侧胶水。
@@ -88,8 +88,29 @@ interface Begin<T> {
   ceremony: string
 }
 
-/** 注册一把新 passkey（要求当前设备已经认证过）。 */
+/**
+ * 注册一把新 passkey（要求当前设备已经认证过）。
+ *
+ * **已经有 passkey 时，服务端会先要一次新鲜的断言**（403 `reason: 'stepup'`，见
+ * internal/auth 的 StepUpNeeded）：拿到配对码的人不能给自己偷偷再留一把。
+ * 这儿接住那一下，先走一次验证再重试 —— 对人来说就是「点两次 Face ID」，
+ * 不需要在界面上多一个按钮，也不会因为 401 把整个应用弹回登录屏。
+ *
+ * **只重试一次**：第二次还被挡说明验证那步没真成（比如人划掉了），再转就是死循环。
+ */
 export async function registerPasskey(): Promise<string> {
+  try {
+    return await doRegister()
+  } catch (e) {
+    if (e instanceof ApiError && e.reason === 'stepup') {
+      await loginPasskey() // 用现有的那把验一次，服务端据此刷新 PasskeyAt
+      return await doRegister()
+    }
+    throw e
+  }
+}
+
+async function doRegister(): Promise<string> {
   const { options, ceremony } = await api.post<Begin<CreateJSON>>('/auth/passkey/register/begin')
   const pk = options.publicKey
 

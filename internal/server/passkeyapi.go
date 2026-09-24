@@ -79,7 +79,11 @@ func (s *Server) apiPasskey(w http.ResponseWriter, r *http.Request, seg []string
 
 	switch {
 	case action == "register" && step == "begin" && r.Method == http.MethodPost:
-		if s.requireAuth(w, r) == nil {
+		id := s.requireAuth(w, r)
+		if id == nil {
+			return
+		}
+		if s.stepUp(w, id) {
 			return
 		}
 		opts, ceremony, err := s.Passkeys.BeginRegister()
@@ -92,6 +96,11 @@ func (s *Server) apiPasskey(w http.ResponseWriter, r *http.Request, seg []string
 	case action == "register" && step == "finish" && r.Method == http.MethodPost:
 		id := s.requireAuth(w, r)
 		if id == nil {
+			return
+		}
+		// begin 和 finish **两处都要挡**：begin 那道只是让界面早点问，真正算数的是这一道
+		// —— 光挡 begin 的话，自己拼一个 finish 请求就绕过去了（ceremony id 是它自己拿的）。
+		if s.stepUp(w, id) {
 			return
 		}
 		k, err := s.Passkeys.FinishRegister(r.URL.Query().Get("c"), r.UserAgent(), r)
@@ -176,6 +185,25 @@ func (s *Server) apiPasskeyList(w http.ResponseWriter, r *http.Request, seg []st
 }
 
 // reauthNeeded 把判断委托给 auth.ReauthNeeded（那边好写测试），这里只喂参数。
+// stepUpWindow：注册新 passkey 之前那次生物验证的新鲜度要求（§4(d) 那个「5 分钟」）。
+const stepUpWindow = 5 * time.Minute
+
+// stepUp 挡住「没有新鲜 passkey 断言就再注册一把」。挡住了返回 true（响应已经写出去了）。
+//
+// 用 **403 + reason=stepup**，不是 401：401 会让前端广播一次 UNAUTHED，整个应用弹回
+// 配对/登录那一屏 —— 而这儿只是「再验一下指纹」，人还好好地登录着。踩过同一类的教训
+// 是「点了没反应」，这次反过来会是「加一把 passkey 把自己踢出去了」。
+func (s *Server) stepUp(w http.ResponseWriter, id *auth.Ident) bool {
+	if !auth.StepUpNeeded(id, stepUpWindow, s.Passkeys.Count(), time.Now()) {
+		return false
+	}
+	writeJSON(w, http.StatusForbidden, map[string]any{
+		"error":  "再加一把 passkey 之前，先用已有的那把验一次",
+		"reason": "stepup",
+	})
+	return true
+}
+
 func (s *Server) reauthNeeded(id *auth.Ident) bool {
 	return auth.ReauthNeeded(id, s.ReauthAfter, s.Passkeys.Count(), time.Now())
 }

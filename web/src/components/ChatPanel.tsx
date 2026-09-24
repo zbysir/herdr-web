@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDown, ChevronDown, ChevronUp, Play, Terminal, Wrench, AlertCircle, MessageSquare } from 'lucide-react'
+import { ArrowDown, Check, ChevronDown, ChevronUp, Play, Terminal, Wrench, AlertCircle, MessageSquare, X } from 'lucide-react'
 import { ApiError, chatApi, type ChatLog, type ChatMsg, type Pane } from '@/lib/api'
 import type { SentEcho } from '@/hooks/useCompose'
 import { STATUS_DOT } from '@/lib/agentstatus'
@@ -713,7 +713,8 @@ export function ChatPanel({
         <div
           ref={box}
           onScroll={onScroll}
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3"
+          // 宽屏（lg）两边留**固定**的白，消息铺满中间（见 Bubble 那条注释）
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 lg:px-8"
         >
           {/*
             **「没有 agent」要排在「读取中」前面。**
@@ -794,7 +795,7 @@ export function ChatPanel({
 
               {/* 刚投出去还没露面的那几条（④） */}
               {pending.map((x) => (
-                <div key={`pending:${x.at}`} className="flex justify-end">
+                <div key={`pending:${x.at}`} className="flex justify-end lg:justify-start">
                   {/*
                     和真的那条**一模一样，只是半透明**（用户要的）。
                     原来还挂了一个小时钟图标 —— 去掉了：它和旁边那条落地的气泡形状不一样，
@@ -1137,8 +1138,8 @@ function Skeleton() {
   return (
     <div className="flex flex-col gap-2 py-3" aria-hidden>
       {rows.map(([w, mine], i) => (
-        <div key={i} className={cn('flex', mine ? 'justify-end' : 'justify-start')}>
-          <div className={cn('h-12 animate-pulse rounded-card bg-ctl/70', w)} />
+        <div key={i} className={cn('flex', mine ? 'justify-end lg:justify-start' : 'justify-start')}>
+          <div className={cn('h-12 animate-pulse rounded-card bg-ctl/70', w, !mine && 'lg:w-full')} />
         </div>
       ))}
     </div>
@@ -1590,14 +1591,16 @@ function ToolLine({ m, toggle }: { m: ChatMsg; toggle?: { open: boolean; n: numb
         <Wrench className="size-3 shrink-0 text-faint" />
       )}
       <span className="shrink-0 font-mono text-[0.88em] text-fg">{m.tool}</span>
-      {m.meta && <span className="min-w-0 flex-1 truncate font-mono text-[0.88em] text-faint">{m.meta}</span>}
+      {/* **不 flex-1**：原来参数这段撑满剩下的宽度，于是后面那个 ✓ 有参数时被推到行尾
+          （宽屏上离工具名一两千像素），没参数时又贴着工具名 —— 同一列里忽左忽右（用户报的
+          「这个 icon 感觉奇怪」）。现在它只占自己的长度、放不下才截，✓ 永远紧跟在这行字后面 */}
+      {m.meta && <span className="min-w-0 truncate font-mono text-[0.88em] text-faint">{m.meta}</span>}
       {/* ok 是 undefined 就是「还不知道」（结果还没落盘）—— 那时画一个省略号，
-          而不是画成成功。画成成功的话「正在跑」和「跑完了」看着一样 */}
-      <span className="shrink-0">
-        {m.ok === undefined ? <span className="text-faint">…</span>
-          : m.ok ? <span className="text-brand">✓</span>
-            : <span className="text-bad">✕</span>}
-      </span>
+          而不是画成成功。画成成功的话「正在跑」和「跑完了」看着一样。
+          用和左边扳手同一套的线条图标，不用 ✓ / ✕ 字符（字形各字体不一、粗细对不上） */}
+      {m.ok === undefined ? <span className="shrink-0 text-faint">…</span>
+        : m.ok ? <Check className="size-3 shrink-0 text-brand" strokeWidth={2.5} aria-label="成功" />
+          : <X className="size-3 shrink-0 text-bad" strokeWidth={2.5} aria-label="失败" />}
     </div>
   )
 }
@@ -1636,11 +1639,23 @@ function Bubble({ m, onAnswer, live, onOpenPath }: {
   }
 
   const mine = m.kind === 'human'
+  /*
+   * **手机和宽屏两种排法**（用户点名的）：
+   *
+   *	手机    人话靠右、agent 靠左、都封顶 85% —— 窄屏上左右分开一眼就知道谁说的
+   *	宽屏    **都靠左**，agent 的回复铺满整行（两边留白由外面那层的 lg:px-8 定），
+   *	        人话按内容收缩、靠绿底和它分开。宽屏上还左右分的话，人话在屏幕最右、回复在最左，
+   *	        读一轮对话眼睛要来回跨一整个屏宽；agent 气泡按内容收缩的话又长短参差，
+   *	        一条三个字的回复旁边是一条铺满的表格，看着就乱（截图里那样）
+   *
+   * 断点用 lg（视口 ≥ 1024）不用 md：手机横屏 870 上下，还该是手机那一档
+   */
   return (
-    <div className={cn('flex', mine ? 'justify-end' : 'justify-start')}>
+    <div className={cn('flex', mine ? 'justify-end lg:justify-start' : 'justify-start')}>
       <div
         className={cn(
           'max-w-[85%] min-w-0 rounded-card px-3 py-2 text-[1em]/relaxed',
+          !mine && 'lg:w-full lg:max-w-none',
           /*
            * 人说的话用**淡绿底 + 绿边**（`bg-brand/12 border-brand/40`，仓库里「打开 /
            * 选中态」的通用写法），**不是 `bg-brand-bg`** —— 那个 token 是主按钮那套饱和

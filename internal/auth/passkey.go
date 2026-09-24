@@ -174,6 +174,40 @@ func (p *Passkeys) Delete(id string) (string, bool) {
 	return "", false
 }
 
+// DeleteAll 清空所有 passkey，返回清掉几把。
+//
+// 给「撤销全部」/ panic 那条路用：**只清设备是清不干净的**。passkey 是账号级的，不挂在
+// 任何一台设备上，而 passkey 登录那条口按设计**不要求认证**（换新设备不用回机器前正是
+// 它的价值）—— 所以「撤销了所有设备」之后，任何一把还留着的 passkey 都能立刻换回一份
+// 新的设备凭据。少了这一下，`revoke all` 就是一句谎话：你以为按了急停，人还在。
+func (p *Passkeys) DeleteAll() int {
+	if p == nil {
+		return 0
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n := len(p.keys)
+	if n == 0 {
+		return 0
+	}
+	p.keys = nil
+	p.saveLocked()
+	return n
+}
+
+// RevokeEverything 是「急停」那一下：清掉所有设备**并且**清掉所有 passkey。
+//
+// 为什么合成一个函数而不是让四个调用点各写两行：`revoke all` 有四条入口（命令行在线 /
+// 命令行离线 / 管理页 / 设置面板里那个「踢掉全部」），**漏掉任何一条，那条路上的急停就
+// 还是原来那句谎话**，而且漏了完全看不出来 —— 页面照样回你「撤销了 3 台」。这类
+// 「同一件事散在几处、对不上时静默」的坑，这个项目里已经踩过好几回（见 CLAUDE.md）。
+//
+// 返回（清掉几台设备，清掉几把 passkey），调用方要把后一个数**说出来** —— 人是冲着
+// 「踢设备」来的，passkey 一起没了必须当场告诉他，否则下次登录才发现。
+func RevokeEverything(s *Store, p *Passkeys) (devs, keys int) {
+	return s.RevokeAll(), p.DeleteAll()
+}
+
 /* ------------------------------------------------------------------ 落盘 */
 
 func (p *Passkeys) file() string { return filepath.Join(p.cfg.Dir, "passkeys.json") }
@@ -396,6 +430,28 @@ func randBytes(n int) []byte {
 //
 // registered 是注册过的 passkey 把数：一把都没有时这条完全不生效 —— 否则就把自己锁在
 // 一个过不去的门后面了。
+// StepUpNeeded：**再注册一把 passkey** 之前要不要先用现有的验一次（§4(d) 的 step-up）。
+//
+// 要这道门是因为「撤销」被绕过去了，链条是这样的：拿到一个配对码的人配上设备 → 立刻给
+// 自己注册一把 passkey → 你发现不对 `revoke all` → 设备清了，**他那把 passkey 还在**，
+// 而 passkey 登录不要求认证，他换一份新凭据就回来了。注册那一步是这条链上唯一能掐的点。
+//
+// 两条判据，缺一不可：
+//
+//	registered == 0   一把都没有时**不设门** —— 否则第一把永远注册不上，人被锁在门外。
+//	                  这也正好是「没有 passkey 就没有这条链」的情况。
+//	PasskeyAt         判的是「刚过了一把 passkey」，**不是** VerifiedAt。配对会把
+//	                  VerifiedAt 设成当下（见 Device.PasskeyAt 那段），按它判的话刚进来
+//	                  的人天然新鲜，这道门对他等于不存在。
+//
+// within 给 5 分钟那个量级：够点一次 Face ID，短到偷来的 cookie 赶不上。
+func StepUpNeeded(id *Ident, within time.Duration, registered int, now time.Time) bool {
+	if id == nil || id.Kind != "device" || registered == 0 || within <= 0 {
+		return false
+	}
+	return now.Sub(id.PasskeyAt) > within
+}
+
 func ReauthNeeded(id *Ident, after time.Duration, registered int, now time.Time) bool {
 	if id == nil || id.Kind != "device" || after <= 0 || registered == 0 {
 		return false

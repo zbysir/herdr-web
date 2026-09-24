@@ -72,7 +72,7 @@ func rootCmd() *cobra.Command {
 	}
 	root.Flags().StringVarP(&webDir, "web", "w", "", "从这个目录伺候前端（开发用；留空则用嵌进二进制的那份）")
 	root.AddCommand(pairCmd(), devicesCmd(), revokeCmd(), unlockCmd(),
-		versionCmd(), updateCmd(), serviceCmd())
+		passkeysCmd(), versionCmd(), updateCmd(), serviceCmd())
 	return root
 }
 
@@ -266,7 +266,7 @@ func serve(webDir string) error {
 		ln = tls.NewListener(ln, mainTLS)
 	}
 
-	if l, err := ctl.Listen(cfg.Dir, ctlHandler(cfg, store, gate)); err != nil {
+	if l, err := ctl.Listen(cfg.Dir, ctlHandler(cfg, store, gate, passkeys)); err != nil {
 		log.Printf("命令行通道起不来（子命令会用不了）: %v", err)
 	} else if l != nil {
 		defer l.Close()
@@ -464,7 +464,12 @@ func revokeCmd() *cobra.Command {
 				return err
 			}
 			if arg == "all" || arg == "--all" {
-				fmt.Printf("  ✓ 撤销了 %d 台设备\n", st.RevokeAll())
+				pk, err := offlinePasskeys(cfg)
+				if err != nil {
+					return err
+				}
+				n, keys := auth.RevokeEverything(st, pk)
+				fmt.Println("  ✓ " + revokedAllMsg(n, keys))
 				return nil
 			}
 			label, ok := st.Revoke(arg)
@@ -475,6 +480,104 @@ func revokeCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// passkeysCmd：命令行这一侧的 passkey 入口。
+//
+// 为什么非要有它：passkey 原来**只有设置面板那一页**看得见、删得掉。于是「手边没有浏览器」
+// 的时候（ssh 进一台机器、或者正是因为出事了不敢开页面），你既看不出账号上挂着几把、
+// 也拿不掉可疑的那把 —— 而 passkey 是能**绕过撤销**的那一层（见 auth.RevokeEverything），
+// 恰恰是最需要能在终端里收拾的东西。
+func passkeysCmd() *cobra.Command {
+	list := &cobra.Command{
+		Use:   "passkeys",
+		Short: "列出账号上的 passkey（标签 / 添加时间 / 最后用过）",
+		Args:  cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			keys, err := passkeyList(cfg)
+			if err != nil {
+				return err
+			}
+			if len(keys) == 0 {
+				fmt.Println("  还没有注册过 passkey。在设置 →「设备」里加一把，" +
+					"之后换新设备不用回机器前，会话凭据的寿命也能压短。")
+				return nil
+			}
+			w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
+			fmt.Fprintln(w, "  ID\t标签\t添加于\t最后用过")
+			for _, k := range keys {
+				fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n",
+					k.ID, k.Label, k.Created.Format("2006-01-02"), ago(k.LastUsed))
+			}
+			return w.Flush()
+		},
+	}
+	revoke := &cobra.Command{
+		Use:   "revoke <id|all>",
+		Short: "删掉某把 passkey（all = 全部）",
+		Args: func(_ *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return fmt.Errorf("要给一把 passkey 的 ID（herdr-web passkeys 里看，前四位就够），或者 all")
+			}
+			return nil
+		},
+		RunE: func(_ *cobra.Command, args []string) error {
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			arg := args[0]
+			if res, err := ctl.Call(cfg.Dir, ctl.Request{Cmd: "passkey-revoke", Arg: arg}); err == nil {
+				fmt.Println("  ✓ " + res.Msg)
+				return nil
+			} else if err != ctl.ErrNoServer {
+				return err
+			}
+			// 和 revoke 同一条规矩：退回改文件之前先确认真没有服务在跑，
+			// 两个进程写同一份文件会静默丢数据。
+			if err := requireNoServer(cfg); err != nil {
+				return err
+			}
+			pk, err := offlinePasskeys(cfg)
+			if err != nil {
+				return err
+			}
+			if arg == "all" || arg == "--all" {
+				fmt.Printf("  ✓ 删掉了 %d 把 passkey\n", pk.DeleteAll())
+				return nil
+			}
+			label, ok := pk.Delete(arg)
+			if !ok {
+				return fmt.Errorf("没有这把 passkey：%s", arg)
+			}
+			fmt.Println("  ✓ 删掉了 " + label)
+			return nil
+		},
+	}
+	list.AddCommand(revoke)
+	return list
+}
+
+// passkeyList 优先问正在跑的那个进程，问不到再读文件 —— 和 devices() 一条路子。
+func passkeyList(cfg *config.Config) ([]auth.PasskeyInfo, error) {
+	if res, err := ctl.Call(cfg.Dir, ctl.Request{Cmd: "passkeys"}); err == nil {
+		return res.Keys, nil
+	} else if err != ctl.ErrNoServer {
+		return nil, err
+	}
+	if runlock.InUse(cfg.DataDir) {
+		return nil, fmt.Errorf("服务在跑，但命令行通道（%s）连不上，列出来的会是过期数据。\n"+
+			"  先看看服务启动日志里 ctl.sock 那一行报了什么", ctl.Path(cfg.Dir))
+	}
+	pk, err := offlinePasskeys(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return pk.List(), nil
 }
 
 func unlockCmd() *cobra.Command {
@@ -536,7 +639,26 @@ func offlineStore(cfg *config.Config) (*auth.Store, error) {
 	})
 }
 
-func ctlHandler(cfg *config.Config, store *auth.Store, gate *auth.Gate) func(ctl.Request) ctl.Response {
+// offlinePasskeys 服务没在跑时直接读 passkeys.json。RPID 给空就行 —— 那样 NewPasskeys
+// 不建 webauthn 实例（做不了 ceremony），但 List / Delete 这些纯文件操作照旧能用，
+// 而命令行要的正是这些。
+func offlinePasskeys(cfg *config.Config) (*auth.Passkeys, error) {
+	return auth.NewPasskeys(auth.PasskeyConfig{
+		Dir: cfg.DataDir, LegacyFile: cfg.LegacyDataFile("passkeys.json"),
+	})
+}
+
+// revokedAllMsg：passkey 那半句**只在真删了东西时才说**，没有 passkey 的部署上不该
+// 平白多一句「顺带删了 0 把」。而真删了就必须说出来 —— 人是冲着踢设备来的。
+func revokedAllMsg(devs, keys int) string {
+	if keys == 0 {
+		return fmt.Sprintf("撤销了 %d 台设备", devs)
+	}
+	return fmt.Sprintf("撤销了 %d 台设备，并删掉了 %d 把 passkey（急停要连因子一起拿掉，"+
+		"否则 passkey 登录能立刻换回一份新凭据）", devs, keys)
+}
+
+func ctlHandler(cfg *config.Config, store *auth.Store, gate *auth.Gate, passkeys *auth.Passkeys) func(ctl.Request) ctl.Response {
 	return func(req ctl.Request) ctl.Response {
 		switch req.Cmd {
 		case "pair":
@@ -546,14 +668,26 @@ func ctlHandler(cfg *config.Config, store *auth.Store, gate *auth.Gate) func(ctl
 			return ctl.Response{Devices: store.Devices()}
 		case "revoke":
 			if req.Arg == "all" || req.Arg == "--all" {
-				n := store.RevokeAll()
-				return ctl.Response{N: n, Msg: fmt.Sprintf("撤销了 %d 台设备", n)}
+				n, keys := auth.RevokeEverything(store, passkeys)
+				return ctl.Response{N: n, Msg: revokedAllMsg(n, keys)}
 			}
 			label, ok := store.Revoke(req.Arg)
 			if !ok {
 				return ctl.Response{Err: "没有这台设备：" + req.Arg}
 			}
 			return ctl.Response{N: 1, Msg: "撤销了 " + label}
+		case "passkeys":
+			return ctl.Response{Keys: passkeys.List()}
+		case "passkey-revoke":
+			if req.Arg == "all" || req.Arg == "--all" {
+				n := passkeys.DeleteAll()
+				return ctl.Response{N: n, Msg: fmt.Sprintf("删掉了 %d 把 passkey", n)}
+			}
+			label, ok := passkeys.Delete(req.Arg)
+			if !ok {
+				return ctl.Response{Err: "没有这把 passkey：" + req.Arg}
+			}
+			return ctl.Response{N: 1, Msg: "删掉了 " + label}
 		case "unlock":
 			gate.Unlock()
 			return ctl.Response{Msg: "ok"}

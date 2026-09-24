@@ -51,6 +51,16 @@ type Device struct {
 	LastSeen time.Time `json:"lastSeen"`
 	LastIP   string    `json:"lastIp"`
 	Expires  time.Time `json:"expires"` // 零值 = 永不过期
+	// PasskeyAt 是上一次**真的过了一把 passkey** 的时刻。
+	//
+	// ⚠️ 为什么不能复用 VerifiedAt：**配对本身就会把 VerifiedAt 设成当下**（下面那行
+	// 「配对码本身就是一次『你在机器前』的证明」）。于是「敏感操作要求新鲜认证」如果按
+	// VerifiedAt 判，刚拿配对码进来的人**天然就是新鲜的** —— 那道门对他等于不存在，
+	// 而他恰恰是这道门唯一要拦的人。两个时刻必须分开记：一个回答「这份凭据怎么来的」，
+	// 一个回答「人刚刚用生物因子证明过自己」。
+	//
+	// 零值 = 从没过过 passkey（老设备升上来就是这样），那就该被要求验一次。
+	PasskeyAt time.Time `json:"passkeyAt"`
 	// VerifiedAt 是上一次「人证明了自己在场」的时刻：配对成功，或者过了一次 passkey。
 	// 注册过 passkey 之后，服务端会要求这个时间足够新，否则要求重新验一次 ——
 	// 这是把「cookie 被偷」的可用窗口从整个 TTL 压到一天的那个机制。
@@ -413,13 +423,15 @@ type Ident struct {
 	// VerifiedAt 透出来给上层判断「要不要重新验一次」。判断放在 server 那边做，
 	// 因为「有没有注册过 passkey」是它才知道的事。
 	VerifiedAt time.Time
+	// PasskeyAt 同理，给 StepUpNeeded 用。和 VerifiedAt 的区别见 Device.PasskeyAt。
+	PasskeyAt time.Time
 }
 
 func (s *Store) Authenticate(r *http.Request) *Ident {
 	ip := s.ClientIP(r)
 	if c, err := r.Cookie(CookieName); err == nil && c.Value != "" {
 		if d := s.lookup(c.Value, ip); d != nil {
-			return &Ident{Kind: "device", Label: d.Label, Device: d, Ambient: true, VerifiedAt: d.VerifiedAt}
+			return &Ident{Kind: "device", Label: d.Label, Device: d, Ambient: true, VerifiedAt: d.VerifiedAt, PasskeyAt: d.PasskeyAt}
 		}
 	}
 	// 旧书签：只够换一次 cookie（handleRoot 里换），也允许直接调 /api（老脚本还能用）
@@ -537,12 +549,18 @@ func (s *Store) CheckTampered(alert func(string)) {
 }
 
 // MarkVerified 记一次刚做过的生物验证（passkey 断言成功）。
+//
+// 调用点只有 passkey 的 login/finish 和 register/finish 两处 —— 也就是说 PasskeyAt
+// 这个时刻**只可能由一次真的 passkey 断言写出来**，配对那条路碰不到它。StepUpNeeded
+// 靠的就是这一点。
 func (s *Store) MarkVerified(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, d := range s.devs {
 		if d.ID == id {
-			d.VerifiedAt = s.now()
+			now := s.now()
+			d.VerifiedAt = now
+			d.PasskeyAt = now
 			s.flushLocked()
 			return
 		}

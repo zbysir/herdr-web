@@ -67,6 +67,13 @@ func TestClaudeParse(t *testing.T) {
 		// 人在 agent 干活时说的每一句都看不见（用户报的，实测一个会话里 24 条是这种）。
 		// 后面那条 humanTurn=false 的（后台任务通知）和普通 attachment（注入的文件内容）都不算。
 		"human 排队时打的这句话也要出现",
+		// ⚠️ 下面这两条是**这个 bug 报第二次**之后钉的（见 claude.go 的 claudeQueued）：
+		// `humanTurn` 只落在一部分人话上（实测 858 条里 138 条），原来拿它当唯一判据的话，
+		// 另外那 720 条（84%）在 chat 里一条都不出现，而且完全静默。
+		"human 没有 humanTurn 的那一版也要出现",
+		// 三个字段全认不出时**按人话放过去** —— 宁可多显示一条机器消息（一眼看得见），
+		// 也不要再来一次「人话静静消失」。中间那条 origin=task-notification 照旧挡在外面。
+		"human 三个字段都没有时按人话放过去",
 	}
 	diff(t, want, got)
 }

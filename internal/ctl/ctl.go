@@ -21,7 +21,7 @@ import (
 )
 
 type Request struct {
-	Cmd string `json:"cmd"` // pair | devices | revoke
+	Cmd string `json:"cmd"` // pair | devices | revoke | passkeys | passkey-revoke
 	Arg string `json:"arg"`
 }
 
@@ -32,7 +32,10 @@ type Response struct {
 	URL     string        `json:"url,omitempty"`
 	Expires time.Time     `json:"expires,omitempty"`
 	Devices []auth.Device `json:"devices,omitempty"`
-	N       int           `json:"n,omitempty"`
+	// Keys 是 passkey 一览。和 Devices 分开两个字段，不合并成一个泛型的「条目」——
+	// 两者能撤销的后果不一样（踢设备是踢一次登录，删 passkey 是拿掉一个因子）。
+	Keys []auth.PasskeyInfo `json:"keys,omitempty"`
+	N    int                `json:"n,omitempty"`
 }
 
 func Path(dir string) string { return filepath.Join(dir, "ctl.sock") }

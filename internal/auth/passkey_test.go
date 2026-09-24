@@ -173,3 +173,104 @@ func TestUsableOn(t *testing.T) {
 		}
 	}
 }
+
+// StepUpNeeded 这道门唯一要拦的人，就是「刚拿配对码进来的那个」—— 所以最要紧的一条是
+// **配对刚发生时它必须要求验证**。配对会把 VerifiedAt 设成当下（那是对的：配对码确实
+// 证明了人在机器前），于是按 VerifiedAt 判的话这个人天然新鲜，门对他等于不存在。
+func TestStepUpNeeded(t *testing.T) {
+	now := time.Now()
+	const win = 5 * time.Minute
+
+	// 刚配上的设备：VerifiedAt 是当下，但**从没过过 passkey**
+	justPaired := &Ident{
+		Kind:       "device",
+		Device:     &Device{ID: "d1", Created: now},
+		VerifiedAt: now,
+	}
+	if !StepUpNeeded(justPaired, win, 1, now) {
+		t.Error("刚配对的设备必须被要求先验一把现有 passkey —— " +
+			"这正是「拿到配对码的人给自己偷偷再留一把」那条链要掐的地方")
+	}
+
+	verified := &Ident{Kind: "device", Device: &Device{ID: "d2"}, PasskeyAt: now.Add(-time.Minute)}
+	stale := &Ident{Kind: "device", Device: &Device{ID: "d3"}, PasskeyAt: now.Add(-time.Hour)}
+
+	cases := []struct {
+		name string
+		id   *Ident
+		keys int
+		want bool
+	}{
+		{"一把都没有时不设门（否则第一把永远注册不上）", justPaired, 0, false},
+		{"刚过了 passkey → 放行", verified, 1, false},
+		{"上次过 passkey 是一小时前 → 要求重验", stale, 1, true},
+		{"本机豁免那种身份不涉及", &Ident{Kind: "loopback"}, 1, false},
+		{"旧 token 那种身份不涉及", &Ident{Kind: "legacy"}, 1, false},
+		{"nil 身份", nil, 1, false},
+	}
+	for _, c := range cases {
+		if got := StepUpNeeded(c.id, win, c.keys, now); got != c.want {
+			t.Errorf("%s：得到 %v，想要 %v", c.name, got, c.want)
+		}
+	}
+}
+
+// MarkVerified 是 PasskeyAt 的**唯一**写入点（调用点只有 passkey 的 login/finish 和
+// register/finish）。这条钉住那个性质：配对不写它，过一次 passkey 才写。
+func TestMarkVerifiedWritesPasskeyAt(t *testing.T) {
+	s := newStore(t, Config{})
+	code, _ := s.MintCode()
+	dev, _, err := s.Redeem(code, "测试设备", "127.0.0.1")
+	if err != nil {
+		t.Fatalf("Redeem: %v", err)
+	}
+	if !dev.PasskeyAt.IsZero() {
+		t.Fatal("配对不该写 PasskeyAt —— 写了的话 step-up 对刚进来的人就失效了")
+	}
+	if dev.VerifiedAt.IsZero() {
+		t.Fatal("配对该写 VerifiedAt（配对码本身就是一次「人在机器前」的证明）")
+	}
+	s.MarkVerified(dev.ID)
+	var got *Device
+	for _, d := range s.Devices() {
+		if d.ID == dev.ID {
+			got = &d
+		}
+	}
+	if got == nil {
+		t.Fatal("设备没了")
+	}
+	if got.PasskeyAt.IsZero() {
+		t.Fatal("过了一把 passkey 之后 PasskeyAt 必须有值")
+	}
+}
+
+// 「撤销全部」必须连 passkey 一起拿掉：只清设备的话，任何一把还留着的 passkey 都能
+// 立刻换回一份新凭据（登录那条口按设计不要求认证）—— 那样急停就是一句谎话。
+func TestRevokeEverythingClearsPasskeys(t *testing.T) {
+	s := newStore(t, Config{})
+	code, _ := s.MintCode()
+	if _, _, err := s.Redeem(code, "设备 A", "127.0.0.1"); err != nil {
+		t.Fatalf("Redeem: %v", err)
+	}
+	p, err := NewPasskeys(PasskeyConfig{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("NewPasskeys: %v", err)
+	}
+	p.keys = []*Passkey{{ID: "k1", Label: "手机"}, {ID: "k2", Label: "电脑"}}
+
+	devs, keys := RevokeEverything(s, p)
+	if devs != 1 || keys != 2 {
+		t.Fatalf("想要 (1 台, 2 把)，得到 (%d, %d)", devs, keys)
+	}
+	if n := len(s.Devices()); n != 0 {
+		t.Errorf("设备该清空，还剩 %d", n)
+	}
+	if n := p.Count(); n != 0 {
+		t.Errorf("passkey 该清空，还剩 %d —— 留着的话急停按不掉人", n)
+	}
+	// 数目要如实回报：调用方靠它决定说不说那句「顺带删了 N 把」
+	if devs, keys := RevokeEverything(s, p); devs != 0 || keys != 0 {
+		t.Errorf("已经空了还报 (%d, %d)", devs, keys)
+	}
+}

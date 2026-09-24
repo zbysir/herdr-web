@@ -259,7 +259,8 @@ func (d Deps) devices(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet:
 		writeJSON(w, 200, map[string]any{"devices": d.Store.Devices()})
 	case r.Method == http.MethodDelete && id == "":
-		writeJSON(w, 200, map[string]any{"revoked": d.Store.RevokeAll()})
+		n, keys := auth.RevokeEverything(d.Store, d.Passkeys)
+		writeJSON(w, 200, map[string]any{"revoked": n, "passkeys": keys})
 	case r.Method == http.MethodDelete:
 		label, ok := d.Store.Revoke(id)
 		if !ok {

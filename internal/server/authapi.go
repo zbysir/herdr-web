@@ -208,9 +208,11 @@ func (s *Server) apiAuth(w http.ResponseWriter, r *http.Request, seg []string) {
 			return
 		}
 		if len(seg) < 3 || seg[2] == "" {
-			n := s.Auth.RevokeAll()
+			// passkey 一起清：只清设备的话，任何一把还留着的 passkey 都能立刻换回
+			// 一份新凭据（登录那条口按设计不要求认证）—— 见 auth.RevokeEverything。
+			n, keys := auth.RevokeEverything(s.Auth, s.Passkeys)
 			s.Auth.ClearCookie(w) // 包括自己
-			writeJSON(w, 200, map[string]any{"revoked": n})
+			writeJSON(w, 200, map[string]any{"revoked": n, "passkeys": keys})
 			return
 		}
 		label, ok := s.Auth.Revoke(seg[2])

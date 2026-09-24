@@ -299,6 +299,39 @@ passkey 照样按不动。这时能进的路是配对码。
 
 第二因子只在**配对时**过一次（每次请求都要 6 位数的终端没法用）。但这几件事要求
 「5 分钟内的新鲜认证」：配对新设备、撤销设备、改安全配置、panic。
+
+**已经做了的那一件：再注册一把 passkey**（2026-09-24）。它先做是因为不做的话
+**「撤销」是假的**，链条整条是这样的：
+
+1. 谁拿到一个配对码 → 配上 → 就是一台「已认证设备」；
+2. `passkey/register/*` 原来只要求 `requireAuth` → 他给自己注册一把 passkey；
+3. 你发现不对，`revoke all` → `RevokeAll()` **只清 devices，passkeys.json 一个字没动**；
+4. passkey 登录那条口**按设计不要求认证**（「换新设备不用回机器前」正是它的价值）
+   → 他换一份新的设备凭据回来。
+
+于是 §11 里「配对码不许在网页上出」所保护的那条性质 ——「一份不随创造者一起被撤销的
+凭据」—— 从 passkey 这条路被造了出来，而且 `revoke all` 回你一句「撤销了 N 台设备」，
+看着完全正常。
+
+两处修好（`auth.StepUpNeeded` + `auth.RevokeEverything`），各有一个**容易写错**的点：
+
+- **step-up 的判据必须是「刚过了一把 passkey」，不能是「VerifiedAt 够新」。** 配对
+  本身就会把 `VerifiedAt` 设成当下（那是对的：配对码确实证明了人在机器前），所以按它
+  判的话，**刚拿码进来的人天然新鲜**，这道门对他等于不存在 —— 而他正是唯一要拦的人。
+  所以另记一个 `Device.PasskeyAt`，写入点只有 passkey 的 `login/finish` 和
+  `register/finish` 两处。`TestStepUpNeeded` 第一条钉的就是这个。
+- **一把都没注册时不设门**，否则第一把永远注册不上（把自己锁在门外）。这也正好是
+  「没有 passkey 就没有上面那条链」的情况。
+- 挡住时回 **403 `reason: "stepup"`，不是 401** —— 401 在前端会广播 `UNAUTHED`，
+  把整个应用弹回登录屏，而这儿只是「再按一次指纹」。前端接住这一下自己先验一次再重试
+  （只重试一次），对人来说就是点两次 Face ID，界面上不多一个按钮。
+- **`revoke all` 的四条入口**（命令行在线 / 命令行离线 / 管理页 / 设置面板）收口到
+  `auth.RevokeEverything`：漏掉任何一条，那条路上的急停就还是原来那句谎话，而且漏了
+  看不出来。删掉 passkey 的条数要**说出来** —— 人是冲着踢设备来的。
+- 顺带补了命令行入口 `herdr-web passkeys [revoke <id|all>]`：passkey 原来只有设置面板
+  看得见、删得掉，而「手边没有浏览器」恰恰常常就是出事的时候。
+
+还没做的仍然是那几件：撤销设备、改安全配置、panic 的 step-up。
 可选：`HERDR_WEB_PTY_REAUTH_MIN`（默认关）—— 会话闲置超过 N 分钟后，**开新 PTY** 要
 重新过一次因子。危险的是 shell，不是读接口。
 
@@ -705,6 +738,12 @@ Origin → 403；`/pty` 缺 Origin 的 cookie 请求 → 403；暴露无 TLS →
    *验收*：endpoint 的 options 里 `rp.id` 正确、`residentKey`/`userVerification` 都是 required；
    未认证不能注册；一把都没注册时不生效（否则把自己锁在门外）；浏览器接受 options（无 JS 错误）。
    **真机上那一下生物验证要人手按，自动化替不了。**
+   **补充（2026-09-24）**：光「注册要求已认证」是不够的 —— 已认证包括「刚拿配对码进来的那台」。
+   现在再注册一把要求**5 分钟内过过一把现有 passkey**（`auth.StepUpNeeded`，判据是
+   `PasskeyAt` 不是 `VerifiedAt`，理由见 §4(d)），而且 `revoke all` 连 passkey 一起清
+   （`auth.RevokeEverything`，四条入口收口到一处）。不做这两件的话「撤销」是假的，见 §4(d) 那条链。
+   *验收*：刚配对的设备调 `register/begin` 拿到 403 `reason=stepup`；一把都没有时照旧能注册第一把；
+   `revoke all` 之后 `herdr-web passkeys` 是空的。
 6. 审计日志（配对 / 撤销 / 失败 / 封锁 / PTY 开关 / 投稿的目标和字数）。
 7. L4 滚动轮换 + 重用检测。*验收*：拿宽限期外的旧 cookie 重放 → 整条会话被吊销 + 告警。
 8. L2(a) 本机批准，**默认关**（`HERDR_WEB_PAIR_APPROVE=1` 才启用）。人不在机器前时用不上，

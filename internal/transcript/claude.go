@@ -124,9 +124,21 @@ type clAttachment struct {
 	Type string `json:"type"`
 	// Prompt 排队那条人话的原文（`type == "queued_command"` 时）
 	Prompt string `json:"prompt"`
-	// HumanTurn 这条是不是人说的。**判据用它**，别去嗅 prompt 的开头 ——
-	// 后台任务完成的通知也走 queued_command 这条路（那些是机器发的）。
-	HumanTurn bool `json:"humanTurn"`
+	// Origin.Kind 是**现在**那条判据：`human` / `task-notification`。实测带 origin 的记录里
+	// 它和 CommandMode 永远一致，而它比 HumanTurn 可靠得多（见 claudeQueued 那段）。
+	Origin struct {
+		Kind string `json:"kind"`
+	} `json:"origin"`
+	// CommandMode 两个已知值：`prompt`（人打的）/ `task-notification`（后台任务跑完的通知）。
+	// 实测**每一条** queued_command 上都有，所以它当最后那道兜底。
+	CommandMode string `json:"commandMode"`
+	// HumanTurn 老字段，**只落在一部分人话上**（实测 858 条人话里只有 138 条带它）。
+	// 曾经拿它当唯一判据，翻车记在 claudeQueued 上面。
+	//
+	// ⚠️ 指针不是讲究，是**这个 bug 的正中心**：用 `bool` 的话「没有这个字段」和
+	// 「这个字段是 false」在 Go 里长得一模一样，于是 84% 的人话（没这个字段）被当成了
+	// 机器发的。分得开「缺」和「false」，才谈得上「缺的时候退到下一条判据」。
+	HumanTurn *bool `json:"humanTurn"`
 }
 
 type clBlock struct {
@@ -188,10 +200,20 @@ func parseClaude(line []byte, st *state, out *[]Msg) {
 // 消息是可以被撤掉的，那时候 chat 里会留下一句从没发出去的话。`queued_command` 是它
 // **真的进了对话**的记录。
 //
-// 判据用 `humanTurn`，不去嗅 prompt 开头：后台任务完成的通知也走 queued_command 这条路。
+// ⚠️ **判据不能只看 `humanTurn`** —— 同一个 bug 报第二次才发现（用户报的「又漏消息啦，
+// 终端里明明有一条 pending 的，chat 里无论怎么刷新都没有」）。`humanTurn` 只落在一部分
+// 人话上：全盘扫 `~/.claude/projects` 下所有转录，`origin.kind == "human"` 的 858 条里
+// **只有 138 条带 `humanTurn`，另外 720 条（84%）压根没这个字段** —— 于是那 720 句人话
+// 一条都不显示，而且**完全静默**（少的不是一个字段，是一整类消息）。两种形状在**同一个
+// 版本**里混着出（实测 2.1.273 / .278 / .280 都有），所以不是「升个版就好了」。
+//
+// 现在的顺序：`origin.kind` → `humanTurn` → `commandMode`。第一条是现在的判据，第二条留给
+// 只有老字段的记录，第三条兜底（实测它在每一条上都有）。**最后一道有意宽**：三个都认不出
+// 时按人话放过去。这个方向的错是「对话流里多出一条 `<task-notification>`」，一眼看得见、
+// 一报就能修；反过来错就是这个 bug 本身 —— 人话静静消失，谁都发现不了。
 func claudeQueued(l *clLine, out *[]Msg) {
 	a := l.Attachment
-	if a == nil || a.Type != "queued_command" || !a.HumanTurn {
+	if a == nil || a.Type != "queued_command" || !humanQueued(a) {
 		return
 	}
 	// 和直接打的那条走同一套剥壳（排队发的也会被包 pasted_content / 斜杠命令壳）
@@ -200,6 +222,24 @@ func claudeQueued(l *clLine, out *[]Msg) {
 		return
 	}
 	*out = append(*out, Msg{ID: l.UUID, Kind: KindHuman, Text: clip(text, 4000), At: l.Timestamp})
+}
+
+// humanQueued 回答「这条排队的消息是不是人说的」。判据的来历见 claudeQueued 上面那段。
+//
+// 顺序是「**哪个字段在，就信哪个**」，一层层退：`origin.kind` → `humanTurn` → `commandMode`，
+// 三个都没有时按人话放过去。每一层只在**上一层缺席**时才轮到，所以宿主哪天再换一次字段，
+// 剩下两层还接得住。
+func humanQueued(a *clAttachment) bool {
+	if k := a.Origin.Kind; k != "" {
+		return k == "human"
+	}
+	if a.HumanTurn != nil {
+		return *a.HumanTurn
+	}
+	if a.CommandMode != "" {
+		return a.CommandMode == "prompt"
+	}
+	return true
 }
 
 // humanText 把人话上那几层壳剥掉（`<pasted_content …>`、斜杠命令那坨标签）。
