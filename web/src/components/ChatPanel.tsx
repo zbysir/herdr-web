@@ -1617,7 +1617,7 @@ function ToolLine({ m, toggle }: { m: ChatMsg; toggle?: { open: boolean; n: numb
   )
 }
 
-/** 一条。三种画法：人 / agent（气泡）/ 思考（折起来）/ 提示（一行小字）。工具那种见 ToolRun */
+/** 一条。几种画法：人 / agent（气泡）/ 思考（铺开，暗一档 + 左竖线）/ 提示（一行小字）。工具那种见 ToolRun */
 function Bubble({ m, onAnswer, live, onOpenPath }: {
   m: ChatMsg
   /** 点了第 index 个选项（已经过二次确认）。不给 = 这条 ask 只显示不给点 */
@@ -1627,8 +1627,6 @@ function Bubble({ m, onAnswer, live, onOpenPath }: {
   /** 点了正文里一条本地路径（走终端那套 openPath） */
   onOpenPath?: (p: string) => void
 }) {
-  const [open, setOpen] = useState(false)
-
   if (m.ask) return <AskCard m={m} onAnswer={onAnswer} live={live} />
 
   if (m.kind === 'notice') {
@@ -1636,17 +1634,18 @@ function Bubble({ m, onAnswer, live, onOpenPath }: {
   }
 
   if (m.kind === 'think') {
-    // 思考默认**折起来**：它比正文长好几倍，铺开的话真正说给你听的那几句就找不着了。
+    /*
+      思考**直接铺开**，当一条正常的消息读（用户点名的：「我需要看这个」）。原来折成一行
+      「想了一会儿（点开看）」—— 理由是它比正文长、会把真正说给你听的那几句淹掉；可在手机上
+      盯着 agent 干活时，思考正是「它此刻在想什么、打算怎么做」的那一段，折起来就只剩一行没用的字。
+      和正文分开靠**暗一档的字 + 左边一条竖线**，不靠折叠；照样走 Markdown（思考里常有列表和代码）。
+    */
     return (
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="w-full text-left text-[0.9em] text-faint hover:text-muted"
-      >
-        {open
-          ? <span className="whitespace-pre-wrap break-words italic">{m.text}</span>
-          : <span>· 想了一会儿（点开看）</span>}
-      </button>
+      <div className="min-w-0 border-l-2 border-line pl-3 text-[0.92em]/relaxed text-muted">
+        <Suspense fallback={<span className="whitespace-pre-wrap break-words">{m.text}</span>}>
+          <Markdown text={m.text ?? ''} onPath={onOpenPath} />
+        </Suspense>
+      </div>
     )
   }
 

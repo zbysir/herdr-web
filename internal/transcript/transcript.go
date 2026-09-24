@@ -55,7 +55,7 @@ type Kind string
 const (
 	KindHuman  Kind = "human"  // 人说的
 	KindAgent  Kind = "agent"  // agent 说的
-	KindThink  Kind = "think"  // 思考过程（默认折起来）
+	KindThink  Kind = "think"  // 思考过程（前端直接铺开，暗一档）
 	KindTool   Kind = "tool"   // 工具调用（名字 + 一行摘要 + 成没成）
 	KindNotice Kind = "notice" // 被打断 / 上下文压缩这类系统事件，一行小字
 )

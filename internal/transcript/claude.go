@@ -544,8 +544,9 @@ func claudeAssistant(l *clLine, st *state, out *[]Msg) {
 			}
 		case "thinking":
 			// thinking 可能是空的（这一档关掉、或者被 redact 掉了），空的就别占一条。
+			// 截断和正文一个档：它现在是直接铺开给人读的（见前端 Bubble 里 think 那段）
 			if t := strings.TrimSpace(b.Thinking); t != "" {
-				*out = append(*out, Msg{ID: id, Kind: KindThink, Text: clip(t, 4000), At: l.Timestamp})
+				*out = append(*out, Msg{ID: id, Kind: KindThink, Text: clip(t, 8000), At: l.Timestamp})
 			}
 		case "tool_use":
 			*out = append(*out, Msg{
