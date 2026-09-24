@@ -65,7 +65,18 @@ herdr-web pair          # 出一个新的一次性配对码 + 二维码
 herdr-web devices       # 列出已配对设备（标签 / 最后活跃 / 最后 IP / 到期）
 herdr-web revoke <id>   # 踢掉某台（all = 全部）；下一个请求立刻 401
 herdr-web unlock        # 解开「失败太多」的全局熔断
+herdr-web passkeys      # 列出账号上的 passkey（标签 / 添加时间 / 最后用过）
+herdr-web passkeys revoke <id|all>   # 删掉某把（all = 全部）
 ```
+
+**`revoke all` 会连 passkey 一起清掉**，而且会把删了几把告诉你。这是有意的：passkey 是
+账号级的、不挂在任何一台设备上，而 passkey 登录那条路**按设计不要求认证**（「换新设备不用
+回机器前」正是它的价值）—— 只清设备的话，任何一把还留着的 passkey 都能立刻换回一份新凭据，
+那样「撤销全部」就是一句谎话。要只踢设备就按 ID 一台一台踢。
+
+**再加一把 passkey 时会让你先用已有的那把验一次**（界面上就是点两次 Face ID）。理由是同一条：
+拿到配对码的人配上设备之后，如果能直接给自己注册一把 passkey，你事后 `revoke all` 也赶不走他。
+一把都没注册时不要求 —— 否则第一把永远加不上。
 
 **网页上不出配对码**（连已配对的设备也不行），理由见[安全](#安全)。配对码用完了就回机器前
 `herdr-web pair`。
