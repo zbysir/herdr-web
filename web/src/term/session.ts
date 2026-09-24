@@ -586,6 +586,64 @@ export class Session {
 
   /* ------------------------------------------------------------- 连接 */
 
+  /**
+   * 连着，**而且对面那个全屏程序（herdr）已经起来了**。
+   *
+   * 光看连接不够：一条新连接拿到的是个登录 shell，服务端再替你敲 `herdr`（`autoType`），
+   * 中间隔着一两秒。这段时间里发 ^B 落进的是 zsh（前缀键在那儿什么都不是）。判据是
+   * **切进了备用屏** —— 全屏 TUI 都会切过去，shell 提示符不会。chat 模式下「按了个只对
+   * 终端有用的键 → 自动连上再补发」靠它等时机（见 App 的 whenReady）。
+   */
+  appReady() {
+    return this.ws?.readyState === WebSocket.OPEN && this.term.buffer.active.type === 'alternate'
+  }
+
+  /**
+   * 屏幕上有几个框的左上角（`┌` / `╭`）。给「按完 ^B 组合自动回 chat」判断 herdr 是不是
+   * **弹了个框在等人**（`^B c` 问新 tab 叫什么、跳转 / scratch 这类插件弹窗）用的：和按键
+   * 之前比多出来了 = 有框开着，这时候切走等于把人要填的东西藏起来。只比「多了没有」，
+   * 所以 pane 里本来就有的框（agent 自己的输入框）不影响判断。
+   */
+  boxCorners() {
+    const b = this.term.buffer.active
+    let n = 0
+    for (let y = 0; y < this.term.rows; y++) {
+      const l = b.getLine(b.viewportY + y)?.translateToString(true)
+      if (!l) continue
+      for (const ch of l) if (ch === '┌' || ch === '╭') n++
+    }
+    return n
+  }
+
+  /**
+   * **人**在终端里按了键（快捷键条走 sendKey，不经过这儿）。返回退订函数。
+   *
+   * **不能用 xterm 的 onData**：它还会吐终端**自动回复**的那些序列 —— herdr 一起来就查
+   * 颜色（OSC 10/11/4 × 256）、焦点（`\e[O`）、DSR，每一条的回答都走 onData。拿它当
+   * 「人按了下一个键」的话，herdr 刚启动那一瞬就被误判了（实测：一连几百条，^B 还没发出去
+   * 「按完自动回 chat」就已经被这些回复触发、又被当成「人还在操作」取消掉）。
+   * 所以听那个隐藏输入框上的**真实输入事件**：keydown（光按修饰键不算）+ input（手机
+   * 输入法不走 keydown 的具体键，走 input）。
+   */
+  onUserInput(fn: () => void) {
+    const el = this.kbdEl()
+    if (!el) return () => {}
+    const onKey = (e: Event) => {
+      const k = (e as KeyboardEvent).key
+      if (k === 'Shift' || k === 'Control' || k === 'Alt' || k === 'Meta') return
+      fn()
+    }
+    // **必须挂捕获阶段**：xterm 自己在这个输入框上挂的是捕获监听，处理完会 stopPropagation，
+    // 而按现在的规则（Chrome 89 起）目标上的捕获监听先跑、一停，同一元素上**冒泡**阶段的监听
+    // 就不再触发 —— 挂冒泡的话一个键都收不到（实测：自己挂的 keydown 一次都没回调，而键照样发出去了）
+    el.addEventListener('keydown', onKey, true)
+    el.addEventListener('input', fn, true)
+    return () => {
+      el.removeEventListener('keydown', onKey, true)
+      el.removeEventListener('input', fn, true)
+    }
+  }
+
   /** `gap`：让**服务端**在写进 PTY 之前先等这么多毫秒（见 keysend.ts） */
   send(data: string, gap = 0) {
     if (this.ws?.readyState === WebSocket.OPEN) {

@@ -180,6 +180,14 @@ var (
 	// ErrAmbiguous 同一个 cwd 下有好几个 agent pane，没装 hook 的话分不出是哪一个。
 	// **这种一律不猜**，见包注释。
 	ErrAmbiguous = errors.New("同一个目录下开着多个 agent pane，分不出是哪一个")
+	// ErrNoTranscript 会话身份拿到了，但磁盘上还没有它的转录文件。
+	//
+	// **最常见的原因是「还没对话」**：herdr 的 hook 在 SessionStart 就报了 id，而 claude 要等
+	// 你说第一句才开始写 jsonl（实测：刚开的 agent，连项目目录都还没建）。所以前端把它当成
+	// 空状态（「说第一句话吧」），而不是一条红字错误 —— 原来显示的是
+	// 「找不到会话 670b5857-… 的转录文件」，看着像坏了（用户报的「提示比较生硬」）。
+	// 说完第一句，下一拍轮询就读得到了，不用做任何事。
+	ErrNoTranscript = errors.New("这个会话还没有对话记录")
 	// ErrUnsupported 这个 agent 的转录格式还没支持。
 	ErrUnsupported = errors.New("还不支持这个 agent 的会话记录")
 )

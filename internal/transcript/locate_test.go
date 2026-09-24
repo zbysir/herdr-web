@@ -265,3 +265,15 @@ func TestNilStoreEnabledIsFalse(t *testing.T) {
 		t.Fatal("nil Store 不该说 Enabled")
 	}
 }
+
+// 会话身份有了、文件还没有（刚开的 agent，还没说第一句）：必须能认出是 ErrNoTranscript ——
+// 前端靠这个把「还没对话」画成空状态，而不是一条「找不到会话 xxx 的转录文件」的红字。
+func TestFindByIDNoTranscriptYet(t *testing.T) {
+	s := store(t)
+	for _, agent := range []string{"claude", "codex"} {
+		_, err := s.Find(Ref{Agent: agent, Kind: "id", Value: uuid, CWD: "/Users/bysir/dev/bysir/videomake"})
+		if !errors.Is(err, ErrNoTranscript) {
+			t.Errorf("%s：该是 ErrNoTranscript，拿到 %v", agent, err)
+		}
+	}
+}

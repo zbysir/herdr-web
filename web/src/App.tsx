@@ -34,6 +34,15 @@ import { CAP_BY_ID, TOPBAR_DEFAULT, TOPBAR_PIN_DEFAULT, type CapId, type PanelId
 
 /** chat 模式开着没有（localStorage）。模式熬不过刷新就不叫模式 */
 const LS_CHAT = 'chatOpen'
+/** herdr 的前缀键（默认 ctrl+b）。以它开头的字节是「对 herdr 说的」，chat 模式下要切回终端才有意义 */
+const HERDR_PREFIX = '\x02'
+const termOnly = (b: string) => b.startsWith(HERDR_PREFIX)
+/** chat 模式下补发前最多等终端多久（连上 + herdr 起来） */
+const READY_WAIT_MS = 10_000
+/** 「只对终端有用的键」按完之后留多久再回 chat（让人看一眼结果） */
+const BACK_MS = 1200
+/** herdr 弹了框时最多替人等多久（之后就不管了，留在终端）。两分钟够填一个名字 */
+const MODAL_WAIT_MS = 120_000
 
 /** 「2 张图」「1 段视频」「2 张图 + 1 段视频」—— 提示里说清传上去的是什么 */
 function countWord(rs: UploadResult[]) {
@@ -76,6 +85,7 @@ import { PastePrompt } from '@/components/PastePrompt'
 import { Logo } from '@/components/Logo'
 import { KeyGroupPopup } from '@/components/KeyGroupPopup'
 import { cn } from '@/lib/utils'
+import { tabName } from '@/lib/panename'
 
 /** Safari 的私有全屏 API。lib.dom 里没有这几个，本地补上，省得到处 as any */
 type FsDoc = Document & {
@@ -349,6 +359,17 @@ export default function App() {
   // 底部面板摆在下面还是右边（面板自己身上那个按钮切，横竖屏各一份，见 Dock）
   const [dockSide, setDockSide] = useDockSide()
   const viewerClose = useRef<(() => void) | null>(null)
+  /**
+   * 查看器此刻是不是被**后开的面板**压在下面。
+   *
+   * 查看器本来画在面板上面（z-20 对 z-10）：从文件面板点开一张图，它得盖住那个面板。可反过来
+   * 也会发生 —— 看着一个文件，又点顶栏开面板一览 / 设置，那块面板被压在查看器底下，
+   * 等于点了没反应（用户报的）。所以按**谁后开谁在上**：开面板就把查看器压下去，开（换）
+   * 一个文件就浮回来。**不是关掉查看器** —— 里面可能有没存的编辑，关掉面板它还在原处。
+   */
+  const [viewerUnder, setViewerUnder] = useState(false)
+  useEffect(() => { if (panel) setViewerUnder(true) }, [panel])
+  useEffect(() => { setViewerUnder(false) }, [viewing])
   // 记住上次看的那一页
   const [tab, setTab] = useState<SettingsTab>('term')
   const [showCompose, setShowCompose] = useState(() => lsBool('compose', true))
@@ -823,17 +844,8 @@ export default function App() {
     // 落盘 + 推服务端都在 setOpt 里，那儿只在人真的点了的时候跑。
   }, [opts, ready])
 
-  // 跟随系统明暗 —— **但自己点过一次就钉住**（那一下进了 profile，见 lib/prefs.ts）。
-  // 不钉的话：系统一切换就把 profile 里存的值冲掉，下次报到又把它读回来，两边来回打。
-  useEffect(() => {
-    const mq = matchMedia('(prefers-color-scheme: light)')
-    const f = (e: MediaQueryListEvent) => {
-      if (localStorage.getItem('scheme')) return
-      setScheme(e.matches ? 'light' : 'dark')
-    }
-    mq.addEventListener('change', f)
-    return () => mq.removeEventListener('change', f)
-  }, [])
+  // 明暗：**默认暗色、不跟系统偏好**（原来这儿挂着一个 prefers-color-scheme 的监听，系统一切
+  // 页面跟着切 —— 用户不要）。自己点过就按点的来，见 term/themes.ts 的 initialScheme
 
   /**
    * Esc 的 document 级兜底 —— 不管焦点在哪都能用。
@@ -863,7 +875,8 @@ export default function App() {
         e.stopPropagation()
         return
       }
-      if (viewing) {
+      // 查看器被后开的面板压着时，先收上面那块面板（下面那条 panel 分支）
+      if (viewing && !(viewerUnder && panel)) {
         // 走查看器自己那道关：有没存的修改时第一下只是举起来（见 FileViewer 的 leave）
         if (viewerClose.current) viewerClose.current()
         else setViewing(null)
@@ -891,7 +904,7 @@ export default function App() {
     return () => removeEventListener('keydown', onKey, true)
     // opening / cancelOpen 少一个，这个闭包就会拿着旧值 —— 表现是「正在打开」那一屏
     // 按 Esc 没反应，而那正是 stat 卡在系统授权框上时唯一的出口。
-  }, [panel, viewing, opening, cancelOpen])
+  }, [panel, viewing, viewerUnder, opening, cancelOpen])
 
   // 布局变化（快捷键条 / 发件箱开合、顶栏收放）都要重排终端
   useEffect(() => { sess.current?.relayout() }, [showCompose, showKeys, peek])
@@ -1034,7 +1047,7 @@ export default function App() {
     pushPref(profile.id, k, v ? '1' : '0', toast)
   }, [profile.id, toast])
 
-  /** 明暗。点这一下就把它钉在这一套 profile 上（见上面那个 media 监听） */
+  /** 明暗。点这一下就把它钉在这一套 profile 上（没点过就是暗色，见 term/themes.ts） */
   const flipScheme = useCallback(() => {
     const next: Scheme = scheme === 'dark' ? 'light' : 'dark'
     setScheme(next)
@@ -1436,7 +1449,7 @@ export default function App() {
   const paneName = (id: string) => {
     const p = compose.panes.find((x) => x.id === id)
     if (!p) return id
-    return (p.tab || p.id) + (p.agent ? ` · ${p.agent}` : '')
+    return (tabName(p) || p.id) + (p.agent ? ` · ${p.agent}` : '')
   }
 
   /**
@@ -1556,29 +1569,163 @@ export default function App() {
       submitCompose()
       return
     }
-    /*
-      **终端没连上时这一下是发不出去的，必须说话。**
-
-      这些键（Esc 打断、`/clear`、新标签…）走的是终端那条 WebSocket，而 `session.send`
-      在连接不是 OPEN 时**静默丢掉**。平时看得见终端所以无所谓，但 **chat 模式下终端不在
-      屏幕上**：连接断着照样能看对话（那正是左上角那个点要分开说的事），于是按 Esc、按
-      `/clear` 全都「点了没反应且不报错」—— 这个项目里最不该有的那种行为（用户问的
-      「chat 模式下怎么 clear / 打断」就是撞在这儿）。
-
-      顺手把终端连回来：重连**没有任何代价**（一条 WebSocket 一个 PTY，herdr 的 pane 活在
-      herdr server 里，见 CLAUDE.md 那条「锁屏断连」）。但这一下按键本身是补不回来的 ——
-      它已经丢了，所以话要说清「连上再按一次」，别让人以为发出去了。
-    */
-    if (status.cls !== 'on') {
-      toast('终端没连上，这个键发不出去 —— 正在连，连上再按一次')
-      connect()
+    // 只对终端 / herdr 有意义的键（herdr 前缀 ^B 开头的那些）在 chat 模式下：切回终端再发，
+    // 按完自己回来（见 viaTerm）
+    if (chatOpen && termOnly(b)) {
+      viaTerm(() => fire(b), b !== HERDR_PREFIX)
       return
     }
+    // 前缀已经发过、正等着「下一个键」的那一下：这个键就是组合的后半截，发完准备回 chat
+    if (back.current?.wait) {
+      back.current.wait = false
+      fire(b)
+      armBack()
+      return
+    }
+    /*
+      **终端没连上：连上、等 herdr 起来、再把这一下补发出去。**
+
+      这些键（Esc 打断、`/clear`、新标签…）走的是终端那条 WebSocket，而 `session.send`
+      在连接不是 OPEN 时**静默丢掉**。chat 模式下终端不在屏幕上，连接断着照样能看对话，
+      于是按 Esc、按 `/clear` 原来全是「点了没反应且不报错」。原来的补救是「连上再按一次」，
+      现在直接替人补发：重连没有任何代价（herdr 的 pane 活在 herdr server 里，
+      见 CLAUDE.md 那条「锁屏断连」），而人按这一下的意思是明确的。
+
+      **留在 chat 里**：Esc / `/clear` / 回车 / 方向键这些是对 agent 说的，效果在 chat 里
+      看得见。发到哪个 pane 不用另外指定 —— chat 看的就是 herdr 焦点那个 pane（`ChatPanel`
+      的 `cur`），终端的键也是落在焦点那个 pane 上，两者是同一个。
+    */
+    if (!sess.current?.appReady()) {
+      whenReady(() => fire(b))
+      return
+    }
+    fire(b)
+  }
+
+  /**
+   * 粘滞 Ctrl / Alt。chat 模式下它修饰的是「下一个进终端的键」，而那时终端不在屏幕上 ——
+   * 所以和 ^B 一样：切到终端、打开它、等下一个键按完自己回来。
+   */
+  const stickyKey = (w: 'ctrl' | 'alt') => {
+    if (chatOpen) viaTerm(() => sess.current?.toggleSticky(w), false)
+    else sess.current?.toggleSticky(w)
+  }
+
+  /** 真的发出去 + 让 chat 立刻读一次（这一下多半改了对面的状态，别等那 3 秒一拍，见 keyNudge） */
+  const fire = (b: string) => {
     sess.current?.sendKey(b)
-    // 这一下多半改了对面的状态（Esc 打断、`/clear` 清空…）—— 让 chat 立刻读一次，
-    // 别等那 3 秒一拍（见 keyNudge）
     setKeyNudge((n) => n + 1)
     if (kbdUp) sess.current?.focus()
+  }
+
+  /**
+   * 等终端能收（连着 + herdr 已经起来，见 Session.appReady）再做 fn。没连就顺手连上。
+   *
+   * 等的这几下**排队**，不是只留最后一下：按住方向键连发、或者 ^B 紧跟着一个键，丢掉哪一下
+   * 都是错的。等不到（10 秒；比如 `HERDR_WEB_ON_CONNECT` 配成了空，对面一直是个 shell）
+   * 就丢掉并说清楚 —— 往 zsh 里补发一串 ^B 比不发更糟。
+   */
+  const readyQ = useRef<(() => void)[]>([])
+  const readyT = useRef<number | undefined>(undefined)
+  const whenReady = (fn: () => void) => {
+    readyQ.current.push(fn)
+    if (readyT.current !== undefined) return
+    if (status.cls !== 'on') connect()
+    toast('终端没连上 —— 正在连，连上就替你发出去')
+    const t0 = Date.now()
+    const tick = () => {
+      if (sess.current?.appReady()) {
+        readyT.current = undefined
+        const q = readyQ.current
+        readyQ.current = []
+        q.forEach((f) => f())
+        return
+      }
+      if (Date.now() - t0 > READY_WAIT_MS) {
+        readyT.current = undefined
+        readyQ.current = []
+        toast('等了 10 秒终端还没进 herdr，这几下没发 —— 去终端看看怎么回事')
+        return
+      }
+      readyT.current = window.setTimeout(tick, 120)
+    }
+    readyT.current = window.setTimeout(tick, 120)
+  }
+  useEffect(() => () => clearTimeout(readyT.current), [])
+
+  /**
+   * chat 模式下按了**只对终端有用**的键：切回终端（没连就连上），发出去，按完自己回 chat。
+   *
+   * 用户要的是「按 ^B a 新建一个 tab」这种事在 chat 里也能一口气做完，而不是先被告知
+   * 「回终端再按」。什么时候算「按完」：
+   *
+   *	整串组合（条上一个键直接发 `^B c`）   发完就算
+   *	光一个前缀（单独的 ^B）               等**下一个键**（快捷键条上的、或终端里自己敲的）
+   *
+   * 算完之后留 BACK_MS 再回去，让人看一眼结果。两种情况不回 / 晚点回：
+   *
+   *   - **herdr 弹了个框在等人**（`^B c` 问新 tab 叫什么、你自己配的跳转 / scratch 弹窗）：
+   *     这时候切走等于把要填的东西藏起来（真 pane 上就撞见过 —— `^B c` 之后是个「new tab」
+   *     输入框，不是直接建好）。判据是屏幕上**框的左上角比按 ^B 之前多了**（Session.boxCorners），
+   *     不维护「哪些键会弹框」的名单 —— 人自己配的键也照样认得。框开着就等，关了（回车 /
+   *     Esc）再回，框里打字不算「还有事」。
+   *   - **没框、但人又在终端里敲键了**：他在终端里还有别的事要做，作罢，不回了。
+   *
+   * 人自己切过 chat / 终端也一律作罢。
+   */
+  type Back = { wait: boolean; at?: number; timer?: number; off?: () => void; base: number; modal?: boolean; t0: number }
+  const back = useRef<Back | null>(null)
+  const dropBack = () => {
+    const b = back.current
+    if (!b) return
+    clearTimeout(b.timer)
+    b.off?.()
+    back.current = null
+  }
+  const armBack = () => {
+    const b = back.current
+    if (!b) return
+    clearTimeout(b.timer)
+    b.at = Date.now()
+    const check = () => {
+      if (back.current !== b) return
+      const open = (sess.current?.boxCorners() ?? 0) > b.base
+      // 框开了两分钟还没关：不管了，留在终端（别在人还对着那个框时把画面切走）
+      if (open && Date.now() - b.t0 >= MODAL_WAIT_MS) { dropBack(); return }
+      if (open) {
+        // 框开着：等它关掉（人在里面打字、回车、Esc）。关了之后再留一小会儿给人看结果
+        b.modal = true
+        b.timer = window.setTimeout(check, 300)
+        return
+      }
+      if (b.modal) {
+        b.modal = false
+        b.timer = window.setTimeout(check, BACK_MS / 2)
+        return
+      }
+      dropBack()
+      setChatMode(true)
+    }
+    b.timer = window.setTimeout(check, BACK_MS)
+  }
+  const viaTerm = (send: () => void, complete: boolean) => {
+    dropBack()
+    const b: Back = { wait: !complete, base: sess.current?.boxCorners() ?? 0, t0: Date.now() }
+    // 终端里自己敲的键：等着后半截时它就是后半截；已经在倒数回去时它说明人还有事，作罢。
+    // 刚算完的 300ms 内不算「还有事」：手机输入法按一下是 keydown(229) + input **两个**事件，
+    // 前一个是后半截，后一个不该把自己刚排上的「回去」取消掉
+    b.off = sess.current?.onUserInput(() => {
+      if (back.current !== b) return
+      if (b.wait) { b.wait = false; armBack() } else if (!b.modal && Date.now() - (b.at ?? 0) > 300) dropBack()
+    })
+    back.current = b
+    setChatMode(false)
+    toast(complete ? '这个键要在终端里按 —— 切过去了，按完自动回 chat' : '切到终端了，再按一个键，按完自动回 chat')
+    // 「按之前屏幕上有几个框」要在**真要发的那一刻**记：点下去时终端可能还没连上，
+    // 那会儿量出来的是一块空屏，herdr 自己界面上的框会被误当成「弹出来的」
+    const go = () => { b.base = sess.current?.boxCorners() ?? 0; b.t0 = Date.now(); send(); if (complete) armBack() }
+    if (sess.current?.appReady()) go()
+    else whenReady(go)
   }
 
   /**
@@ -1641,7 +1788,8 @@ export default function App() {
     },
     // chat 模式同样能在服务端关掉（HERDR_WEB_CHAT=0，或者这台机器上压根没有 claude /
     // codex 的会话目录）—— 那时候连按钮都不画（和文件浏览 / 改动同一条）
-    chat: { on: chatOpen, run: () => (chatOpen ? setChatMode(false) : openChat()), hide: state?.chat === false },
+    // 人自己切 chat / 终端：「按完自动回 chat」那件事作罢（见 viaTerm），别跟人抢
+    chat: { on: chatOpen, run: () => { dropBack(); if (chatOpen) setChatMode(false); else openChat() }, hide: state?.chat === false },
     compose: { on: showCompose, run: () => toggleCompose(!showCompose) },
     keys: { on: showKeys, run: () => toggleKeys(!showKeys) },
     // 这一下是用户手势，正好在这儿进全屏（键盘那条路见 kbdFull 的注释）
@@ -1730,7 +1878,7 @@ export default function App() {
             return
           }
           if (ta) ta.run()
-          else if (k.sticky) sess.current?.toggleSticky(k.sticky)
+          else if (k.sticky) stickyKey(k.sticky)
           else if (k.send) sendKeyBytes(k.send)
         }}
       >
@@ -2061,6 +2209,7 @@ export default function App() {
             stat={viewing}
             onClose={() => setViewing(null)}
             closeRef={viewerClose}
+            under={viewerUnder && !!panel}
             onBrowse={(d) => { setViewing(null); openFiles(d) }}
             onOpenPath={(p) => void openPath(p)}
             chatFont={chatFont}
@@ -2165,7 +2314,7 @@ export default function App() {
               rows={bar}
               sticky={sticky}
               onSend={sendKeyBytes}
-              onSticky={(w) => sess.current?.toggleSticky(w)}
+              onSticky={stickyKey}
               // act 那一档直接走顶栏那张动作表：softkeys 的 act 白名单是 CapId 的**子集**
               // （internal/capability 那张表里 Key 那一列），同一个 id 就是同一件事 ——
               // 亮不亮、红点、「这个部署有没有这项」全都跟着走，不写第二份映射

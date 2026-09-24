@@ -25,3 +25,19 @@ export function paneTitle(p: { agent?: string; title?: string }): string {
   const t = cleanTitle(p.title ?? '').trim()
   return GENERIC.test(t) ? '' : t
 }
+
+/**
+ * tab 叫什么：**「Tab 名 · Space 名」**（中间是间隔号 `·`，不是小数点），所有 tab 都这样。
+ *
+ * 为什么带上 space：没起过名的 tab 在 herdr 里就是个序号（`1`、`2`），而好几个 space 里
+ * 都有一个 `1` —— 单独摆出来一个信息都不带（用户报的：chat 头上就一个孤零零的「1」）。
+ * 起过名的也一样带上：同名的 tab 在不同 space 里是常态，带上 space 才分得开。
+ * 两个一样（tab 就叫 space 的名字）时只留一个，别摆成 `videomake · videomake`。
+ */
+export function tabName(p: { tab?: string; workspace?: string }): string {
+  const t = (p.tab ?? '').trim()
+  const w = (p.workspace ?? '').trim()
+  if (!t) return w
+  if (!w || w === t) return t
+  return `${t} · ${w}`
+}

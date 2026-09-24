@@ -7,7 +7,7 @@ import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { STATUS_BUCKET, STATUS_DOT } from '@/lib/agentstatus'
 import { cn } from '@/lib/utils'
-import { paneTitle } from '@/lib/panename'
+import { paneTitle, tabName } from '@/lib/panename'
 import { panesSort, type PaneSort } from '@/lib/prefs'
 
 /**
@@ -519,7 +519,7 @@ export function PaneSwitcher({
                   />
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1.5">
-                      <span className="truncate text-[13px]">{p.tab}</span>
+                      <span className="truncate text-[13px]">{tabName(p)}</span>
                       {p.agent && (
                         <span className="shrink-0 rounded border border-line bg-ctl px-1 py-px font-mono text-[10px] text-muted">
                           {p.agent}
@@ -530,11 +530,7 @@ export function PaneSwitcher({
                           {chip.text}
                         </span>
                       )}
-                      {p.focused && (
-                        <span className="shrink-0 rounded border border-brand/40 bg-brand/12 px-1 py-px text-[10px] text-brand">
-                          当前
-                        </span>
-                      )}
+                      {/* 「当前」那个标签去掉了（用户点名的）：这一行自己已经是淡绿底 + 绿边 */}
                       <span
                         className="ml-auto shrink-0 font-mono text-[10px] text-faint"
                         title={p.changed ? `上次状态变化：${new Date(p.changed).toLocaleString()}` : ''}
@@ -544,16 +540,21 @@ export function PaneSwitcher({
                     </span>
                     {/* agent pane 的 terminal_title 是它自己写的会话标题（「图片识别」这种），
                         比路径认得出得多；shell pane 的标题只是 user@host:path，那还是给路径。
-                        平铺排序时没有 workspace 分组，所以 workspace 挪到这儿来 */}
-                    <span className="mt-px flex items-center gap-1.5 font-mono text-[11px] text-faint">
-                      <span className="truncate">
-                        {sort !== 'group' && `${p.workspace} · `}
-                        {paneTitle(p) || shortCwd(p.cwd) || p.id}
-                      </span>
-                      {/* pane id 在手机上**也要出**：一个 tab 里有两个 pane 时（herdr 里分屏），
-                          两行的 tab 标签和 cwd 一模一样，id 是唯一分得开的东西（实拍见过） */}
-                      <span className="ml-auto shrink-0 text-[10px]">{p.id}</span>
-                    </span>
+                        workspace 不再拼在这儿：第一行的名字已经是「Tab · Space」了。
+                        **pane id 去掉了**（用户点名的，`w9:p1E` 对人没意义）—— 代价是同一个 tab
+                        里分屏的两个 shell pane 这一行长得一样；agent pane 靠会话标题照样分得开 */}
+                    {/* 标题**和 space 名一样**就不画（用户报的「第二行也有个重复的 space 名」）：
+                        codex 拿目录名当终端标题，而 space 名多半也是目录名 —— 第一行的
+                        「Tab · Space」里已经有它了。这时第二行没别的可说，整行不出 */}
+                    {(() => {
+                      const t = paneTitle(p)
+                      if (t && t === p.workspace) return null
+                      return (
+                        <span className="mt-px flex items-center gap-1.5 font-mono text-[11px] text-faint">
+                          <span className="truncate">{t || shortCwd(p.cwd) || p.id}</span>
+                        </span>
+                      )
+                    })()}
                   </span>
                 </button>
               )

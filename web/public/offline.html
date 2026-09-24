@@ -20,12 +20,10 @@
 -->
 <style>
   :root {
-    color-scheme: dark light;
+    /* 暗色，不跟系统偏好切：和主页面「默认暗色」一致。这页没有脚本（CSP），读不到人手动选的明暗 */
+    color-scheme: dark;
     --bg: #121212; --bar: #1a1a1a; --line: #2e2e2e;
     --fg: #ededed; --muted: #9a9a9a; --brand: #3ecf8e;
-  }
-  @media (prefers-color-scheme: light) {
-    :root { --bg: #f4f4f4; --bar: #fff; --line: #dcdcdc; --fg: #1c1c1c; --muted: #6b6b6b; }
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }

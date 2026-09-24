@@ -44,7 +44,7 @@ const MD = /\.(md|markdown|mdx|mdown)$/i
  * 安全上和 chat 同一条：不开原始 HTML（文件多半是 agent 写的，同样是不可信文本）。
  */
 export function FileViewer({
-  stat, onClose, onBrowse, onOpenPath, toast, closeRef, chatFont,
+  stat, onClose, onBrowse, onOpenPath, toast, closeRef, chatFont, under,
 }: {
   /**
    * **已经 stat 过的结果**，不是一条待解析的路径 —— 解析和分流（目录直接进文件浏览）
@@ -64,6 +64,8 @@ export function FileViewer({
    * 查看器挂着时这里是「请求关闭」，卸掉时清成 null。
    */
   closeRef?: MutableRefObject<(() => void) | null>
+  /** 被后开的面板压着（见 App 的 viewerUnder）：层级降到面板下面，别的都不动 */
+  under?: boolean
 }) {
   const info = stat.info
   const [url, setUrl] = useState(stat.url)
@@ -210,7 +212,7 @@ export function FileViewer({
           void save(conflict).then((ok) => { if (ok) toast('已保存') })
         }
       }}
-      className="absolute inset-0 z-20 flex flex-col bg-bg outline-none"
+      className={cn('absolute inset-0 flex flex-col bg-bg outline-none', under ? 'z-[5]' : 'z-20')}
       data-testid="file-viewer"
     >
       <div className="flex shrink-0 items-center gap-2 border-b border-line bg-bar px-3 py-2">

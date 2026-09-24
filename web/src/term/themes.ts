@@ -40,7 +40,9 @@ export const THEMES: Record<Scheme, ITheme> = {
 export const initialScheme = (): Scheme => {
   const own = localStorage.getItem('scheme')
   if (own === 'dark' || own === 'light') return own
-  return matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+  // **没选过就是暗色，不跟浏览器偏好**（用户点名的）。原来是按 prefers-color-scheme 给，
+  // 系统白天自动亮、晚上自动暗 —— 人要的是「默认暗、想亮自己切」
+  return 'dark'
 }
 
 /**

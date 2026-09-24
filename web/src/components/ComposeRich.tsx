@@ -139,19 +139,33 @@ export function ComposeRich({
     // 图它能直接看，视频要自己跑 ffmpeg）
     chip.textContent = `${r.media === 'video' ? '🎞' : '🖼'} ${r.name}`
 
+    /*
+      **光标必须落在 chip 后面**（用户报的「插完图光标跑到最前面去了」）。两个坑：
+
+      ① 从顶栏 / 快捷键条点「传图」时焦点早就不在框里了，选区不在框内 —— 原来那条路只
+         `appendChild`、不设光标，接着 `el.focus()` 把光标放到了**开头**。所以两条路都要
+         自己把光标摆好，而且要**先 focus 再摆**（反过来 focus 可能把选区重置掉）。
+      ② chip 是 contentEditable=false，**挂在末尾时它后面没有可放光标的位置**（Chrome 会
+         把光标画在它前面）。所以后面垫一个空格文本节点，光标落在空格之后 —— 空格不影响
+         投出去的内容：read() 本来就在路径两边补空格、再把连续空格并成一个。
+    */
+    const pad = document.createTextNode(' ')
     const sel = getSelection()
     const at = sel && sel.rangeCount ? sel.getRangeAt(0) : null
     if (at && el.contains(at.commonAncestorContainer)) {
       at.deleteContents()
-      at.insertNode(chip)
-      at.setStartAfter(chip)
-      at.collapse(true)
-      sel!.removeAllRanges()
-      sel!.addRange(at)
+      at.insertNode(pad)
+      at.insertNode(chip) // insertNode 插在范围起点，所以先插的 pad 会排到 chip 后面
     } else {
       el.appendChild(chip)
+      el.appendChild(pad)
     }
     el.focus()
+    const after = document.createRange()
+    after.setStart(pad, pad.length)
+    after.collapse(true)
+    sel?.removeAllRanges()
+    sel?.addRange(after)
     emit()
   }, [emit])
 

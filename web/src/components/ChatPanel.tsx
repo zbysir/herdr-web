@@ -1,9 +1,9 @@
 import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDown, ChevronDown, ChevronUp, Play, Terminal, Wrench, AlertCircle } from 'lucide-react'
+import { ArrowDown, ChevronDown, ChevronUp, Play, Terminal, Wrench, AlertCircle, MessageSquare } from 'lucide-react'
 import { ApiError, chatApi, type ChatLog, type ChatMsg, type Pane } from '@/lib/api'
 import type { SentEcho } from '@/hooks/useCompose'
 import { STATUS_DOT } from '@/lib/agentstatus'
-import { paneTitle } from '@/lib/panename'
+import { paneTitle, tabName } from '@/lib/panename'
 import { cn } from '@/lib/utils'
 
 /**
@@ -280,7 +280,8 @@ export function ChatPanel({
         msg: e instanceof Error ? e.message : String(e),
         reason: e instanceof ApiError ? e.reason : undefined,
       })
-      onHealth?.(false)
+      // 「还没对话」不是故障：顶栏那个点别变红（它回答的是「chat 这条路通不通」）
+      onHealth?.(e instanceof ApiError && e.reason === 'no_transcript')
       setFirst(false)
       return
     }
@@ -657,7 +658,7 @@ export function ChatPanel({
                 那一份（`paneTitle`，见 lib/panename.ts）。
               */}
               <span className="min-w-0 flex-1 truncate text-[1em]">
-                {paneTitle(info) || info.tab || info.id}
+                {paneTitle(info) || tabName(info) || info.id}
               </span>
               {/*
                 **tab 名和路径拆成两段，而且各自有上限。**
@@ -672,8 +673,9 @@ export function ChatPanel({
                 竖屏上整个不画** —— 那儿它总是被截成 `~/dev/bys…`，说不出是哪个对话，而这
                 一行最该回答的就是「我在哪个对话里」（和标题占主位是同一条）。
               */}
-              {info.tab && (
-                <span className="min-w-0 max-w-[40%] shrink truncate text-xs text-faint">{info.tab}</span>
+              {/* 标题拿不到、主位已经是 tab 名时就别再摆一遍（截图里是「1 … 1」两个） */}
+              {info.tab && paneTitle(info) && (
+                <span className="min-w-0 max-w-[40%] shrink truncate text-xs text-faint">{tabName(info)}</span>
               )}
               <span className="min-w-0 shrink truncate text-xs text-faint max-phone:hidden">
                 {shortPath(info.cwd)}
@@ -1291,6 +1293,20 @@ function Nobody({
  */
 function Problem({ err, agent }: { err: { msg: string; reason?: string }; agent?: string }) {
   const a = agent === 'codex' ? 'codex' : 'claude'
+  /*
+    **还没对话**：会话身份有了，文件还没有 —— agent 要等你说第一句才开始写盘。这是空状态，
+    不是故障：不画警告图标、不印那串 session id（原来是「找不到会话 670b5857-… 的转录文件」，
+    看着像坏了）。说完第一句下一拍就读到了，所以这里只告诉人「在下面说话就行」。
+  */
+  if (err.reason === 'no_transcript') {
+    return (
+      <div className="flex flex-col items-center gap-2 py-16 text-center text-xs/relaxed text-muted">
+        <MessageSquare className="size-6 text-faint" />
+        <p className="text-[13px] text-fg">还没有对话</p>
+        <p>在下面说第一句话，{a === 'codex' ? 'codex' : 'claude'} 回你之后这里就会出现。</p>
+      </div>
+    )
+  }
   return (
     <div className="flex flex-col gap-2 py-6 text-xs/relaxed text-muted">
       <div className="flex items-start gap-2">

@@ -304,15 +304,17 @@ func TestChatLogGuessesWhenAlone(t *testing.T) {
 	}
 }
 
-// 报了会话但文件还没落地（agent 刚起来、第一条还没写）—— 要报得出来，别 500。
+// 报了会话但文件还没落地（agent 刚起来、第一条还没写）—— 要报得出来，别 500，而且要带上
+// `no_transcript` 这个 reason：前端靠它画「还没有对话」的空状态，而不是一条看着像坏了的红字。
 func TestChatLogMissingFile(t *testing.T) {
 	panes := []map[string]any{{
 		"pane_id": "p1", "agent": "claude", "cwd": "/w",
 		"agent_session": map[string]any{"kind": "id", "value": sid, "agent": "claude"},
 	}}
 	s, _ := chatServer(t, true, panes)
-	if w := getChat(t, s, "/api/chat/log?pane=p1"); w.Code != 400 {
-		t.Fatalf("该是 400，实际 %d：%s", w.Code, w.Body.String())
+	w := getChat(t, s, "/api/chat/log?pane=p1")
+	if w.Code != 409 || !strings.Contains(w.Body.String(), `"reason":"no_transcript"`) {
+		t.Fatalf("该是 409 + no_transcript，实际 %d：%s", w.Code, w.Body.String())
 	}
 }
 

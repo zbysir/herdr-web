@@ -203,7 +203,7 @@ func (s *Store) byID(agent, root, id, cwd string) (string, error) {
 		if m, _ := filepath.Glob(filepath.Join(root, "*", id+".jsonl")); len(m) > 0 {
 			return m[0], nil
 		}
-		return "", fmt.Errorf("找不到会话 %s 的转录文件", id)
+		return "", fmt.Errorf("找不到会话 %s 的转录文件：%w", id, ErrNoTranscript)
 	}
 
 	// codex：**session id 就在文件名里**（`rollout-<时间>-<id>.jsonl`），所以按后缀 glob。
@@ -213,7 +213,7 @@ func (s *Store) byID(agent, root, id, cwd string) (string, error) {
 		sort.Strings(m)
 		return m[len(m)-1], nil
 	}
-	return "", fmt.Errorf("找不到会话 %s 的 rollout 文件", id)
+	return "", fmt.Errorf("找不到会话 %s 的 rollout 文件：%w", id, ErrNoTranscript)
 }
 
 // guess 没有会话 id 时按 cwd 猜最近那一份。
