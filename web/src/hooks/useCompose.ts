@@ -357,8 +357,13 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, toast: (m: string)
     setBusy(true)
     inFlight.current = true
     say2('投递中…')
+    // 量这一次花在哪儿（见 slowNote）。清掉旧的 Resource Timing：轮询一拍一条，
+    // 缓冲区（默认 250 条）早满了，满了之后新请求的那条根本记不进去
+    try { performance.clearResourceTimings() } catch { /* 老浏览器没有 */ }
+    const t0 = performance.now()
     try {
       const r = await api.post<SayResult>('/herdr/say', { target: aimed(), text: body })
+      const slow = slowNote(performance.now() - t0, r.took?.total)
       hist.current = [body, ...hist.current.filter((x) => x !== body)].slice(0, HIST_MAX)
       histIdx.current = -1
       localStorage.setItem(HIST_KEY, JSON.stringify(hist.current))
@@ -383,7 +388,8 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, toast: (m: string)
         // 「投递中」本身就说明出问题了，一直挂着比没有更让人不放心。
         setSent((old) => [...old, { target: r.target, text: body, at: Date.now() }].slice(-SENT_MAX))
       }
-      say2(`已投给 ${r.target}[${r.agent || 'shell'}] · ${r.chars} 字`)
+      say2(`已投给 ${r.target}[${r.agent || 'shell'}] · ${r.chars} 字${slow ? ` · ${slow}` : ''}`)
+      if (slow) toast(`这次投稿${slow}`)
     } catch (e) {
       say2('投稿失败：' + (e as Error).message, true)
       toast('投稿失败：' + (e as Error).message)
@@ -525,4 +531,39 @@ async function normalizeImage(file: File): Promise<Blob> {
   } catch {
     return file
   }
+}
+
+/**
+ * 一次投稿慢（> 1 秒）时，说清楚慢在哪一段：「用了 2.3s：新建连接 1.6s · 等响应 0.6s（服务端 0.2s）」。
+ *
+ * 为什么要这个（用户报的「投稿有时卡一阵，但终端连着、滚动也不卡」）：从一台网络稳的机器上量，
+ * 复用连接的请求稳定在 ~100ms，新建连接偶尔因为丢包 1 秒多；反代既不按请求数、也不按闲置
+ * 去关连接（量过：3000 个请求 / 闲置 130 秒都还复用着）。剩下的只能是**手机网络当时**的事，
+ * 事后复现不出来 —— 所以在它发生的那一刻把这几段记下来，截个图就知道往哪修。
+ *
+ * 数据来自浏览器的 Resource Timing（同源请求都有）：`connectEnd > connectStart` 就是这次
+ * 新建了连接；`responseStart - requestStart` 是「发出去到收到第一个字节」，里面减掉服务端
+ * 自己报的那段（`took.total`）就是花在路上的。**不改变投稿的任何行为**，只是多说一句。
+ */
+function slowNote(ms: number, server?: number): string {
+  if (ms < 1000) return ''
+  const f = (x: number) => (x >= 1000 ? `${(x / 1000).toFixed(1)}s` : `${Math.round(x)}ms`)
+  const parts: string[] = []
+  const e = performance.getEntriesByType('resource')
+    .filter((x) => x.name.includes('/api/herdr/say'))
+    .at(-1) as PerformanceResourceTiming | undefined
+  if (e) {
+    const conn = e.connectEnd - e.connectStart
+    const wait = e.responseStart - e.requestStart
+    // 排队：请求被浏览器压着没发出去的那段（HTTP/1.1 下同一个域名最多 6 条连接，局域网直连
+    // 那个口就是 1.1），不算建连
+    const stall = e.requestStart - e.startTime - Math.max(conn, 0)
+    parts.push(conn > 0 ? `新建连接 ${f(conn)}` : '连接是复用的')
+    if (stall > 200) parts.push(`排队 ${f(stall)}`)
+    if (wait > 0) parts.push(`等响应 ${f(wait)}`)
+  }
+  const tail = server !== undefined ? `（服务端 ${f(server)}）` : ''
+  const msg = `用了 ${f(ms)}${parts.length ? '：' + parts.join(' · ') : ''}${tail}`
+  console.info('[herdr-web] 投稿慢', msg, e)
+  return msg
 }

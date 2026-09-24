@@ -5,6 +5,7 @@ package outbox
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -96,7 +97,20 @@ type SayResult struct {
 	Cleared ClearResult `json:"cleared"`
 	Chars   int         `json:"chars"`
 	Lines   int         `json:"lines"`
+	// Took 服务端这一侧各段花了多少毫秒。前端拿它和自己量的往返时间一减，就知道慢在
+	// 网络还是慢在这儿 —— 网络不稳时事后复现不出来，只能当场记下来（见 Say）。
+	Took SayTook `json:"took"`
 }
+
+type SayTook struct {
+	Resolve int `json:"resolve"`
+	Clear   int `json:"clear"`
+	Prompt  int `json:"prompt"`
+	Total   int `json:"total"`
+}
+
+// slowSay 服务端这一侧超过它就记一条日志（正常是一两百毫秒：解析 + 读两次屏 + 投）
+const slowSay = 800 * time.Millisecond
 
 func identify(p *herdr.Pane, followed bool) Info {
 	return Info{
@@ -377,14 +391,17 @@ func (o *Outbox) Say(target, text string) (*SayResult, error) {
 	if body == "" {
 		return nil, fmt.Errorf("空文本，不发")
 	}
+	t0 := time.Now()
 	p, followed, err := o.resolve(target)
 	if err != nil {
 		return nil, err
 	}
+	t1 := time.Now()
 	cleared, err := o.Clear(p.PaneID, p.Agent)
 	if err != nil {
 		return nil, err
 	}
+	t2 := time.Now()
 	// 清不空就别投。追加语义下投进去就是「残留 + 新文本」一起回车。
 	// 最常见的原因是那个 pane 正开着一个选择框 / 确认框（agent 会把它画在输入框
 	// 那块区域里），此时 agent_status 仍然可能是 idle，光看状态区分不出来 ——
@@ -406,8 +423,17 @@ func (o *Outbox) Say(target, text string) (*SayResult, error) {
 			return nil, err
 		}
 	}
+	t3 := time.Now()
+	took := SayTook{
+		Resolve: int(t1.Sub(t0).Milliseconds()), Clear: int(t2.Sub(t1).Milliseconds()),
+		Prompt: int(t3.Sub(t2).Milliseconds()), Total: int(t3.Sub(t0).Milliseconds()),
+	}
+	if t3.Sub(t0) > slowSay {
+		log.Printf("[herdr-web] 投稿慢：%dms（解析 %d / 清空 %d，%d 轮 / 投 %d）→ %s", took.Total, took.Resolve, took.Clear, cleared.Rounds, took.Prompt, p.PaneID)
+	}
 	return &SayResult{
 		Info: identify(p, followed), Cleared: cleared,
 		Chars: utf8.RuneCountInString(body), Lines: len(strings.Split(body, "\n")),
+		Took: took,
 	}, nil
 }

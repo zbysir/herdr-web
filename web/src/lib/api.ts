@@ -322,7 +322,13 @@ export interface PaneInfo {
 // noBox：远端那一屏上认不出输入框（没有提示符字形）。跟「输入框是空的」不是一回事。
 /** 发件箱那一拍：只有「投给谁」，不读屏（见 internal/outbox 的 Where） */
 export type SyncResult = PaneInfo
-export interface SayResult extends PaneInfo { chars: number; lines: number; cleared: { rounds: number; empty: boolean | null } }
+export interface SayResult extends PaneInfo {
+  chars: number
+  lines: number
+  cleared: { rounds: number; empty: boolean | null }
+  /** 服务端这一侧各段花了多少毫秒（老后端不给）。见 useCompose 的 slowNote */
+  took?: { resolve: number; clear: number; prompt: number; total: number }
+}
 export interface UploadResult {
   path: string
   name: string

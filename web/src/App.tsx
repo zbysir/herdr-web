@@ -1560,8 +1560,10 @@ export default function App() {
     if (chatOpen) return
     const offline = status.cls !== 'on'
     toast(
+      // 只有一个 pane 的 tab 不说「全屏 / 退出全屏」（那儿没有全屏可言），也不补一句
+      // 「这个 tab 只有一个 pane」—— 那是在解释为什么没全屏，人要知道的只是跳过去了（用户点名去掉）
       (r.singlePane
-        ? `已跳到 ${paneName(r.target)}（这个 tab 只有一个 pane）`
+        ? `已跳到 ${paneName(r.target)}`
         : `已跳到 ${paneName(r.target)}${r.zoomed ? ' · 全屏' : ' · 已退出全屏'}`)
       + (offline ? '。终端这会儿没连上，画面是旧的 —— 连上就跟过来了' : ''),
     )
