@@ -24,7 +24,7 @@ import type { UploadResult } from '@/lib/api'
  *
  * ① **这个输入框是「不受控」的。** React 绝不能在每次按键后去写它的 DOM —— 那会把光标和
  *    输入法的合成状态踩掉（中文打字打不出来）。所以 DOM 是内容的**唯一来源**，值是从 DOM
- *    读出来的；外面要改内容（清空、取历史、拉回）只能走 `ref` 上那几个命令式方法。
+ *    读出来的；外面要改内容（清空、取历史）只能走 `ref` 上那几个命令式方法。
  *
  * ② **回车那两个判据一个都不能少**（从 textarea 那版原样搬过来）：`isComposing` 和
  *    `keyCode === 229`。中文候选词就是按回车上屏的，而安卓上不少输入法只给后者 ——
@@ -43,7 +43,7 @@ import type { UploadResult } from '@/lib/api'
 export interface RichHandle {
   /** 读出此刻的内容：说的话 + 图片路径，按它们在框里的先后拼好 */
   value: () => string
-  /** 整框换成这段纯文本（清空、取历史、拉回都走这儿） */
+  /** 整框换成这段纯文本（清空、取历史都走这儿） */
   setText: (v: string) => void
   /** 在光标处插一枚图片 chip */
   insertChip: (r: UploadResult) => void
@@ -54,7 +54,7 @@ export function ComposeRich({
   ref, text, onChangeText, info, bad, busy, enterSend, onSubmit, onAttach, onRecall, onPreview,
 }: {
   ref?: Ref<RichHandle>
-  /** 只当**外面**改内容时的信号用（清空 / 取历史 / 拉回），不是每次按键都写回来 —— 见 ① */
+  /** 只当**外面**改内容时的信号用（清空 / 取历史），不是每次按键都写回来 —— 见 ① */
   text: string
   onChangeText: (v: string) => void
   info: string
@@ -115,7 +115,16 @@ export function ComposeRich({
     if (!el) return
     el.textContent = v
     mine.current = v
-    // 光标放到最后 —— 取历史 / 拉回之后人下一步就是接着写
+    /*
+      光标放到最后 —— 取历史之后人下一步就是接着写。
+
+      **但只在这个框本来就有焦点时摆。** 往 contentEditable 里放选区，Chromium 会**顺手把焦点
+      挪过来**（`FrameSelection::SetFocusedNodeIfNeeded`，前提是页面拿着窗口焦点 —— 所以后台
+      标签页里测不出来，量过）。于是当初自动拉回把 agent 输入框里的字抄进来的那一下，就把焦点从
+      终端手里抢走了（用户报的：chat + 终端键盘打字，切到终端之后焦点跑到了发件箱）。
+      没焦点就只换字：人没在这个框里，光标在哪都无所谓，等他点进来再说。
+    */
+    if (document.activeElement !== el) return
     const r = document.createRange()
     r.selectNodeContents(el)
     r.collapse(false)
@@ -177,7 +186,7 @@ export function ComposeRich({
   }), [read, setText, insertChip])
 
   /**
-   * 外面把文本改掉了（投完清空、取历史、拉回）才写 DOM。
+   * 外面把文本改掉了（投完清空、取历史）才写 DOM。
    *
    * **判据是「和我们自己上次吐出去的不一样」** —— 拿 `text` 直接当受控值写回去的话，
    * 每敲一个字都会重写 DOM，光标和输入法的合成状态当场没了。

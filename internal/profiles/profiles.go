@@ -85,7 +85,7 @@ var Prefs = []string{
 	"noticeDot", "noticeCard", "noticeOS", "noticeOSFg", "noticeCardMs",
 	"keyStyle", "popupClear", "holdRate",
 	"diffWrap", "panesSort",
-	"composeEnter", "composeLive", "composeRich",
+	"composeEnter", "composeRich",
 }
 
 // Profile 是一套排布的身份 + 它自己那几个小开关。

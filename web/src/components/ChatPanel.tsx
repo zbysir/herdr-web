@@ -87,8 +87,15 @@ const WAIT_MS = 25_000
 const Markdown = lazy(() => import('./ChatMarkdown'))
 
 export function ChatPanel({
-  panes, sent, onDropSent, onClose, onToast, onOpenPath, onHealth, focus, chatFont, nudge, onPickPane,
+  panes, sent, onDropSent, onClose, onToast, onOpenPath, onHealth, focus, chatFont, nudge, onPickPane, hidden,
 }: {
+  /**
+   * 关掉 = **藏起来，不卸载**（用户点名的：每次打开都从头读一遍、重新排版，太慢）。
+   * 藏着的时候不轮询（和页面不可见同一条：没人看就别在那台机器上读文件），再打开时
+   * `next` 还在，读的是增量。用 `invisible` 不用 `hidden`（display:none）：后者会把
+   * 滚动容器的 `scrollTop` 丢掉，打开时停在顶上。
+   */
+  hidden?: boolean
   /** 点头上那行「看哪个 pane」→ 开面板一览（换一个 agent 看） */
   onPickPane?: () => void
   /** 对话区的字号（px）。**和终端那个 fontSize 是两回事**，见列表容器上那段注释 */
@@ -349,7 +356,7 @@ export function ChatPanel({
     **不进上面那个轮询的依赖**：那会把整条心跳重建一次（清掉计时器再从头排）。
   */
   useEffect(() => {
-    if (!nudge || !active) return
+    if (!nudge || !active || hidden) return
     const at = [0, 120, 400, 900, 1600]
     const timers = at.map((ms) => window.setTimeout(() => void tick(active), ms))
     return () => timers.forEach(clearTimeout)
@@ -359,7 +366,7 @@ export function ChatPanel({
   // 自排队的 setTimeout，不用 setInterval：网络一慢 setInterval 会把请求叠起来
   // （提示和角标那两条同理）。回到前台立刻补一拍，不等这一轮的计时器。
   useEffect(() => {
-    if (!active) return
+    if (!active || hidden) return
     let alive = true
     let timer = 0
     const loop = async () => {
@@ -386,7 +393,7 @@ export function ChatPanel({
       clearTimeout(timer)
       document.removeEventListener('visibilitychange', wake)
     }
-  }, [active, tick, onHealth])
+  }, [active, tick, onHealth, hidden])
 
   /* --------------------------------------------------------------- 滚动 */
 
@@ -624,7 +631,12 @@ export function ChatPanel({
      *   - 开着的状态存在 localStorage 里，刷新还在（见 App 的 chatOpen）
      *   - 切 pane **不关它**（gotoPane 里对 chat 例外），跟着新 pane 走
      */
-    <section className="absolute inset-0 z-6 flex flex-col bg-bar">
+    <section
+      className={cn('absolute inset-0 z-6 flex flex-col bg-bar', hidden && 'invisible pointer-events-none')}
+      // inert：藏着时里面的按钮 / 输入框别被 Tab 到、也别被读屏念出来
+      inert={hidden}
+      aria-hidden={hidden}
+    >
       {/* 第一排：看哪个 pane + 状态 + × 。和改动面板一样不给标题栏 —— 手机上那一整行就是
           44px 的空白，而「这是什么面板」看内容就知道 */}
       <div className="flex shrink-0 items-center gap-1.5 border-b border-line bg-bar px-3 py-2">

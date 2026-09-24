@@ -70,7 +70,16 @@ herdr-web devices       # list paired devices
 herdr-web revoke <id>   # kick one (all = everything); the next request gets 401
 ```
 
-→ Admin page, session naming rules: [使用说明 · 第一次跑](docs/USAGE.zh-CN.md#第一次跑) (Chinese)
+To use it from **a native terminal on another computer** instead of a browser:
+
+```bash
+herdr-web connect https://your.domain     # first time: approve with a passkey in a browser, or type a pairing code
+```
+
+That pairs an ordinary device (listed on the devices page, revocable) whose daily re-verification
+is also a passkey approval in a browser; if the network stalls, type `~.` at the start of a line to disconnect.
+
+→ Admin page, session naming rules, `connect`: [使用说明 · 第一次跑](docs/USAGE.zh-CN.md#第一次跑) (Chinese)
 
 ## What you get
 

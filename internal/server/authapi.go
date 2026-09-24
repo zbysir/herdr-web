@@ -137,6 +137,10 @@ func (s *Server) apiAuth(w http.ResponseWriter, r *http.Request, seg []string) {
 		s.apiPasskey(w, r, seg)
 		return
 	}
+	if seg[1] == "cli" {
+		s.apiCLI(w, r, seg)
+		return
+	}
 
 	switch {
 	case seg[1] == "whoami" && r.Method == http.MethodGet:
@@ -168,7 +172,14 @@ func (s *Server) apiAuth(w http.ResponseWriter, r *http.Request, seg []string) {
 
 	// 手输配对码（扫不了码的设备，或者二维码过期了）
 	case seg[1] == "pair" && r.Method == http.MethodPost:
-		var b struct{ Code string }
+		// Client = "cli" 是 `herdr-web connect`：令牌放进响应体、不发 cookie（它走
+		// Authorization 头，见 auth.Authenticate 里 bearer 那段）。浏览器永远不传这个 ——
+		// 令牌进了响应体 JS 就读得到，HttpOnly 等于白设。
+		//
+		// 配对码只管「第一次进来」：到期重验**不走**这里（第一版走过，结果是命令行设备每天
+		// 输个码就能一直续，从头到尾不碰 passkey —— 正好架空了「长期靠 passkey」）。
+		// 重验走 /api/auth/cli/*，见 cliapi.go。
+		var b struct{ Code, Client string }
 		if err := readJSON(r, &b); err != nil {
 			fail(w, 400, err)
 			return
@@ -177,6 +188,7 @@ func (s *Server) apiAuth(w http.ResponseWriter, r *http.Request, seg []string) {
 			return
 		}
 		ip := s.Auth.ClientIP(r)
+		cli := b.Client == "cli"
 		dev, token, err := s.Auth.Redeem(b.Code, r.UserAgent(), ip)
 		if err != nil {
 			s.Gate.Fail(ip)
@@ -184,6 +196,10 @@ func (s *Server) apiAuth(w http.ResponseWriter, r *http.Request, seg []string) {
 			return
 		}
 		s.Gate.Reset(ip)
+		if cli {
+			writeJSON(w, 200, map[string]any{"ok": true, "label": dev.Label, "deviceId": dev.ID, "token": token})
+			return
+		}
 		s.Auth.IssueCookie(w, token)
 		writeJSON(w, 200, map[string]any{"ok": true, "label": dev.Label})
 

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { BusyFace } from './ui/busy'
 import { Button } from './ui/button'
 import { NoticeDot } from './ui/dot'
 import { KeyGroupPopup } from './KeyGroupPopup'
@@ -35,8 +36,10 @@ import type { StickyState } from '@/term/session'
  * 打了 `confirm` 的键要点**两下**（见 hooks/useArm —— 顶栏那边放「我的按键」时共用同一份）。
  */
 export function Softkeys({
-  rows, sticky, act, onSend, onSticky, slide,
+  rows, sticky, act, onSend, onSticky, slide, busy,
 }: {
+  /** 这个键正在等终端连上（画转圈，见 ui/busy.tsx）。判据在 App（它才知道在等谁） */
+  busy?: (k: SoftKey) => boolean
   /** 每行三段（已按 id 解析好、个数也夹过）。一到两行。见 lib/api.ts 的 resolveRows */
   rows: RowSegments[]
   /** 粘滞修饰键的三档（关 / 一次性 / 锁住），见 term/session.ts 的 StickyMode */
@@ -160,7 +163,7 @@ export function Softkeys({
           else if (k.send) onSend(k.send)
         }}
       >
-        {keyFace(k)}
+        <BusyFace busy={busy?.(k)}>{keyFace(k)}</BusyFace>
         {/* 顶栏那个 ▦ 上已经有一个了，这儿还要一个是因为**手机上键盘一弹起来顶栏整条就收掉**
             （见 App 里的 barHidden）——而那正是你在跟 agent 说话、最该知道「另一个在等你」的时候。
             长什么样在 ui/dot.tsx（那儿写着它为什么不能探出键的框：这一行也是横滑的） */}

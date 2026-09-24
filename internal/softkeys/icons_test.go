@@ -62,3 +62,24 @@ func TestIconReadLenientWriteStrict(t *testing.T) {
 		t.Errorf("名字该一直在（退化成画文字），拿到 %q", got.Label)
 	}
 }
+
+// TestUnknownActReadDropsOnlyThatKey act 白名单会缩（`pull` 被删过）：读盘时只丢那一个键，
+// 其余照用 —— 整份退回出厂的话，人一点保存就把原来那条快捷键条覆盖掉了。存盘照旧报错。
+func TestUnknownActReadDropsOnlyThatKey(t *testing.T) {
+	dir := t.TempDir()
+	s := &Store{Dir: dir}
+	body := `{"keys":[{"id":"k1","label":"A","send":"a"},{"id":"k2","label":"拉回","act":"pull"}],"bar":[["k1","k2"]]}`
+	if err := os.WriteFile(filepath.Join(dir, "softkeys.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := s.Load("default")
+	if len(got.Lib) != 1 || got.Lib[0].ID != "k1" {
+		t.Fatalf("该只剩 k1，拿到 %+v", got.Lib)
+	}
+	if strings.Join(got.Bar[0], ",") != "k1" {
+		t.Errorf("条上对它的引用也该清掉：%v", got.Bar)
+	}
+	if _, err := s.Save("default", Config{Rows: 1, Lib: []Key{{ID: "k2", Label: "x", Act: "pull"}}, Bar: [][]string{{"k2"}}}); err == nil {
+		t.Error("存盘时不认识的 act 该报错")
+	}
+}

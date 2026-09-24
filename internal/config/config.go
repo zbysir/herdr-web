@@ -56,7 +56,6 @@ type Config struct {
 	Shell    string
 	Socket   string // herdr 的 unix socket
 	PollMS   int
-	PushMS   int
 	SettleMS int
 	// NoticeMS：前端多久问一次「有没有新提示」（右上角弹窗 + 面板图标上的红点）。
 	// 0 = 关掉整套提示（前端不再轮询）。
@@ -293,10 +292,9 @@ func Load() (*Config, error) {
 		Files:       v.GetBool("files"),
 		Git:         v.GetBool("git"),
 		Chat:        v.GetBool("chat"),
-		// 500ms 是实测挑的：切 pane 到 textarea 更新的中位延迟约 500ms，
-		// 再往下调收益递减（地板是一次 sync 的 ~150-300ms）。
+		// 发件箱那一拍只问「投给谁」（不读屏，见 outbox.Where），500ms 是当初按「切 pane 到
+		// 框里跟着变」实测挑的；自动拉回去掉之后这一拍便宜了，数没动。
 		PollMS: intOf(v, "poll_ms", 500, 200),
-		PushMS: intOf(v, "push_ms", 700, 100),
 		// 两次 pane.read 之间等多久。**不能是 0**：实测调成 0 时整个清空循环
 		// 会读到同一帧陈旧内容，6 轮全跑完仍然清不空（27ms 就返回了）。
 		SettleMS: intOf(v, "settle_ms", 120, 0),

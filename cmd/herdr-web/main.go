@@ -72,7 +72,7 @@ func rootCmd() *cobra.Command {
 	}
 	root.Flags().StringVarP(&webDir, "web", "w", "", "从这个目录伺候前端（开发用；留空则用嵌进二进制的那份）")
 	root.AddCommand(pairCmd(), devicesCmd(), revokeCmd(), unlockCmd(),
-		passkeysCmd(), versionCmd(), updateCmd(), serviceCmd())
+		passkeysCmd(), versionCmd(), updateCmd(), serviceCmd(), connectCmd())
 	return root
 }
 

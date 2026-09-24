@@ -242,7 +242,7 @@ export interface State {
   user: string
   hostname: string
   secureContext: boolean
-  compose: { pollMs: number; pushMs: number; settleMs: number }
+  compose: { pollMs: number; settleMs: number }
   /** 提示（右上角弹窗 + 面板图标的红点）多久问一次。0 / 缺失 = 这个部署把提示关了 */
   notice?: { pollMs: number }
   /** 服务端解析出来的 session 名（空 = 默认 session）。herdrSocket 是**这个 session 的**。 */
@@ -320,9 +320,9 @@ export interface PaneInfo {
 }
 
 // noBox：远端那一屏上认不出输入框（没有提示符字形）。跟「输入框是空的」不是一回事。
-export interface SyncResult extends PaneInfo { text?: string; noBox?: boolean }
+/** 发件箱那一拍：只有「投给谁」，不读屏（见 internal/outbox 的 Where） */
+export type SyncResult = PaneInfo
 export interface SayResult extends PaneInfo { chars: number; lines: number; cleared: { rounds: number; empty: boolean | null } }
-export interface DraftResult extends PaneInfo { pushed?: number; skipped?: 'not-agent' | 'busy' | 'no-box' }
 export interface UploadResult {
   path: string
   name: string

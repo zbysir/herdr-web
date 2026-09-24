@@ -800,6 +800,13 @@ claude 那边没有这条：它的 `/clear` 会换文件，而 §9.6 那条 `sig
 （点开一片报错比没有这个入口更糟，[TUI-VS-GUI.md](TUI-VS-GUI.md) §3 第 5 问）。
 这台机器上两个转录根一个都不在（既没装 claude 也没装 codex）时同样为假。
 
+### 9.9b 关掉是藏起来
+
+打开过一次之后 `ChatPanel` 就一直挂着，关掉只是 `hidden`（用户报的：每次打开都从头读一遍转录、
+重新排一遍 Markdown，长会话要等好几秒）。藏着的时候**不轮询**（和页面不可见同一条），再打开时
+`next` / `sig` 都还在，第一拍就是增量。藏用 `invisible` + `inert`，**不用 `display:none`**：
+后者会丢掉滚动容器的 `scrollTop`，打开时停在顶上。
+
 ### 9.10 还没做的
 
 - **只支持 claude 和 codex。** herdr 的 integration 有 17 个 agent，每家转录格式都不一样；

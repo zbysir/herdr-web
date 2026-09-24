@@ -31,7 +31,7 @@ export const PREF_KEYS = [
   'noticeDot', 'noticeCard', 'noticeOS', 'noticeOSFg', 'noticeCardMs',
   'keyStyle', 'popupClear', 'holdRate',
   'diffWrap', 'panesSort',
-  'composeEnter', 'composeLive', 'composeRich',
+  'composeEnter', 'composeRich',
 ] as const
 export type PrefKey = (typeof PREF_KEYS)[number]
 

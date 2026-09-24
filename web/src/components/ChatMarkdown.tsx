@@ -3,6 +3,7 @@ import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkCjkFriendly from 'remark-cjk-friendly'
 import { PATH_SCHEME, rehypePaths } from '@/lib/mdpaths'
+import { remarkCjkAutolink } from '@/lib/mdautolink'
 import { cn } from '@/lib/utils'
 
 /**
@@ -46,6 +47,11 @@ import { cn } from '@/lib/utils'
  * 是按西文空格和标点定的：星号紧贴中文标点时**不算**强调符。于是
  * `**「对话」**` 这种写法解析不出来，`**` 原样显示在屏幕上 —— 而 agent 写中文时几乎全是
  * 这种写法（真机截图里抓到的），不接这个插件就是满屏星号。
+ *
+ * # 裸链接要在中文标点处断开（`remarkCjkAutolink`）
+ *
+ * `**http://x:5188**。我在…` 按 GFM 会被吃成一条拖到半句话的链接，连带加粗也不闭合。
+ * 理由和做法见 lib/mdautolink.ts。
  *
  * # 排版跟着终端那套 token 走
  *
@@ -147,7 +153,7 @@ function TaskBox({ node: _node, ...p }: ComponentPropsWithoutRef<'input'> & { no
 
 /** 这三个都得是**同一个对象、同一批函数**，理由见上面那段 */
 const COMPONENTS: Components = { a: Anchor, pre: Pre, input: TaskBox }
-const REMARK = [remarkGfm, remarkCjkFriendly]
+const REMARK = [remarkGfm, remarkCjkFriendly, remarkCjkAutolink]
 const REHYPE = [rehypePaths]
 const NO_PLUGINS: [] = []
 

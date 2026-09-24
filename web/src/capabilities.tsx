@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { AArrowDown, AArrowUp, Chat, CircleHalf, ClipGet, ClipPut, Diff, Files, Gear, Ime, Image, Keyboard, Maximize, Panes, Pencil, Pull } from '@/icons'
+import { AArrowDown, AArrowUp, Chat, CircleHalf, ClipGet, ClipPut, Diff, Files, Gear, Ime, Image, Keyboard, Maximize, Panes, Pencil } from '@/icons'
 
 /**
  * 「这个版本能做哪几件事」—— 前端这一半的**唯一一份清单**（图标、名字、一句说明）。
@@ -58,7 +58,6 @@ export const CAPS = [
   { id: 'img', key: true, label: '传图', hint: '拍照 / 录像 / 从相册选图片或视频（落盘到 herdr 那台机器，把路径给 agent；视频 agent 要自己用 ffmpeg 抽帧看）', icon: <Image className="size-4" /> },
   { id: 'clip', key: true, label: '取剪贴板', hint: '把 herdr 那台机器的剪贴板取到这台设备', icon: <ClipGet className="size-4" /> },
   { id: 'paste', key: true, label: '粘到终端', hint: '把这台设备的剪贴板粘进终端', icon: <ClipPut className="size-4" /> },
-  { id: 'pull', key: true, label: '拉回', hint: '把远端输入框里已有的内容拉进发件箱（远端按过 Tab 补全就用它）', icon: <Pull className="size-4" /> },
   { id: 'font-', label: '缩小字号', hint: '终端字号小一号', icon: <AArrowDown className="size-4" /> },
   { id: 'font+', label: '放大字号', hint: '终端字号大一号', icon: <AArrowUp className="size-4" /> },
   { id: 'theme', label: '明暗', hint: '切换亮色 / 暗色', icon: <CircleHalf className="size-4" /> },

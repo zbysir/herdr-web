@@ -28,3 +28,10 @@ func FromPublicPort(r *http.Request) bool {
 	v, _ := r.Context().Value(portKey{}).(bool)
 	return v
 }
+
+// FromThisMachine 这个请求是不是**这台机器自己**发的（不是穿透进来的）。只拿来给人看的
+// 警告用（命令行登录的批准页：「这个请求是从跑 herdr-web 的这台机器发起的」），不拿来放行。
+// 判据和 trustLoopback 那条同一套：不在公网口上、源地址是 loopback、没带代理头。
+func FromThisMachine(r *http.Request) bool {
+	return !FromPublicPort(r) && remoteIsLoopback(r) && !behindProxy(r)
+}

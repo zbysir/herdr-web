@@ -346,7 +346,7 @@ func (s *Server) apiState(w http.ResponseWriter, r *http.Request) {
 		"user":          user,
 		"hostname":      host,
 		"secureContext": s.TLS || s.Cfg.Loopback,
-		"compose":       map[string]int{"pollMs": s.Cfg.PollMS, "pushMs": s.Cfg.PushMS, "settleMs": s.Cfg.SettleMS},
+		"compose":       map[string]int{"pollMs": s.Cfg.PollMS, "settleMs": s.Cfg.SettleMS},
 		// 提示的轮询间隔。0 = 这个部署把提示关了，前端那边就别轮询、也别画红点。
 		"notice": map[string]int{"pollMs": s.Cfg.NoticeMS},
 		// 文件浏览关掉时（HERDR_WEB_FILES=0）前端得知道，不然顶栏那个按钮点开就是一片 404
@@ -679,13 +679,11 @@ func (s *Server) apiHerdr(w http.ResponseWriter, r *http.Request, seg []string) 
 			"notices": list, "seq": seq, "watching": sess.watching(),
 		})
 
-	case seg[1] == "pull" && r.Method == http.MethodGet:
-		out, err := sess.outbox.Pull(q.Get("target"), q.Get("mode"))
-		respond(w, out, err)
-
-	// 自动拉回的轮询口：一次给「焦点在哪」+「那个输入框里是什么」
+	// 发件箱的轮询口：只回答「投给谁」（焦点在哪、什么 agent、什么状态），**不读屏**。
+	// 原来这一拍还抄回输入框里的字（自动拉回），和 /draft（双向同步）、/pull 一起去掉了，
+	// 见 outbox.Where
 	case seg[1] == "sync" && r.Method == http.MethodGet:
-		out, err := sess.outbox.Pull(q.Get("target"), "")
+		out, err := sess.outbox.Where(q.Get("target"))
 		respond(w, out, err)
 
 	case seg[1] == "say" && r.Method == http.MethodPost:
@@ -695,16 +693,6 @@ func (s *Server) apiHerdr(w http.ResponseWriter, r *http.Request, seg []string) 
 			return
 		}
 		out, err := sess.outbox.Say(b.Target, b.Text)
-		respond(w, out, err)
-
-	// 双向同步的本地→远端那半边：写进远端输入框但不回车
-	case seg[1] == "draft" && r.Method == http.MethodPost:
-		var b struct{ Target, Text string }
-		if err := readJSON(r, &b); err != nil {
-			fail(w, 400, err)
-			return
-		}
-		out, err := sess.outbox.Draft(b.Target, b.Text)
 		respond(w, out, err)
 
 	// 图片 / 视频落盘，返回绝对路径 —— 前端把路径插进提示词，agent 自己去读文件。

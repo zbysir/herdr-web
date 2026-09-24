@@ -65,7 +65,7 @@ export function SettingsPanel({
   tab, onTab, onClose, opts, setOpt, card, onCard, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs,
   kbdFull, onKbdFull, keyStyle, onKeyStyle, popupClear, onPopupClear, holdRate, onHoldRate,
   paneSort, onPaneSort,
-  enterSend, onEnterSend, live, onLive, rich, onRich,
+  enterSend, onEnterSend, rich, onRich,
   heals, onSaved, onTopbar, toast, state,
   fontSize, onFont, chatFont, onChatFont, scheme, onScheme, brand, onBrand, profile, onProfiles,
 }: {
@@ -110,9 +110,6 @@ export function SettingsPanel({
   /** 发件箱的输入框：富的（图片 chip 住在框里）还是纯 textarea。**那一档是退路**，同上 */
   rich: boolean
   onRich: (v: boolean) => void
-  /** 发件箱的双向同步（本地草稿推回远端输入框）。默认关，同上 */
-  live: boolean
-  onLive: (v: boolean) => void
   heals: number
   onSaved: (c: SoftkeysConfig) => void
   /** 顶栏存好了：把新的那一串 id 交回去，顶栏立刻跟着变（不用刷新页面） */
@@ -194,7 +191,7 @@ export function SettingsPanel({
           popupClear={popupClear} onPopupClear={onPopupClear}
           holdRate={holdRate} onHoldRate={onHoldRate}
           paneSort={paneSort} onPaneSort={onPaneSort}
-          enterSend={enterSend} onEnterSend={onEnterSend} live={live} onLive={onLive}
+          enterSend={enterSend} onEnterSend={onEnterSend}
           rich={rich} onRich={onRich}
           osFg={osFg} onOSFg={onOSFg} cardMs={cardMs} onCardMs={onCardMs}
           heals={heals} state={state} toast={toast}
@@ -212,7 +209,7 @@ export function SettingsPanel({
 function TermSection({
   opts, setOpt, card, onCard, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs, kbdFull, onKbdFull,
   keyStyle, onKeyStyle, popupClear, onPopupClear, holdRate, onHoldRate, paneSort, onPaneSort,
-  enterSend, onEnterSend, live, onLive, rich, onRich,
+  enterSend, onEnterSend, rich, onRich,
   heals, state, fontSize, onFont, chatFont, onChatFont, scheme, onScheme, brand, onBrand, toast,
 }: {
   opts: TermOpts
@@ -245,9 +242,6 @@ function TermSection({
   /** 发件箱：输入框用富的（图片 chip 住在框里）还是纯 textarea。**那一档是退路** */
   rich: boolean
   onRich: (v: boolean) => void
-  /** 发件箱：双向同步 */
-  live: boolean
-  onLive: (v: boolean) => void
   toast: (m: string) => void
   heals: number
   state?: State | null
@@ -496,9 +490,8 @@ function TermSection({
       </div>
 
       {/* 发件箱那两件。发件箱现在是**一行**（输入框 + 一个投稿键），原来那一排控件
-          （投给谁 / 拉回 / 图 / 双向）全没了 —— 里面只有这两件是「设一次就不再动」的
-          开关，所以搬到这儿；拉回成了能放上顶栏的一件事（动作库里的「拉回」），
-          传图本来就在顶栏上有一个。见 components/Compose.tsx 那段注释。 */}
+          （投给谁 / 拉回 / 图 / 双向）全没了 —— 拉回和双向同步整个去掉了（只保留发信），
+          传图在顶栏 / 快捷键条上。见 components/Compose.tsx 那段注释。 */}
       <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-line pt-3 text-[13px]">
         发件箱回车
         <div className="flex overflow-hidden rounded-md border border-line">
@@ -549,20 +542,6 @@ function TermSection({
           textarea，图挂在框外面
         </span>
       </div>
-
-      {/* 双向同步。**默认关**，而且是这一整套里唯一会往远端输入框写字的东西 ——
-          开着的时候别同时在那个 pane 里手敲字（本地→远端这个方向本质上是在跟字节流
-          抢缓冲区，见 docs/dev/OUTBOX.md） */}
-      <label className="mt-2 flex cursor-pointer items-start gap-2.5 rounded-md py-1 transition-colors hover:text-fg">
-        <span className="pt-px"><Checkbox checked={live} onCheckedChange={(v) => onLive(!!v)} /></span>
-        <span className="text-[13px]/relaxed">
-          发件箱双向同步（本地草稿推回远端输入框，不回车）
-          <span className="mt-0.5 block text-xs text-faint">
-            只对 claude / codex 这种有真输入框的 pane 生效 —— 普通 pane 里跑的可能是 vim，
-            那里的字符是<b>命令</b>不是文本。开着时别同时在那个 pane 里手敲字
-          </span>
-        </span>
-      </label>
 
       {/* 提示那几条**不属于**「终端」，但设置面板只有三页（终端 / 快捷键条 / 设备），
           为几个开关单开一页不值当。和上面那条「点 switch 开面板一览」一样，都是

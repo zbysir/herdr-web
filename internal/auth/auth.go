@@ -32,6 +32,10 @@ import (
 // CookieName 前端读不到（HttpOnly），只有服务端用。
 const CookieName = "hw_dev"
 
+// CLIAgent 是命令行客户端（`herdr-web connect`）的 User-Agent 前缀，格式
+// `herdr-web-cli/<版本> (<GOOS>; <主机名>)`。设备列表靠它认出「这是哪台电脑上的终端」。
+const CLIAgent = "herdr-web-cli/"
+
 // CodeTTL：配对码的有效期。短到「拍走截图也没用」，长到够你走回沙发上扫码。
 const CodeTTL = 5 * time.Minute
 
@@ -110,9 +114,12 @@ type Store struct {
 	// 不能有任何出码的路径。交接令牌是另一种东西 —— 短命、只能在直连那个口上兑换、
 	// 兑出来的设备随上级一起被撤销，见 MintHandoff。
 	handoffs map[string]handoff
-	dirty    bool
-	flushed  time.Time
-	guard    tamperGuard
+	// cli 等着在浏览器里被批准的命令行登录（见 cliapprove.go）。只在内存里，重启就没了 ——
+	// 和配对码一样，本来就只活 5 分钟
+	cli     []*CLIRequest
+	dirty   bool
+	flushed time.Time
+	guard   tamperGuard
 
 	now func() time.Time // 测试用
 }
@@ -407,6 +414,9 @@ func (s *Store) RevokeAll() int {
 	defer s.mu.Unlock()
 	n := len(s.devs)
 	s.devs = nil
+	// 还挂着的命令行登录一起清：一个已经批准、还没被领走的请求，领的那一下会**新签**
+	// 一台设备 —— 不清的话「全部踢掉」之后还能冒出一台来
+	s.cli = nil
 	s.flushLocked()
 	return n
 }
@@ -434,6 +444,18 @@ func (s *Store) Authenticate(r *http.Request) *Ident {
 			return &Ident{Kind: "device", Label: d.Label, Device: d, Ambient: true, VerifiedAt: d.VerifiedAt, PasskeyAt: d.PasskeyAt}
 		}
 	}
+	// 命令行客户端：同一份设备令牌，但放在 `Authorization` 里**显式**带着。
+	//
+	// 为什么不让它也用 cookie：`/pty` 上「没有 Origin 的 cookie 请求」一律拒（SECURITY.md
+	// §7 那条 —— cookie 是浏览器替人带的，没 Origin 就说不清是谁发的）。换成这个头就没有
+	// 那个问题：跨站的页面设不了它（WebSocket 的 API 压根不让设头，fetch 设了会触发
+	// preflight，而本服务不答 preflight），所以它和 `?token=` 一样不是 Ambient，
+	// 不需要 CSRF 那几道。撤销、过期、重验走的全是同一张设备表。
+	if tok, ok := bearer(r); ok {
+		if d := s.lookup(tok, ip); d != nil {
+			return &Ident{Kind: "device", Label: d.Label, Device: d, VerifiedAt: d.VerifiedAt, PasskeyAt: d.PasskeyAt}
+		}
+	}
 	// 旧书签：只够换一次 cookie（handleRoot 里换），也允许直接调 /api（老脚本还能用）
 	if tok := r.URL.Query().Get("token"); tok != "" && s.legacyOK(r) &&
 		subtle.ConstantTimeCompare([]byte(tok), []byte(s.cfg.Token)) == 1 {
@@ -443,6 +465,14 @@ func (s *Store) Authenticate(r *http.Request) *Ident {
 		return &Ident{Kind: "loopback", Label: "本机", Ambient: true}
 	}
 	return nil
+}
+
+func bearer(r *http.Request) (string, bool) {
+	h := r.Header.Get("Authorization")
+	if len(h) > 7 && strings.EqualFold(h[:7], "Bearer ") {
+		return strings.TrimSpace(h[7:]), true
+	}
+	return "", false
 }
 
 func (s *Store) lookup(token, ip string) *Device {
@@ -663,6 +693,20 @@ func normalizeCode(in string) string {
 
 // LabelFromUA 只求「在设备列表里能认出是哪台」，不求准。
 func LabelFromUA(ua string) string {
+	if strings.HasPrefix(ua, CLIAgent) {
+		// `herdr-web-cli/v1 (darwin; mbp)` → 「命令行 · mbp」
+		host := ""
+		if i, j := strings.LastIndex(ua, "; "), strings.LastIndex(ua, ")"); i >= 0 && j > i {
+			host = ua[i+2 : j]
+		}
+		if r := []rune(host); len(r) > 32 {
+			host = string(r[:32])
+		}
+		if host == "" {
+			return "命令行"
+		}
+		return "命令行 · " + host
+	}
 	dev := "未知设备"
 	switch {
 	case strings.Contains(ua, "iPad"):

@@ -150,9 +150,10 @@ func (s *Server) handlePTY(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 浏览器发 WebSocket 握手时一定带 Origin，所以「没有 Origin」只能是非浏览器客户端。
-	// 那种客户端不该靠 cookie 认证（cookie 是浏览器自动带上的），要连就用 ?token=。
-	if r.Header.Get("Origin") == "" && id.Kind == "device" {
-		http.Error(w, "缺 Origin：非浏览器客户端请用 ?token=", http.StatusForbidden)
+	// 那种客户端不该靠 cookie 认证（cookie 是浏览器自动带上的），要连就把令牌放进
+	// `Authorization: Bearer`（`herdr-web connect` 就是这么连的，那种 Ident 不是 Ambient）。
+	if r.Header.Get("Origin") == "" && id.Kind == "device" && id.Ambient {
+		http.Error(w, "缺 Origin：非浏览器客户端请用 Authorization: Bearer <设备令牌>", http.StatusForbidden)
 		return
 	}
 	if livePTY.Load() >= maxPTY {

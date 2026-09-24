@@ -853,7 +853,23 @@ func resolveConfig(c Config, dropUnknown bool) (Config, error) {
 	if len(c.Lib) > MaxKeys {
 		return Config{}, fmt.Errorf("「我的按键」最多 %d 个", MaxKeys)
 	}
-	lib, err := Resolve(c.Lib)
+	src := c.Lib
+	if dropUnknown {
+		/*
+			**读盘时丢掉 act 已经不认的那几个键，别让整份退回出厂**（存盘照旧报错）。
+			act 白名单是会缩的（`pull` 拉回就被删掉过），而 Resolve 碰到一个不认识的就整份报错 ——
+			读盘那条路上报错等于退回出厂：界面上是一份出厂排布，人一点保存就把原来那份覆盖了，
+			丢的是整条快捷键条，起因只是一个按钮。条上对它的引用会被下面 dropUnknown 那条一起清掉。
+		*/
+		src = make([]Key, 0, len(c.Lib))
+		for _, k := range c.Lib {
+			if k.Act != "" && k.Group == nil && k.Sticky == "" && !capability.IsKeyAct(k.Act) {
+				continue
+			}
+			src = append(src, k)
+		}
+	}
+	lib, err := Resolve(src)
 	if err != nil {
 		return Config{}, err
 	}

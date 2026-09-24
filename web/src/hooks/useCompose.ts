@@ -1,16 +1,16 @@
 // 发件箱的状态机。
 //
-// 「这是我自己写的」和「远端现在是什么」必须分成两个东西：
-// 一开始只用「文本 !== 上次对齐的文本」判断草稿，结果开着「双向」时草稿被推到远端
-// 之后，对齐文本就等于草稿本身，于是草稿看起来「没改过」→ 解锁目标 → 下一拍把用户
-// 正在写的东西直接覆盖掉。所以 own 单独负责所有权，synced 只负责发现远端变化。
+// **只管发信**：框里只有人自己写的字，投出去就清空。原来还有两条同步 —— 每拍把远端输入框
+// 里的字抄回来（自动拉回）、停手后把草稿推回远端（「双向」）、外加一个手动「拉回」——
+// 用户要求整个去掉（「问题挺多的，只保留发信能力」；最后一根稻草是自动拉回那一下把焦点
+// 从终端手里抢走，见 ComposeRich 的 setText）。轮询还在，但只问「投给谁」，不读屏。
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, FOLLOW, type DraftResult, type GotoResult, type Pane, type PresetGroup, type SayResult, type Space, type SyncResult, type UploadResult } from '@/lib/api'
+import { api, FOLLOW, type GotoResult, type Pane, type PresetGroup, type SayResult, type Space, type SyncResult, type UploadResult } from '@/lib/api'
 
 const HIST_KEY = 'composeHist'
 const HIST_MAX = 30
 
-export interface ComposeCfg { poll: number; push: number }
+export interface ComposeCfg { poll: number }
 
 /** 刚投出去还没在转录里露面的那一条（chat 模式的乐观回显） */
 export interface SentEcho {
@@ -23,7 +23,7 @@ export interface SentEcho {
 /** 最多留几条回显。同时挂着好几条「投递中」本身就说明出问题了，留多了只是噪音 */
 const SENT_MAX = 8
 
-export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toast: (m: string) => void) {
+export function useCompose(cfg: ComposeCfg, visible: boolean, toast: (m: string) => void) {
   const [text, setText] = useState('')
   const [panes, setPanes] = useState<Pane[]>([])
   /** 工作空间那一层（和 panes 同一拍回来，见 lib/api.ts 的 Space） */
@@ -40,13 +40,11 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
   const [busy, setBusy] = useState(false)
 
   // 这几个不参与渲染，用 ref：放进 state 会让轮询每拍都重建回调
-  const own = useRef(false)          // 框里装的是**用户自己写的**东西
-  const synced = useRef<string | null>(null) // 远端最后一次读到的文本
+  const own = useRef(false)          // 框里有字（草稿）—— 有草稿时目标锁在当初瞄准的 pane 上
   const pinned = useRef('')          // 草稿归属的 pane
   const resolved = useRef('')        // 上一次轮询解析出来的真实 pane
   const inFlight = useRef(false)     // 有请求在飞时暂停轮询，免得自己追自己
   const textRef = useRef('')
-  const pushTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const hist = useRef<string[]>([])
   const histIdx = useRef(-1)
 
@@ -76,20 +74,11 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
    */
   const aimed = useCallback(() => (pinned.current && own.current ? pinned.current : FOLLOW), [])
 
-  const label = useCallback((r: SyncResult | SayResult | DraftResult) => {
+  const label = useCallback((r: SyncResult | SayResult) => {
     const cached = panes.find((p) => p.id === r.target)
     const where = cached ? `${cached.workspace}/${cached.tab}` : r.workspaceId
     return `${r.followed ? '⟳ ' : ''}${r.target}${where ? ` · ${where}` : ''} · ${r.agent ? `${r.agent} ${r.status}` : 'shell'}`
   }, [panes])
-
-  /** 把远端内容放进框里：这是远端的东西，不是用户的草稿。 */
-  const adopt = useCallback((t: string, pane: string) => {
-    setText(t)
-    textRef.current = t
-    synced.current = t
-    own.current = false
-    if (pane) pinned.current = pane
-  }, [])
 
   /*
     上一次那份 pane 列表的指纹（服务端给的 `rev`）。
@@ -260,12 +249,6 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
     const switched = r.target !== resolved.current
     resolved.current = r.target
     const pinNote = target === FOLLOW ? '' : ' · 草稿锁在这个 pane 上'
-    // 认不出输入框时框里是空的，得说清是「没认出来」而不是「远端把框清空了」——
-    // 不然看起来像自动拉回坏了。shell pane 单独说：那边本来就读不到输入行，
-    // 但投稿走的是「盲打 + 回车」，照样能用，别让提示看起来像坏了。
-    const boxNote = !r.noBox ? ''
-      : r.agent ? ' · 认不出输入框（可能正开着全屏界面 / 选择框），这时候不会让你投'
-                : ' · shell pane 读不到输入行（投稿照常可用）'
 
     if (switched) {
       /*
@@ -284,18 +267,9 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
         agent 的那台机器上问几十个 pane（实测 55 个），每拍白拉一次不值当。
       */
       if (!first) void loadPanes(true)
-      // 焦点换了 pane：框里是远端来的就直接换成新 pane 的内容，是自己写的就留着
-      if (own.current) say2(`${label(r)} · 本地有草稿，没自动拉回（清空框就跟回来）`)
-      else { adopt(r.text ?? '', r.target); say2(`${label(r)}${boxNote}`) }
-      return
     }
-    if (!own.current && (r.text ?? '') !== synced.current) {
-      adopt(r.text ?? '', r.target)
-      say2(`${label(r)} · 已跟随远端改动${boxNote}`)
-      return
-    }
-    say2(`${label(r)}${own.current ? ' · 本地草稿未投' : ''}${pinNote}${boxNote}`)
-  }, [aimed, adopt, label, loadPanes, say2, visible])
+    say2(`${label(r)}${own.current ? ' · 本地草稿未投' : ''}${pinNote}`)
+  }, [aimed, label, loadPanes, say2, visible])
 
   // 自动拉回的心跳。用自排队的 setTimeout 而不是 setInterval：一拍要打 3 次 socket
   // 调用，间隔调小或者网络一慢，setInterval 会把请求叠起来。
@@ -322,60 +296,12 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
     return () => { removeEventListener('focus', f); document.removeEventListener('visibilitychange', vis) }
   }, [tick])
 
-  /** 双向同步的本地→远端那半边：停手一会儿后把草稿写进远端输入框（不回车）。 */
-  const schedulePush = useCallback(() => {
-    // 只推**用户自己写的**东西。自动拉回来的内容远端本来就有，推回去纯属多余，
-    // 而且中间只要焦点动一下，就会把 A 的内容写进 B 的输入框。
-    if (!live || !own.current) return
-    clearTimeout(pushTimer.current)
-    pushTimer.current = setTimeout(async () => {
-      const body = textRef.current
-      inFlight.current = true
-      try {
-        const r = await api.post<DraftResult>('/herdr/draft', { target: aimed(), text: body })
-        if (r.skipped === 'not-agent') say2(`${label(r)} · 这个 pane 没有 agent 输入框，没往里推`)
-        else if (r.skipped === 'no-box') say2(`${label(r)} · 认不出输入框，这次没推`)
-        else if (r.skipped === 'busy') say2(`${label(r)} · 远端正忙，这次没推`)
-        else { synced.current = body; pinned.current = r.target; say2(`${label(r)} · 已同步 ${r.pushed} 字到远端`) }
-      } catch (e) {
-        say2('同步失败：' + (e as Error).message, true)
-      } finally {
-        inFlight.current = false
-      }
-    }, cfg.push)
-  }, [live, aimed, cfg.push, label, say2])
-
   const onChangeText = useCallback((v: string) => {
     setText(v)
     textRef.current = v
     own.current = !!v                                  // 框空了就把控制权交回「跟随焦点」
     if (own.current && !pinned.current && resolved.current) pinned.current = resolved.current
-    schedulePush()
-  }, [schedulePush])
-
-  const pull = useCallback(async () => {
-    setBusy(true)
-    try {
-      const r = await api.get<SyncResult>(`/herdr/pull?target=${encodeURIComponent(aimed())}`)
-      resolved.current = r.target
-      if (r.noBox) {
-        // 认不出输入框就什么都别动：这时候的 '' 不代表「远端是空的」，拿它覆盖
-        // 只会把用户正在写的东西白白删掉。
-        pinned.current = r.target
-        say2(`${label(r)} · ${r.agent ? '认不出输入框，没拉回（可能正开着全屏界面 / 选择框）' : 'shell pane 读不到输入行，没拉回'}`, true)
-        return
-      }
-      adopt(r.text ?? '', r.target)
-      // 手动点「拉回」是明确的意图：拿过来编辑。所以算用户的东西，锁定在这个 pane，
-      // 别让下一次焦点变化把它冲掉。
-      own.current = !!r.text
-      say2(`${label(r)} · ${r.text ? `已拉回 ${[...r.text].length} 字` : '输入框是空的'}`)
-    } catch (e) {
-      say2('拉回失败：' + (e as Error).message, true)
-    } finally {
-      setBusy(false)
-    }
-  }, [aimed, adopt, label, say2])
+  }, [])
 
   /**
    * 刚投出去的那几条（**给 chat 模式做乐观回显用的**）。
@@ -428,7 +354,6 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
     const body = override !== undefined ? override.trim() : [said, ...paths].filter(Boolean).join(' ')
     // 只挂了图、一个字没写也算数（「看这张图」这种）—— 所以判空要连附件一起看
     if (!body) { toast('框里是空的'); return }
-    clearTimeout(pushTimer.current)
     setBusy(true)
     inFlight.current = true
     say2('投递中…')
@@ -440,7 +365,6 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
       setText('')                                      // 发完就清空，不做增量同步
       textRef.current = ''
       setAtts([])                                      // 附件跟着一起清
-      synced.current = ''
       own.current = false
       pinned.current = ''                              // 框空了，重新跟随焦点
       resolved.current = r.target
@@ -567,7 +491,7 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, live: boolean, toa
   return {
     text, setText: onChangeText, panes, spaces, watching, presets,
     info, bad, busy, aimed,
-    loadPanes, loadSoftkeyPresets, tick, pull, submit, recall, attach, upload, append, jump,
+    loadPanes, loadSoftkeyPresets, tick, submit, recall, attach, upload, append, jump,
     sent, dropSent,
     atts, hold, dropAtt,
   }

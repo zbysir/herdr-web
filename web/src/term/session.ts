@@ -92,12 +92,11 @@ const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
 
 // 冻帧的几个时长（毫秒），见下面 freeze()
 /**
- * 字形纹理攒到几页就清一次（见装 WebglAddon 那段）。
- *
- * **8 是留了余量的**：合并的门槛是 `min(32, gl.MAX_TEXTURE_IMAGE_UNITS)`，手机 GPU 上
- * 常见 16 —— 卡着那个数清等于赌「先清还是先合并」。
+ * 字形纹理攒到几页就换一个新渲染器（见 loadWebgl）。实际门槛是这个数和「合并门槛的一半」
+ * 取小 —— 合并门槛是 `max(4, min(32, gl.MAX_TEXTURE_IMAGE_UNITS))`，手机 GPU 上常见 16，
+ * 但也有 8 的；卡着它换等于赌「先换还是先合并」。
  */
-const ATLAS_CLEAR_PAGES = 8
+const ATLAS_RENEW_PAGES = 8
 
 /**
  * 粘滞修饰键（Ctrl / Alt）的三档：
@@ -160,6 +159,9 @@ export class Session {
   private settleFloor = 0 // 早于这个时刻不落地（视口还在动）
   private settleCap = 0 // 晚于这个时刻必须落地（0 = 不设上限）
   private detachTouch: (() => void) | null = null
+  private webgl: WebglAddon | null = null
+  /** 那个 WebGL 渲染器自己的 canvas：换渲染器时要显式 loseContext（见 renewWebgl） */
+  private webglCanvas: HTMLCanvasElement | null = null
   private freezeEl: HTMLCanvasElement | null = null
   private freezeAt = 0
   private freezeAwait = false // 冻着，等 herdr 的 SIGWINCH 重画（见 awaitRedraw）
@@ -205,66 +207,11 @@ export class Session {
       }),
     )
     this.term.open(host)
-    try {
-      // preserveDrawingBuffer：合成完别把绘制缓冲丢掉，不然改尺寸前读不出画面（见 freeze()）
-      const webgl = new WebglAddon(true)
-      webgl.onContextLoss(() => webgl.dispose())
-      /*
-        **字形纹理攒到一定量就清一次，绕开 xterm 的「页合并」。**
-
-        现象（真机上确认这套治法有效）：在终端里多滚几下，屏幕上零星几个字会变成**别的字形**
-        （用户报的那张截图里 `creght-eval` 画成了 `≯reghɪ-ev≜l`、`main` 成了 `mai↗`）——
-        不是花屏、不是缺字，是**拿错了纹理**：中英文都会中招，而同一行里别的字好好的。
-
-        出处在 `@xterm/addon-webgl` 的 `TextureAtlas._createNewPage()`：页数涨到
-        `maxAtlasPages`（= `min(32, gl.MAX_TEXTURE_IMAGE_UNITS)`，手机 GPU 上常见 16）时
-        它会把 4 个页合成一个大页，然后**平移所有 glyph 的 texturePage 索引**。索引一错，
-        那个字就从别的页/别的坐标取纹理，画出来就是另一个字。
-
-        **中文用户特别容易踩**：一个汉字一个 glyph，一屏几百个不同的字，滚几下就是上千个 ——
-        页数涨得飞快，合并于是反复发生。纯英文那点字形一辈子也填不满。
-
-        治法是**不让它合并**：数着新页，快到上限之前自己 `clearTextureAtlas()` 清一次
-        （清的是页里的内容和缓存映射，页本身不删，所以清完很久都不需要新页）。代价是重建
-        当前这一屏的字形 —— 而合并本身也要全量重绘（xterm 自己会 `_requestClearModel`），
-        两边差不多，但少了一次索引平移。
-
-        量级：一页 512×512，而手机上（DPR≈2.75、字号 13）一个**汉字**的格子约 40×40
-        设备像素 —— **一页只放得下一百多个汉字**。一屏中文就要一两页，滚几屏必然顶到上限。
-        英文的格子窄一半、字形又只有那几十个，一辈子填不满一页。
-
-        三条别改：
-        ① **数的是「现在有几页」，不是「新建过几次」**。清纹理**不删页**
-           （`clearTexture` 只把每页腾空 + 清缓存映射），所以拿「自上次清以来新建了几个」
-           计数的话，页数照旧一路涨到上限 —— 清了个寂寞，合并该来还是来。
-           腾空之后新字形填回已有的空页，所以稳态就停在这几页上，不会再涨。
-        ② **异步清**（`setTimeout 0`）。这个回调是在「正往新页里写一个字形」的中途 fire
-           的，同步清掉就是把正在写的那一页抽走，比原来的 bug 还乱（xterm 自己那个合并
-           也刻意推到 microtask 上，见它的注释）。
-        ③ **阈值要留余量**（8，而上限最少是 16）。合并的判据是「新建页时页数已经到上限」，
-           卡着上限清等于赌它先清还是先合并。
-      */
-      let pages = 0
-      let clearedAt = 0
-      webgl.onRemoveTextureAtlasCanvas(() => { pages = Math.max(0, pages - 1) })
-      webgl.onAddTextureAtlasCanvas(() => {
-        pages++
-        // 已经在这个页数上清过就别再清：腾空不减页数，不防一手会每新建一次都清一次
-        if (pages < ATLAS_CLEAR_PAGES || pages <= clearedAt) return
-        clearedAt = pages
-        setTimeout(() => {
-          try {
-            webgl.clearTextureAtlas()
-          } catch { /* 已经 dispose 了（换渲染器 / 丢上下文），忽略 */ }
-        }, 0)
-      })
-      this.term.loadAddon(webgl)
-    } catch {
-      /* 没有 WebGL 就退回 DOM 渲染 */
-    }
+    this.loadWebgl()
 
     this.installParsers()
     this.installKeyboard()
+    this.installTypingHold()
     this.term.onData((d) => this.send(this.applySticky(d)))
     this.term.onBinary((d) => {
       if (this.ws?.readyState !== WebSocket.OPEN) return
@@ -599,48 +546,63 @@ export class Session {
   }
 
   /**
-   * 屏幕上有几个框的左上角（`┌` / `╭`）。给「按完 ^B 组合自动回 chat」判断 herdr 是不是
-   * **弹了个框在等人**（`^B c` 问新 tab 叫什么、跳转 / scratch 这类插件弹窗）用的：和按键
-   * 之前比多出来了 = 有框开着，这时候切走等于把人要填的东西藏起来。只比「多了没有」，
-   * 所以 pane 里本来就有的框（agent 自己的输入框）不影响判断。
+   * 「正在连接终端」期间**拦住人打的字**（见 App 的 whenReady）。
+   *
+   * 为什么要拦：点 ⌨ 那一下就得把键盘弹出来（iOS 上不是手势触发的 focus 不弹键盘，等连上
+   * 再弹是弹不出来的），而连上到 herdr 起来之间对面还是个 zsh —— 这时候打的字会落进 zsh，
+   * 和服务端替人敲的那行 `herdr` 拼成一条（`/modelherdr`）。拦下来什么都不发，比发错地方好。
+   *
+   * 两条别改：① **只拦 DOM 上的输入事件**，不拦 `send`/`onData` —— 终端的自动应答（herdr
+   * 启动时查颜色、DSR）也走 onData，拦了 herdr 会卡在等回答上；② 挂在**外层 host 的捕获阶段**：
+   * xterm 自己在输入框上挂的就是捕获监听，同一元素上后挂的排在它后面，拦不住，得在它之前拦。
    */
-  boxCorners() {
-    const b = this.term.buffer.active
-    let n = 0
-    for (let y = 0; y < this.term.rows; y++) {
-      const l = b.getLine(b.viewportY + y)?.translateToString(true)
-      if (!l) continue
-      for (const ch of l) if (ch === '┌' || ch === '╭') n++
+  private holdTyping = false
+  setHoldTyping(on: boolean) {
+    if (this.holdTyping === on) return
+    this.holdTyping = on
+    // 拦下期间输入法可能在框里攒了字（组词那一段拦不掉），放开时清掉，别让 xterm 事后读到
+    if (!on) {
+      const el = this.kbdEl()
+      if (el) el.value = ''
     }
-    return n
+  }
+  private installTypingHold() {
+    const block = (e: Event) => {
+      if (!this.holdTyping || e.target !== this.kbdEl()) return
+      e.preventDefault()
+      e.stopPropagation()
+    }
+    for (const t of ['keydown', 'keypress', 'beforeinput', 'input', 'compositionend']) {
+      this.host.addEventListener(t, block, true)
+    }
   }
 
   /**
-   * **人**在终端里按了键（快捷键条走 sendKey，不经过这儿）。返回退订函数。
+   * **人**在终端的输入框里打了字（软键盘 / 真键盘）。给 chat 模式用：往终端里打字而 chat 挡着
+   * 画面 = 打了什么都看不见，所以一打字就切回终端（见 App 里 onTyping 那段）。返回退订函数。
    *
-   * **不能用 xterm 的 onData**：它还会吐终端**自动回复**的那些序列 —— herdr 一起来就查
-   * 颜色（OSC 10/11/4 × 256）、焦点（`\e[O`）、DSR，每一条的回答都走 onData。拿它当
-   * 「人按了下一个键」的话，herdr 刚启动那一瞬就被误判了（实测：一连几百条，^B 还没发出去
-   * 「按完自动回 chat」就已经被这些回复触发、又被当成「人还在操作」取消掉）。
-   * 所以听那个隐藏输入框上的**真实输入事件**：keydown（光按修饰键不算）+ input（手机
-   * 输入法不走 keydown 的具体键，走 input）。
+   * 光按修饰键不算；手机输入法多半不走具体的 key（`Unidentified` / 229），那种等 `input` 事件。
+   *
+   * 两条别改：① **不能用 xterm 的 `onData`** —— herdr 一起来就查几百条颜色 / 焦点 / DSR，
+   * 终端的自动回答全走 onData，拿它判断「人打字了」会在 herdr 启动那一瞬误判；② **必须挂捕获
+   * 阶段** —— xterm 在这个输入框上挂的是捕获监听且会 stopPropagation，同一元素上**冒泡**阶段
+   * 的监听就不触发了（实测：一个键都收不到，而键照样发出去了）。
    */
-  onUserInput(fn: () => void) {
+  onTyping(fn: () => void) {
     const el = this.kbdEl()
     if (!el) return () => {}
     const onKey = (e: Event) => {
-      const k = (e as KeyboardEvent).key
-      if (k === 'Shift' || k === 'Control' || k === 'Alt' || k === 'Meta') return
+      const k = e as KeyboardEvent
+      if (k.key === 'Shift' || k.key === 'Control' || k.key === 'Alt' || k.key === 'Meta') return
+      if (k.key === 'Unidentified' || k.keyCode === 229) return // 输入法：等 input
       fn()
     }
-    // **必须挂捕获阶段**：xterm 自己在这个输入框上挂的是捕获监听，处理完会 stopPropagation，
-    // 而按现在的规则（Chrome 89 起）目标上的捕获监听先跑、一停，同一元素上**冒泡**阶段的监听
-    // 就不再触发 —— 挂冒泡的话一个键都收不到（实测：自己挂的 keydown 一次都没回调，而键照样发出去了）
+    const onInput = () => fn()
     el.addEventListener('keydown', onKey, true)
-    el.addEventListener('input', fn, true)
+    el.addEventListener('input', onInput, true)
     return () => {
       el.removeEventListener('keydown', onKey, true)
-      el.removeEventListener('input', fn, true)
+      el.removeEventListener('input', onInput, true)
     }
   }
 
@@ -744,6 +706,18 @@ export class Session {
       if (m.t === 'ready') {
         this.alive = true
         this.retries = 0
+        /*
+          **PTY 起来了，把此刻真实的行列数补发一次。**
+
+          PTY 是按 `open()` 那一刻的行列数建的（写在连接 URL 上），而握手期间改的尺寸会被
+          `applySize` 丢掉 —— 那时连接还是 CONNECTING，发不出去。手机上这段空档正好常常撞上
+          「键盘弹起来、终端变矮」：于是 herdr 按高的那个尺寸画，浏览器里的终端却是矮的，
+          输入框被挤到屏幕外面，打的字（输入法候选画在光标处）落在状态栏那一行上（用户报的，
+          「第一次连上来」才有，下一次改尺寸就好了）。尺寸没变的话 PTY 那边不发 SIGWINCH，
+          所以无条件补发没有代价。顺手再排一次重排：容器可能在这期间变了、而防抖还没轮到。
+        */
+        ws.send(JSON.stringify({ t: 'r', cols: this.term.cols, rows: this.term.rows }))
+        this.relayout(true)
         this.cb.onStatus(`${m.label}  ${this.term.cols}×${this.term.rows}`, 'on')
         if (!matchMedia('(pointer: coarse)').matches) this.term.focus()
       } else if (m.t === 'p') {
@@ -976,6 +950,89 @@ export class Session {
   //   4. herdr 收到 SIGWINCH 之后自己也要清屏重画一遍，又是几十毫秒。
   // 这几段延迟一个都去不掉（xterm 没有同步重绘的口子），所以改尺寸之前把当前画面拍成
   // 一张图铺在终端上，等新画面画上了再淡出 —— 呼输入法时最明显的那一下全黑就没了。
+  /*
+    **字形纹理攒到一定量就整个换一个新的 WebGL 渲染器，绕开 xterm 的「页合并」。**
+
+    现象（用户两次报的）：在终端里多滚几下，屏幕上的字开始**拿错纹理** —— 第一次是零星几个
+    （`creght-eval` 画成 `≯reghɪ-ev≜l`），第二次是**大片空白 + `Ǫ`、`Ṣ`、彩色方块**。中英文都中。
+
+    出处在 `@xterm/addon-webgl`（0.19）的 `TextureAtlas`：页数涨到 `maxAtlasPages`
+    （`min(32, gl.MAX_TEXTURE_IMAGE_UNITS)`，手机上常见 16）时 `_createNewPage` 把 4 页合成
+    一大页、**平移所有 glyph 的页索引**，索引一错那个字就从别处取纹理。中文用户特别容易踩：
+    手机上一页 512×512 只放得下一百多个汉字，滚几屏就顶到上限；英文一辈子填不满一页。
+
+    **第一版的治法（到 8 页调 `clearTextureAtlas()`）是错的，而且让事情更糟**，读源码才看到：
+    ① `clearTexture()` 开头有个短路 —— 第 0 页的写入位置在 (0,0) 就直接返回。第一次清完
+       第 0 页就是 (0,0)，而之后的新字形写进的是**最后一页**，于是**从第二次起每次清都是空操作**，
+       页数照旧涨到上限、合并照旧发生；
+    ② `page.clear()` 只擦画布，**不清每页的 `_glyphs` 列表**，清之前的字形对象全留着；
+    ③ 合并时拿 `glyphs[0].texturePage` 定位要删哪几页 —— 那个 `glyphs[0]` 正是②留下的过期
+       对象，页号是错的，于是删错页、平移错索引，一坏就是一大片（第二张截图）。
+    上游 beta（0.20）已经把这一族改掉了（`_evictAllPages` + `pageLayoutVersion`），但要把
+    xterm 本体和所有 addon 一起升到 6.1 beta，不值当。
+
+    所以现在是**换渲染器**：到门槛就 dispose 旧的、装一个新的。新渲染器从缓存里拿不到旧纹理集
+    （dispose 时 `removeTerminalFromCache` 把它释放了），拿到的是一份**全新**的，没有任何残留
+    状态可以出错。不碰 TextureAtlas 的任何内部。三条别改：
+    ① **绝不调 `clearTextureAtlas()`**，理由见上；
+    ② **门槛按这台 GPU 的合并门槛算**（一半，且不超过 ATLAS_RENEW_PAGES）—— 有的手机
+       `MAX_TEXTURE_IMAGE_UNITS` 是 8，固定写 8 就是卡着上限赌；
+    ③ 旧的那个 GL 上下文要**显式 `loseContext()`**：dispose 只是把 canvas 摘掉，上下文等 GC 回收，
+       而浏览器同时活着的 WebGL 上下文有上限（Chrome 16），换得勤的话会把最老的那个（可能就是
+       正在用的）挤掉。换的那一下用冻帧盖住（和改尺寸同一套）。
+  */
+  private loadWebgl() {
+    const screen = this.host.querySelector('.xterm-screen')
+    const before = new Set(screen?.querySelectorAll('canvas') ?? [])
+    try {
+      // preserveDrawingBuffer：合成完别把绘制缓冲丢掉，不然改尺寸前读不出画面（见 freeze()）
+      const webgl = new WebglAddon(true)
+      webgl.onContextLoss(() => {
+        webgl.dispose()
+        if (this.webgl === webgl) this.webgl = null
+      })
+      let pages = 0
+      let limit = ATLAS_RENEW_PAGES
+      let renewing = false
+      webgl.onRemoveTextureAtlasCanvas(() => { pages = Math.max(0, pages - 1) })
+      webgl.onAddTextureAtlasCanvas(() => {
+        pages++
+        if (pages < limit || renewing || this.webgl !== webgl) return
+        renewing = true
+        // 异步：这个回调是在「正往新页里写一个字形」的中途 fire 的，当场 dispose 就是把
+        // 正在写的那一页抽走
+        setTimeout(() => this.renewWebgl(webgl), 0)
+      })
+      this.term.loadAddon(webgl)
+      this.webgl = webgl
+      this.webglCanvas = ([...(screen?.querySelectorAll('canvas') ?? [])] as HTMLCanvasElement[])
+        .find((c) => !before.has(c)) ?? null
+      const gl = this.webglCanvas?.getContext('webgl2') as WebGL2RenderingContext | null | undefined
+      const units = gl?.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS) as number | undefined
+      if (units) limit = Math.max(2, Math.min(ATLAS_RENEW_PAGES, Math.floor(Math.max(4, Math.min(32, units)) / 2)))
+    } catch {
+      /* 没有 WebGL 就退回 DOM 渲染 */
+      this.webgl = null
+    }
+  }
+
+  private renewWebgl(old: WebglAddon) {
+    if (this.webgl !== old) return
+    this.freeze() // 换的那一下新 canvas 要等下一帧才画上，先拍一张盖着
+    const canvas = this.webglCanvas
+    this.webgl = null
+    this.webglCanvas = null
+    try {
+      old.dispose()
+    } catch { /* 已经 dispose 了 */ }
+    try {
+      ;(canvas?.getContext('webgl2') as WebGL2RenderingContext | null | undefined)
+        ?.getExtension('WEBGL_lose_context')?.loseContext()
+    } catch { /* 拿不到就等 GC */ }
+    this.loadWebgl()
+    this.term.refresh(0, this.term.rows - 1)
+  }
+
   private freeze() {
     const now = performance.now()
     if (this.freezeEl) {

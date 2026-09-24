@@ -90,6 +90,7 @@ test:
 	node web/src/term/paths.test.ts
 	node web/src/term/keysend.test.ts
 	node web/src/lib/mdpaths.test.ts
+	node web/src/lib/mdautolink.test.ts
 	node web/src/lib/brand.test.ts
 
 ## release-dry —— 本地把整条发版链跑一遍，不推任何东西

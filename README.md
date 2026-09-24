@@ -67,7 +67,16 @@ herdr-web devices       # 列出已配对设备
 herdr-web revoke <id>   # 踢掉某台（all = 全部），下一个请求立刻 401
 ```
 
-→ 管理页、session 命名规则、连上敲什么：[使用说明 · 第一次跑](docs/USAGE.zh-CN.md#第一次跑)
+不想开浏览器、想在**另一台电脑的原生终端**里用：
+
+```bash
+herdr-web connect https://你的域名        # 第一次：浏览器里刷 passkey 批准，或输配对码；/work 同上
+```
+
+它配出来的也是一台普通设备（设备页里看得见、踢得掉），每天的重验同样靠 passkey（在浏览器里批准一下），
+网络僵住时行首按 `~.` 断开。
+
+→ 管理页、session 命名规则、连上敲什么、`connect`：[使用说明 · 第一次跑](docs/USAGE.zh-CN.md#第一次跑)
 
 ## 能干什么
 

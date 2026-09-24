@@ -85,21 +85,6 @@ type Info struct {
 	CWD         string `json:"cwd"`
 }
 
-type PullResult struct {
-	Info
-	Text string `json:"text,omitempty"`
-	// NoBox：这一屏上认不出输入框（没有提示符字形）。和「输入框是空的」不是一回事，
-	// 前端要区别对待 —— 不然「认不出」看起来就像「远端把框清空了」。
-	NoBox  bool     `json:"noBox,omitempty"`
-	Screen []string `json:"screen,omitempty"`
-}
-
-type DraftResult struct {
-	Info
-	Pushed  int    `json:"pushed,omitempty"`
-	Skipped string `json:"skipped,omitempty"`
-}
-
 type ClearResult struct {
 	Rounds int   `json:"rounds"`
 	Empty  *bool `json:"empty"` // nil = 没法判断（shell pane）
@@ -318,25 +303,19 @@ func orElse(v, def string) string {
 	return def
 }
 
-// Pull 拉回远端输入框内容（mode=="screen" 时给整屏纯文本，纯调试用）。
-func (o *Outbox) Pull(target, mode string) (*PullResult, error) {
+// Where 解析「投给谁」：哨兵值 / 空 → herdr 此刻焦点那个 pane。**不读屏**。
+//
+// 发件箱那一拍轮询就问这个（顶上那行「投给谁 · 什么 agent · 什么状态」+ 发现人在别处切了
+// pane）。原来这一拍还会把那个 pane 的输入框读回来抄进发件箱（自动拉回），配着「双向同步」
+// 往回推 —— 两样都去掉了（用户：「问题挺多的，只保留发信能力」；踩过的一条是拉回来那一下
+// 把焦点从终端手里抢走）。读屏是两次 pane.read + 一段 settle，每 500ms 一拍，省下来不少。
+func (o *Outbox) Where(target string) (*Info, error) {
 	p, followed, err := o.resolve(target)
 	if err != nil {
 		return nil, err
 	}
-	ansi, err := o.readSettled(p.PaneID, o.settle())
-	if err != nil {
-		return nil, err
-	}
-	r := &PullResult{Info: identify(p, followed)}
-	if mode == "screen" {
-		r.Screen = composer.ScreenLines(ansi)
-	} else {
-		var ok bool
-		r.Text, ok = composer.Extract(ansi, p.Agent)
-		r.NoBox = !ok
-	}
-	return r, nil
+	in := identify(p, followed)
+	return &in, nil
 }
 
 // Clear 清空远端输入行。
@@ -388,42 +367,6 @@ func (o *Outbox) Clear(id, agent string) (ClearResult, error) {
 	cur, ok, err := o.ReadComposer(id, agent)
 	empty := ok && cur == ""
 	return ClearResult{Rounds: rounds, Empty: &empty, NoBox: !ok}, err
-}
-
-// Draft 把草稿推到远端输入框，但**不回车**。给「双向同步」的本地→远端那半边用。
-//
-// 只对有 agent 的 pane 干这件事：agent 有真正的输入框，写进去就只是文本。
-// 普通 pane 里跑的可能是 vim / 某个选择器，那里的字符是**命令**不是文本，
-// 跟着焦点乱推会直接触发操作。
-func (o *Outbox) Draft(target, text string) (*DraftResult, error) {
-	p, followed, err := o.resolve(target)
-	if err != nil {
-		return nil, err
-	}
-	r := &DraftResult{Info: identify(p, followed)}
-	if p.Agent == "" {
-		r.Skipped = "not-agent"
-		return r, nil
-	}
-	cleared, err := o.Clear(p.PaneID, p.Agent)
-	if err != nil {
-		return nil, err
-	}
-	if cleared.NoBox {
-		r.Skipped = "no-box"
-		return r, nil
-	}
-	if cleared.Empty != nil && !*cleared.Empty {
-		r.Skipped = "busy"
-		return r, nil
-	}
-	if text != "" {
-		if err := o.C.SendText(p.PaneID, text, nil); err != nil {
-			return nil, err
-		}
-	}
-	r.Pushed = utf8.RuneCountInString(text)
-	return r, nil
 }
 
 // Say 覆盖式投稿：先清空，再整段提交。
