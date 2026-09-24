@@ -3,11 +3,16 @@
 浏览器里的 herdr 终端 + **语音投稿**（平板手写笔说话打字、框选重说改字，投进 herdr 的 agent pane）。
 
 一个 Go 二进制，前端（React + Vite + Tailwind）嵌在里面：`make build` → `./herdr-web`。
-**文档分两层**：根目录是**使用说明**（怎么装 / 怎么用 / 怎么配 / 放哪儿跑），
-[`docs/dev/`](docs/dev/) 是**开发理由**（为什么这么设计、实测出来的语义、会静默出错的坑）。
-两种读者要的东西完全不一样，混在一份里两边都读不下去。
+**文档分三层**：根上的 README 是**一页速览**（GitHub 首页，中文默认 + 英文镜像），
+[`docs/USAGE.zh-CN.md`](docs/USAGE.zh-CN.md) 和 DEPLOY / DNS 是**完整使用说明**（怎么装 / 怎么用 /
+怎么配 / 放哪儿跑），[`docs/dev/`](docs/dev/) 是**开发理由**（为什么这么设计、实测出来的语义、
+会静默出错的坑）。三种读者要的东西完全不一样，混在一份里谁都读不下去。
+**改了 `README.md` 就顺手改 `README.en.md`** —— 两份是镜像、各 140 行左右，所以跟得上；
+以前那两份 570 行的手册（`README.md` / `README.zh-CN.md`）正是因为同步不动，英文那份落后了
+3 个提交（chat 模式、主题色、文件编辑都没写进去），2026-09-24 合成了现在这个结构。
 
-- 使用说明：[README.zh-CN.md](README.zh-CN.md) · [DEPLOY.md](DEPLOY.md) · [DNS.md](DNS.md)
+- 使用说明：[README.md](README.md)（速览，[English](README.en.md)）·
+  [docs/USAGE.zh-CN.md](docs/USAGE.zh-CN.md)（完整）· [DEPLOY.md](DEPLOY.md) · [DNS.md](DNS.md)
 - 开发文档索引：[docs/dev/README.md](docs/dev/README.md)
 - 代码结构、发版、配色、已经踩过的坑：本文档末尾
 

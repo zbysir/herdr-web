@@ -5,562 +5,137 @@
 </p>
 
 <p align="center">
-  <b>English</b> · <a href="README.zh-CN.md">简体中文</a>
+  <b>简体中文</b> · <a href="README.en.md">English</a>
 </p>
 
-A terminal in your browser, built for running [`herdr`](https://github.com/zbysir/herdr).
-One Go binary with the frontend baked in. Works on phones.
+浏览器里的终端，用来跑 [`herdr`](https://github.com/zbysir/herdr)。一个 Go 二进制，前端嵌在里面，
+手机也能用。
 
-**Voice compose** is the point of this project: dictate on a tablet, select the words that came out
-wrong and say them again, then hand the whole paragraph to an agent's input line. A phone is enough
-to get by; a tablet in landscape gives you 211 columns — that is a workstation.
+**语音投稿**是主功能：在平板上说话打字，说错的字框选重说就改掉，改完整段投进 agent 的输入行。
+手机上够用，平板横屏 211 列 —— 那是个工位。
 
-This document covers **installing, using and configuring** it. Why each thing works the way it does,
-and what it cost to learn, lives in the [documents listed at the end](#documents) — those are the
-real substance of this project. They are in Chinese.
-
-## Install
-
-```bash
-npm install -g @bysir/herdr-web       # easiest if you have node; upgrades come free
-herdr-web                             # listens on 127.0.0.1 only
+```
+┌─────────────────────────────────────────────┐
+│  面板一览  文件  改动  对话   ...   设置    │  顶栏：放哪几个自己拖
+├─────────────────────────────────────────────┤
+│                                             │
+│       herdr 的 pane，和电脑上一模一样       │
+│                                             │
+├─────────────────────────────────────────────┤
+│  说完的一整段话...            [   投稿   ]  │  发件箱：一行，回车就投
+│  [键盘][^B][Ctrl][Esc][方向]...横滑...      │  快捷键条：手机没有 Ctrl 键
+└─────────────────────────────────────────────┘
 ```
 
-No node (common on servers):
+## 装
+
+```bash
+npm install -g @bysir/herdr-web    # 有 node 最省事，升级也交给它
+herdr-web                          # 只听 127.0.0.1
+```
+
+没有 node（服务器上常见）：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zbysir/herdr-web/master/install.sh | sh
 ```
 
-Installs into `~/.local/bin`. To install somewhere else, the variable has to go to `sh`, **not** to `curl`:
+装到 `~/.local/bin`，**强制校验 sha256** —— 这东西后面挂着一个登录 shell。
+
+Windows 没有原生版，在 WSL 里装（浏览器里那个终端要一个真 PTY）。`go install` 也能装，
+但**装出来的没有前端**（前端产物不入版本库）。
+
+→ 从源码装、换安装目录、装指定版本：[使用说明 · 装](docs/USAGE.zh-CN.md#装)
+
+## 用
+
+手机 / 平板连进来：
 
 ```bash
-curl -fsSL …/install.sh | HERDR_WEB_INSTALL_DIR=/opt/bin sh    # right
-HERDR_WEB_INSTALL_DIR=/opt/bin curl -fsSL …/install.sh | sh    # wrong — curl gets it, the script never sees it
+HERDR_WEB_HOST=0.0.0.0 herdr-web
 ```
 
-The wrong one **does not fail**; it quietly installs to the default directory. Same shape for `HERDR_WEB_INSTALL_VER=v0.1.0` to pin a version.
+启动横幅里有一个**一次性配对码**和它的二维码，手机扫一下就进去了。**一台设备配一次** ——
+凭据在 HttpOnly cookie 里，换 Wi-Fi、换网段、重启都不用重来。连上之后自动敲 `herdr`。
 
-The installer **always verifies sha256** and refuses to install if neither `sha256sum` nor `shasum` exists — there is a login shell behind this thing.
-
-Other ways in:
+地址栏里加一段路径就是**另一个 herdr session**：`/work` 敲的是 `herdr --session work`，
+两个书签就是两套工作现场，关掉浏览器再回来还在。
 
 ```bash
-make build && ./herdr-web             # from source (frontend → internal/webui/dist → go build)
-HERDR_WEB_HOST=0.0.0.0 ./herdr-web    # listen on the LAN, and print a QR code for your phone
+herdr-web pair          # 再出一个一次性配对码 + 二维码
+herdr-web devices       # 列出已配对设备
+herdr-web revoke <id>   # 踢掉某台（all = 全部），下一个请求立刻 401
 ```
 
-`go install github.com/zbysir/herdr-web/cmd/herdr-web@latest` works too, but **what you get has no frontend**: the web assets are produced by `make build` and embedded, and they are not in the repo, so `go install` can't see them. That binary is only useful with `--web <dir>` pointing at a frontend you built yourself, or for the CLI subcommands. Use one of the three above if you want the page.
+→ 管理页、session 命名规则、连上敲什么：[使用说明 · 第一次跑](docs/USAGE.zh-CN.md#第一次跑)
 
-**No native Windows build** — install it inside WSL. Not laziness: the terminal in the browser needs a real PTY (Go side uses `creack/pty`, whose Windows implementation is a `return nil, ErrUnsupported` stub) and herdr itself speaks over a unix socket. Inside WSL it is simply the Linux build, fully functional; the browser end was always cross-platform, so `http://localhost:7788/` on Windows works fine. On win32 the npm package prints that explanation instead of installing something that cannot run.
+## 能干什么
 
-To run it as a service that starts at boot, see [Daemon](#daemon). To upgrade, see [Updating](#updating).
-
-**Environment variables are the only source of configuration** (no config file; the only flag is `--web`). The full list, how to set it, and a few common setups are under [Configuration](#configuration). Subcommands: `herdr-web --help`.
-
-On startup it prints the addresses you can reach it at. When listening on `0.0.0.0` it scores the interfaces and marks the one your phone can actually reach with `← use this one from your phone` (the pile of OrbStack / VPN virtual interfaces gets pushed to the bottom); that is the address encoded in the QR code.
-
-**Pair each device once.** The startup banner carries a one-time pairing code (5 minutes, single use) and its QR code — scan it from your phone and you are in, zero typing. After that your bookmark holds no secret (the credential lives in an `HttpOnly` cookie), and changing Wi-Fi, changing subnets or rebooting costs you nothing. To pair another device, run `herdr-web pair` on the machine.
-
-Two ways to scan:
-
-- **Your camera app** (works everywhere): the code is just a link with `?pair=`; scanning opens it and you land already paired.
-- **"Scan with camera" inside the pairing page**: opens the rear camera, points at the code on the host screen, pairs on recognition without navigating. This button **only appears when it can work** — it needs `BarcodeDetector` (the system decoder, which saves tens of KB of JS; macOS uses Vision, Android uses ML Kit, and **iOS Safari and Chrome on Linux do not have it**) plus a camera (only granted in a secure context — plain http on a LAN gets nothing). If either is missing the button is not rendered at all, rather than left there to fail on click.
-
-If neither is convenient, type the 8-digit code into the pairing page; it submits itself once you have typed 8 characters. What the in-page scanner reads is reduced to the `pair=` part and goes through the same `POST /auth/pair`, so the security model is unchanged (only someone at the machine can produce a code).
-
-```bash
-herdr-web pair          # print a fresh one-time pairing code + QR
-herdr-web devices       # list paired devices (label / last seen / last IP / expiry)
-herdr-web revoke <id>   # kick one (all = everything); the next request gets 401
-herdr-web unlock        # clear the global "too many failures" circuit breaker
-```
-
-The ⚙ at the right end of the top bar is the **settings panel**; its "Devices" page shows who has paired, lets you **sign this device out**, and kick others. Kicking one and kicking everyone both take two clicks. **The web UI never issues a pairing code** (not even to an already-paired device) — see [Security](#security) for why.
-
-**Out of codes? Go back to the machine and run `herdr-web pair`.** That is not laziness either — see below.
-
-The old never-expiring `~/.herdr-web/token` is demoted to **bootstrap only**: an old bookmark exchanges it for a device credential on first open and scrubs the token out of the URL, after which you should `rm ~/.herdr-web/token`. Details and reasoning in [SECURITY.md](docs/dev/SECURITY.md) (Chinese).
-
-Once connected it **types `herdr` for you**. To type something else, or nothing: `HERDR_WEB_ONCONNECT` (set it to an empty string to stay in the shell). Adding a path segment to the URL (`/work`) gives you **a different herdr session** — see [First run](#first-run). The old "run herdr" button in the top bar is gone: with autotyping it earns its place less than once a day, and the shortcut bar ships a preset for it if you want one.
-
-**The admin page is at `http://127.0.0.1:<port+1>/`** (also in the startup banner): certificate status, one-click issue/renew, generated DNS `.env` snippets, pairing codes, device kicking. It is **bound to loopback and does not exist on the public internet**, so it needs no login — anything that can reach it already has your shell. Why not "an authenticated page on the main server": authentication is a control that can fail, unreachability is a property; and the admin page must not depend on the very certificate it exists to fix (a broken certificate would lock you out of the page that repairs it).
-
-## First run
-
-On startup it prints the addresses you can reach it at. When listening on `0.0.0.0` it scores the
-interfaces and marks the one your phone can actually reach with `← use this one from your phone`;
-that is the address encoded in the QR code.
-
-**Pair each device once.** The startup banner carries a one-time pairing code (5 minutes, single use)
-and its QR code — scan it from your phone and you are in, zero typing. After that your bookmark holds
-no secret (the credential lives in an `HttpOnly` cookie), and changing Wi-Fi, changing subnets or
-rebooting costs you nothing. Three ways to scan: your camera app (the code is a link with `?pair=`),
-"scan with camera" inside the pairing page (only shown when it can work — it needs `BarcodeDetector`
-and a camera, which requires a secure context), or typing the 8-digit code into the pairing page.
-
-```bash
-herdr-web pair          # print a fresh one-time pairing code + QR
-herdr-web devices       # list paired devices (label / last seen / last IP / expiry)
-herdr-web revoke <id>   # kick one (all = everything); the next request gets 401
-herdr-web unlock        # clear the global "too many failures" circuit breaker
-```
-
-**The web UI never issues a pairing code** (not even to an already-paired device) — see
-[Security](#security). Out of codes? Go back to the machine and run `herdr-web pair`.
-
-Once connected it **types `herdr` for you**. To type something else, or nothing:
-`HERDR_WEB_ONCONNECT` (an empty string means stay in the shell).
-
-**A path segment in the URL is a different herdr session**: `/work` types
-`herdr --session work` and creates it if needed; `/scratch` is another one. Two bookmarks are two
-working contexts that survive closing the browser. Names are `[A-Za-z0-9._-]`, 40 characters max;
-an invalid one is an error rather than a silent fallback to the default session — using the wrong
-socket would **silently deliver your words into another herdr**.
-
-**The admin page is at `http://127.0.0.1:<port+1>/`**: certificate status, one-click issue/renew,
-generated DNS `.env` snippets, pairing codes, device kicking. It is bound to loopback and does not
-exist on the public internet, so it needs no login — anything that can reach it already has your shell.
-
-**Local shell only.** To reach another machine, ssh from inside herdr — herdr does that itself, so
-this layer implements no host management and no key storage, and the "the browser can touch your
-private keys" attack surface never exists.
-
-## What you get
-
-### Outbox (voice compose)
-
-The strip with a textarea at the bottom of the page is the outbox; the ✎ in the top bar toggles it
-and it is **on by default**. You dictate or type in there, fix what came out wrong, then hand the
-whole paragraph to one of herdr's panes.
-
-| Control | What it does |
+| | |
 |---|---|
-| **Target** | Defaults to "follow herdr's current pane" — nothing to pick, it goes to whatever you have focused in herdr. You can also pin one from the dropdown |
-| **Post** `⌘↵` / `Ctrl↵` | Clears the remote input line first, then submits the whole thing. `Enter` inserts a newline and does not submit |
-| **Pull back** | Grabs what is already in the remote input line into the textarea for editing (useful when the remote side has been Tab-completing) |
-| **Auto pull** | Every 500ms by default. Switching panes swaps in the new pane's content; **never overwrites a local draft**, it just says so in the status line |
-| **Two-way** | Local edits get pushed back into the remote input line (without Enter). Off by default — see the caveats below |
-| **Image** | Upload an image; the path is inserted **at the cursor**. On a phone it offers camera / library; on a desktop just `⌘V` a screenshot into the box, or drop a file. You do not need the outbox open for this — bind `act:img` on the shortcut bar, or paste anywhere on the page |
-| `↑` | With an empty box, recalls the last thing you posted (30 kept locally) |
-| `Esc` | **Forwarded to the terminal.** Esc means nothing inside a plain textarea, while the agent needs it constantly (overlays like `/usage` close with it); focus does not move, so you can press it repeatedly |
+| **发件箱** | 底下那一行输入框，说完一整段投进 agent 的输入行。回车就投，`⇧↵` 换行；截图直接 `⌘V`，手机上拍照 / 录像传过去接成路径 |
+| **快捷键条** | 手机没有 Ctrl 键，herdr 的 `ctrl+b` 前缀全靠它。键自己配（按键谱 / 图标 / 弹出组 / 钉住不跟着滑），方向键按住连发 |
+| **面板一览** | 一张 pane 列表，点一行跳过去并铺满全屏。agent 停下来等你回答时，顶栏上点一个红点 |
+| **对话** | 把 agent 自己写的会话记录读成一条对话流，代替那一屏 TUI —— 手机上读它比读 TUI 舒服得多 |
+| **文件** | agent 说「图生成在 `/tmp/plot-3.png`」，点那行路径就能看。图直接看，md 渲染成文档，文本能就地改 |
+| **改动** | `git diff` 在手机终端里基本读不了：这儿能折行、按词高亮，一次改动的全部文件是一条连续的流。**只读** |
+| **手机和平板** | 触屏手势整套接管（滑动 = 滚轮上报、长按 = 拖 pane 边框），底部面板能挪到右边，横竖屏各一套排布 |
+| **装成 app** | PWA：独立窗口、没有地址栏和工具条，白送好几行终端 |
 
-Uploading does not need the outbox open: bind `act:img` on the shortcut bar, or **paste anywhere on
-the page** (an image in the clipboard is uploaded directly). Where the path lands depends on whether
-the outbox is open — appended to your draft, or typed straight into the terminal.
+→ 每一件具体怎么用：[使用说明 · 能干什么](docs/USAGE.zh-CN.md#能干什么)
 
-→ Why a separate box at all, how images actually work, the two-way caveats, measured polling
-latency: [OUTBOX.md](docs/dev/OUTBOX.md)
+## 配
 
-### Shortcut bar
-
-Phones have no Ctrl key, and herdr's `ctrl+b` prefix depends on one. The keys live **on the server**
-(`~/.herdr-web/softkeys.json`), so phone / tablet / desktop share one set of definitions, edited in
-Settings → Shortcut keys.
-
-- The "Keys" field takes a **key spec**; space-separated entries fire in sequence — `ctrl+b c` is the
-  prefix plus c, one tap.
-- Supports `ctrl+x` `alt+x` `shift+tab`, named keys (`esc tab enter space bs del ins up down left
-  right home end pgup pgdn f1-f12`) and literal text (`text:/new`; quote it if it has spaces).
-- `sticky:ctrl` / `sticky:alt` are **sticky** modifiers: tap once to light it up, then a letter sends
-  the combination.
-- `act:` actions run in the browser and send no bytes: `act:kbd` (system keyboard), `act:img`
-  (upload), `act:panes` (pane list), `act:files` (file browsing), `act:clip` / `act:paste`
-  ([copy and paste on a phone](docs/dev/MOBILE.md#手机上怎么复制--粘贴)).
-- Every key has a **"double-tap"** checkbox; close pane / close tab / `/clear` ship with it on —
-  keys sit close together and a misfire cannot be undone.
-- "Load presets" pours sixty-odd keys into "My keys", after which every one of them is yours to edit.
-
-Key specs are parsed into bytes **on the server**, so a typo is reported at save time — telling you
-which key and where it stopped making sense — rather than shipped as a key that does nothing.
-
-### Pane list · notices
-
-The ▦ in the top bar (or `act:panes` on the shortcut bar; on a phone you can also tap herdr's own
-`switch`) opens a list of panes, one per row — **tap one and you are there, zoomed full screen**.
-You can filter (tab / title / path / pane id) and show only panes running an agent. The list
-refreshes itself every 4 seconds.
-
-When an agent stops to wait for you (or has just finished), **a card appears in the top right
-carrying what it said**, and a badge lights up on the ▦. Tapping the card jumps there. Opening the
-pane list is what marks them read.
-
-It is an index, not a second interface: after the tap you are looking at the same herdr terminal, and
-every keyboard habit is unchanged.
-
-→ Sort order, the "3 minutes ago" column, when a notice fires, how the badge counts, system
-notifications: [MOBILE.md](docs/dev/MOBILE.md)
-　How that text is scraped off the screen: [COMPOSER.md](docs/dev/COMPOSER.md)
-
-### File browsing
-
-The agent says "the plot is at `/tmp/plot-3.png`" — **tap that path and look at it**. Absolute paths
-open directly; `./out/a.png` resolves against that pane's cwd. The 📁 in the top bar (or `act:files`)
-is the fallback: it starts from every pane's cwd + the upload directory + home + temp, `..` walks all
-the way to `/`, and you can paste an absolute path to open it.
-
-Images (png / jpg / gif / webp, identified by magic number) are shown, text is shown as-is, anything
-else downloads. From the viewer you can **hand the file to the agent** in one tap (its absolute path
-goes into the outbox).
-
-**There is no boundary by default** — anyone who can open this page already has a login shell, so an
-allowlist would not stop them and would only get in the way daily. If you want one, set
-`HERDR_WEB_FILE_ROOTS` (that is a real jail); to remove the feature, `HERDR_WEB_FILES=0`.
-
-→ The short-lived link route and the four hard rules on it (never `text/html`, why SVG is safe to
-render): [SECURITY.md](docs/dev/SECURITY.md)
-
-### Reading a diff
-
-`git diff` is close to unreadable in a phone terminal: long lines are either cut off or scroll
-sideways, a wall of red against a wall of green does not show you *which word* changed, and paging
-means driving a pager with arrow keys. The "改动" button in the top bar (or `act:diff`) opens a
-separate layer:
-
-- **a file list first**: what changed, `+n −m` per file, which parts are already `git add`ed;
-- tapping one opens a patch that **wraps long lines** (on by default; the button in its header
-  toggles it, and the choice is remembered in this layout profile), with **word-level highlighting**
-  on lines that pair up — only the part that actually changed gets the darker background;
-- **every file of the change is one continuous stream**: keep scrolling past a and you are in b, no
-  going back to the list. The header tracks where you are (`3 / 19 · filename`), and tapping the band
-  between two files folds one away. Files you have not reached yet hold their place and are fetched
-  as you approach them, one at a time — no fanning out a dozen `git diff`s on the machine your agents
-  are working on;
-- three views: **working tree vs the last commit** (including new files) / **staged** / **the last
-  commit itself**;
-- you never pick the repository: it is discovered from every pane's cwd, deduplicated by repo root,
-  with the focused pane first;
-- the top-bar button carries a **green dot** when there are changes **you have not looked at yet** —
-  not merely "there are changes", which is permanently true in a repo an agent is working in. Opening
-  the panel counts as looking; the dot comes back when the agent touches something again. It follows
-  the "panel dot" switch in settings — turned off, it does not even poll.
-
-**Read-only.** No add / commit / checkout here, and none planned — anything that changes the
-repository belongs in the terminal, where you have all of git and can see its output. The boundary
-is the same one as file browsing (`HERDR_WEB_FILES=0` turns this off too, and `HERDR_WEB_FILE_ROOTS`
-still jails the repo root); if this machine has no `git`, the button is not drawn.
-
-### Phones and tablets
-
-When a program has mouse reporting on (herdr does), touch gestures are taken over entirely:
-
-| Gesture | Behaviour |
-|---|---|
-| One-finger vertical swipe | Converted to SGR wheel reports by line height — `CSI < 64/65 ; col ; row M` — and sent to the program; with mouse reporting off it scrolls the local scrollback |
-| Tap | With mouse reporting, sends `CSI < 0 ; col ; row M/m` (clicking panes and tabs both work) and **does not pop the system keyboard**; without it, focuses the hidden textarea (a tap there does mean "I want to type"). It goes out immediately, with no delay |
-| Long press (≈380ms) | **Grab**: press the left button and hold, plus `CSI < 32` motion reports, so moving afterwards is a drag — this is how you resize herdr's pane borders on a phone. Releasing sends the matching `m` |
-
-**There is no double tap.** It used to be the "show / hide the system keyboard" gesture, and it is gone — one gesture was costing the feel of every other tap. To tell "this is a tap" from "this is the first half of a double tap", every tap has to sit out the double-tap window (320ms) before it can be sent, so clicking panes and clicking things inside Claude all lag a beat; and without the wait, that first tap **leaks into the program in the pane** — Claude Code has its own clickable UI (expanding a block, **picking an option**), and a leaked tap picks the option for you. Paying "every click is imprecise and might answer for you" for one keyboard shortcut is not worth it.
-
-The keyboard now comes from **buttons** only: the ⌨ shortcut key (`act:kbd` — the first key in the factory set, and the shortcut bar is on by default on phones) and the "system keyboard" button in the top bar (drag it on under Settings → Top bar). A button press means you want the keyboard — nothing to guess, and no delay.
-
-**The outbox and the shortcut bar are one dock**: drag either side edge to change its width (when an
-IME covers half the screen, shrink the whole dock into what is left), and the three handles on the
-top edge of the key area set the height and the boundaries; double-tap any handle to reset. A phone
-in portrait (< 440px) switches to another tier: no handles, full width, one horizontally-scrolling
-row of keys. **Landscape and portrait keep separate sets**, swapped on rotation.
-
-**The top bar is yours to arrange**, and **layouts are stored per kind of device**: the six keys you
-arranged on a phone do not follow you to the desktop, while the definitions stay shared.
-
-→ Why the gestures are split this way, how the keyboard is handled, copy and paste on a phone, the
-details of the dock and the top bar: [MOBILE.md](docs/dev/MOBILE.md)
-
-### Install it as an app (PWA)
-
-You get a **standalone window**: no address bar or toolbar (several free terminal rows), its own
-icon on the desktop or home screen, a separate entry in the task switcher, and some of the keys the
-browser normally eats (`⌘W`, `Ctrl+W`) come back.
-
-| Platform | How |
-|---|---|
-| Android (Chrome / Edge) | Menu → **Install**. The menu offers two entries; **"Create shortcut" is not it** — that one is just a bookmark that opens the browser |
-| Desktop Chrome / Edge | The install icon at the right of the address bar, or Menu → Install herdr-web |
-| iPhone / iPad | Share → **Add to Home Screen** (Safari has no "install") |
-
-**It requires HTTPS with a valid certificate**, which is where this usually gets stuck:
-
-- ✅ A domain with a real certificate (setups 3 and 4 below, `HERDR_WEB_TLS=acme` or `proxy`).
-- ✅ `http://localhost` / `http://127.0.0.1` — browsers treat the local machine as a secure context.
-- ❌ **A self-signed certificate** (`HERDR_WEB_TLS=auto`, the LAN-direct path) — clicking through the
-  warning is not enough: the site works and can store passwords, but the browser **will not install
-  it**, leaving only "Create shortcut". To install it over the LAN, import the local CA from
-  `~/.herdr-web/` into the phone's system trust store.
-- ❌ A plain `http://` LAN address — same, and system notifications are gone too.
-
-On iOS, order matters: **add to the home screen first, then pair from inside it** (a home-screen web
-app has its own storage container; credentials set up in Safari do not carry over). Notifications
-likewise only work when opened from the home screen.
-
-Not working offline is expected — this is a terminal, and there is nothing to show without the
-server. When it cannot connect you get a short page explaining where it broke, not the dinosaur.
-
-### Settings panel
-
-The ⚙ at the right end of the top bar, in four pages: **Terminal** (font size / light-dark, kitty
-protocol / Option as Meta / copy on select / synchronized output, herdr's switch opening our pane
-list, the badge on the panel icon), **Top bar**, **Shortcut keys**, **Devices**. Above the tabs there is
-one more row: which layout profile this device uses. The three overlays (pane list / files /
-settings) are mutually exclusive.
-
-### Keyboard
-
-herdr's shortcuts are almost all `ctrl+b` plus an ordinary key, which legacy encoding can express.
-The kitty protocol covers what legacy cannot and is on by default (Settings → Terminal):
-`Ctrl+Shift+letter`, `Ctrl+digit`, `Ctrl+Enter` / `Shift+Enter` / `Ctrl+Tab`.
-
-Keys the browser keeps for itself: on macOS `⌘W` `⌘T` `⌘N` `Ctrl+Tab`; on Windows/Linux also
-`Ctrl+W` `Ctrl+T` `Ctrl+N` `Ctrl+Shift+I/J/C`. Installing as a PWA gets some of them back.
-
-Copy `⌘C` (or `Ctrl+Shift+C`) · paste `⌘V` · clear `⌘K` · `Option` is Meta by default. Copy and
-paste on a phone is a different story — herdr copies to the clipboard of **the machine running
-herdr** — see [MOBILE.md](docs/dev/MOBILE.md#手机上怎么复制--粘贴).
-
-## Configuration
-
-**Environment variables are the only source of configuration.** There is no config file, and the only flag is `--web` (point at a frontend directory during development). It is funnelled through [viper](https://github.com/spf13/viper) in `internal/config/` (`SetEnvPrefix("HERDR_WEB")` + `AutomaticEnv()`), so settings and variable names map one to one.
-
-Not reading a config file is deliberate: there is a login shell behind this port, so "which configuration is actually in effect" has to be visible at a glance — environment variables are right there in `ps`, in the systemd unit, in the launchd plist. Add "there might also be a yaml in some directory" and the first half day of any incident goes into finding out which one won. Same reason there is no "flags override environment": one setting with two entry points means having to specify precedence.
-
-### How to set it
+**配置只有一个来源：环境变量**（没有配置文件，命令行标志只有一个 `--web`）。几套常见的：
 
 ```bash
-# Try something: prefix the command, applies to this run only
-HERDR_WEB_PORT=8000 HERDR_WEB_ONCONNECT= ./herdr-web
+herdr-web                                       # 1. 纯本机（默认），明文 http
+HERDR_WEB_HOST=0.0.0.0 herdr-web                # 2. 局域网的手机 / 平板，自签 TLS + 二维码
+HERDR_WEB_ONCONNECT= herdr-web                  # 3. 别自动进 herdr，留在 shell 里
 
-# Permanent: in ~/.zshrc (when you start it by hand in a terminal)
-export HERDR_WEB_HOST=0.0.0.0
-export HERDR_WEB_TLS=auto
-
-# Permanent: launchd (macOS) in the plist's EnvironmentVariables;
-# systemd in the unit's Environment= / EnvironmentFile=
-```
-
-Three rules, all about not guessing:
-
-- **An explicit empty string counts.** `HERDR_WEB_ONCONNECT=` means "type nothing on connect"; it does not fall back to the default `herdr`. Every switch with a default depends on this to be turnable off.
-- **A malformed integer is treated as unset** (falls back to the default) rather than silently becoming 0; below-minimum values are clamped. `HERDR_WEB_DEVICE_TTL_DAYS=9O` (letter O) will not turn device credentials into "never expires".
-- **Booleans accept `1` / `true`** (any case); anything else is off.
-
-Changes take effect on restart — configuration is read once at startup. To confirm what was read, look at the startup banner: shell, data directory, herdr socket, TLS tier and paired device count are all printed there.
-
-### Basics
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `HERDR_WEB_PORT` | `7788` | The main port. **It only serves the local network**: a connection whose peer is not loopback / private / link-local / CGNAT gets 403 and nothing else. Public access is a separate, explicit port — see `HERDR_WEB_PUBLIC_PORT` |
-| `HERDR_WEB_HOST` | `127.0.0.1` | Listen address; `0.0.0.0` opens it to the LAN |
-| `HERDR_WEB_TOKEN` | reads `~/.herdr-web/token` | **Legacy**; only good for bootstrapping once (exchanged for a device credential). Not generated on new installs |
-| `HERDR_WEB_SHELL` | `$SHELL` | The shell run inside the PTY |
-| `HERDR_WEB_ONCONNECT` | `herdr` | Typed into the PTY on connect (Enter included). **Set it to an empty string to type nothing.** **Session URLs ignore this** (`/work` always types `herdr --session work`, see [First run](#first-run)) — to always land in a session, bookmark the URL rather than setting this |
-| `HERDR_WEB_ONCONNECT_MS` | `250` | How long to wait before typing that line. The wait starts **after the shell's first output** — an rc file touching `stty`, or a completion plugin initialising, **silently swallows** characters typed too early. If the auto-typed line does not land, raise it |
-| `HERDR_WEB_DIR` | `~/.herdr-web` | Data directory, in two layers: configuration and files (`softkeys.json` / `tls/` / `uploads/`) at the root, **internal data** (device credentials, passkey public keys) under `data/` — those two are not meant to be hand-edited, and tampering is reported in the terminal. **Keep the path short**: a unix socket (`ctl.sock`) is opened inside it, and beyond ~100 bytes it cannot bind, which breaks the subcommands |
-| `HERDR_WEB_FILES` | on | `=0` turns file browsing off: `/api/files/*` and `/_f/` all 404, and the 📁 in the top bar is not drawn (an entry point that opens onto a wall of 404s is worse than no entry point) |
-| `HERDR_WEB_GIT` | on | `=0` turns the diff panel off: `/api/git/*` all 404 and the top-bar button is not drawn. **It also sits under `HERDR_WEB_FILES`** — a diff *is* file content, so being able to read diffs while file browsing is off would make that switch a lie. Same when this machine has no `git` |
-| `HERDR_WEB_FILE_ROOTS` | empty | Comma-separated directories. Set, this is **a real allowlist** (a jail) and only those trees are visible. **Empty means no boundary** — the reasoning is in [File browsing](#file-browsing). `~` is expanded; non-absolute entries are discarded (relative to what? keeping them only makes the prefix check pass somewhere surprising) |
-
-### Outbox / talking to herdr
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `HERDR_WEB_SOCKET` | `$HERDR_SOCKET_PATH` or `~/.config/herdr/herdr.sock` | The herdr socket the outbox connects to. **Do not rely on `HERDR_SOCKET_PATH`**: `dropEnv` strips `HERDR_*`, and this process may not have been started from a herdr pane at all |
-| `HERDR_WEB_POLL_MS` | `500` | How often the outbox checks "where is focus, what is in the input line". Minimum 200 |
-| `HERDR_WEB_PUSH_MS` | `700` | With "two-way" on, how long after you stop typing the draft is pushed. Minimum 100 |
-| `HERDR_WEB_NOTICE_MS` | `4000` | How often notices (the cards and the unread badge) ask "anything new". **`0` turns the whole notice feature off** and the frontend stops polling. Anything under 1000 is treated as 1000 — this tick only reads memory on the server (it does not touch the herdr socket), but a notice is inherently 2.5 seconds behind the state change (debounce), so polling harder cannot beat that |
-| `HERDR_WEB_SETTLE_MS` | `120` | How long to wait between two `pane.read` calls (to defeat the one-frame snapshot lag). **Never 0**: herdr sometimes answers in 1-2ms, both reads land on the same frame, and the clear loop misreads that as "cannot be cleared". The clear path has its own 120ms floor |
-
-### Exposure / TLS / credentials
-
-Details in [SECURITY.md](docs/dev/SECURITY.md) (Chinese).
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `HERDR_WEB_PUBLIC_PORT` | off | **The port to expose.** Opens a second listener on `0.0.0.0:<port>` sharing the same handler, and that is where a tunnel / port forward / reverse proxy should point — never at the main port, which serves the local network only. Requests arriving here are treated as public: loopback-without-pairing and the legacy token's `loopback` tier do not apply (the source address of a tunnelled request is 127.0.0.1 too, so the only trustworthy signal is *which listener it landed on*), the rate limiter's "never block localhost" exemption is off, and TLS becomes mandatory. Why a separate port instead of a switch on the main port: a switch is a *declaration*, and declarations get forgotten — the person (or agent) writing code on this machine sees `127.0.0.1:7788` and has no way to know a tunnel is forwarding it, so every decision made under "only my machine can reach this" becomes a hole. With a separate port, forgetting to configure it means the tunnel gets connection refused |
-| `HERDR_WEB_EXPOSED` | off | **Legacy; prefer `HERDR_WEB_PUBLIC_PORT`.** `=1` declares that *the main port itself* is reachable from the internet (frp / port forwarding / tunnels) — it cannot be detected, only declared. Once declared: TLS is mandatory, loopback-without-pairing is turned off, and the main port's "local network only" gate is lifted (you said it is public). Kept for machines already configured this way |
-| `HERDR_WEB_TLS_CERT` / `_KEY` | empty | Use the certificate you supply. If you own a domain and got a real certificate via DNS-01, take this route — zero browser warnings, no profiles to install, least friction |
-| `HERDR_WEB_ACME_DNS` | empty | Let herdr-web **get its own certificate**; the value is the DNS provider: `cloudflare` / `alidns` / `tencentcloud` / `route53` / `digitalocean` / `huaweicloud`. It uses DNS-01, so nothing has to reach you from outside — behind NAT, or with the domain pointed at a LAN address, it still works. **Where to get each provider's token and what scope it needs: [DNS.md](DNS.md)** (Chinese) |
-| `HERDR_WEB_ACME_EMAIL` | empty | ACME account email. Can be empty, but then you get no expiry reminders either |
-| `HERDR_WEB_ACME_STAGING` | off | `=1` uses Let's Encrypt staging. **Turn it on while debugging**: production allows 5 certificates per domain set per week, and a few attempts lock you out for a week |
-| `HERDR_WEB_TLS` | see notes | `auto` self-signed (local CA + 397-day leaf, re-issued automatically when the IP changes) / `off` plaintext / `proxy` something in front already terminated TLS. Default: exposed or listening on the LAN → `auto`, purely local → `off` |
-| `HERDR_WEB_LAN_PORT` | off | Opens a **second listener** on `0.0.0.0:<port>` with a self-signed certificate whose SANs track your current LAN addresses, so a page loaded through a tunnel can probe for a direct LAN route and switch to it — two public hops per keystroke become one switch hop. One manual step per device that cannot be skipped: **open it once and click through the certificate warning**; until then the probe fails at the TLS handshake and the page quietly stays on the tunnel. It has to be TLS — an https page's fetch to an `http://` target is active mixed content and is blocked unconditionally, so a plaintext LAN port cannot be probed at all. Not needed when the main port already serves self-signed TLS on the LAN. **The direct origin holds its own credential** (cookies are host-only), so the same tablet shows up twice in the device panel — the switch carries a one-time pairing code across for you — and **passkeys do not work there**, because a WebAuthn RP ID has to be a domain and a bare IP is not one (installing the CA does not change that). Details: [DEPLOY.md](DEPLOY.md) |
-| `HERDR_WEB_HOSTNAME` | empty | Domains allowed in the `Host` header, comma separated. **IPs always pass, domains must be listed** — this is the only defence against DNS rebinding, and anything else gets a 421 |
-| `HERDR_WEB_PUBLIC_URL` | empty | The address you **actually visit** (`https://herdr.example.com:17788`). With frp the public port is often not the local one, and without this the QR code in the banner is useless. The domain in it is allowlisted automatically |
-| `HERDR_WEB_DEVICE_TTL_DAYS` | `90` | How long a device credential survives without use (renewed on every use). `0` = **never expires** |
-| `HERDR_WEB_RPID` | derived | The domain a passkey is bound to. Defaults to the first `HERDR_WEB_HOSTNAME`, or `localhost` when purely local. **A bare IP is not a valid value** — such deployments cannot use passkeys |
-| `HERDR_WEB_REAUTH_HOURS` | `24` | Once a passkey is registered, how long a session credential remains valid after the last biometric check. `0` = no re-verification (passkeys serve only as the login / new-device path). **Does nothing at all while no passkey is registered** |
-| `HERDR_WEB_LEGACY_TOKEN` | `on` | `on` / `loopback` (the old token only works locally) / `off`. Once migrated, just delete the token file |
-| `HERDR_WEB_TRUST_LOOPBACK` | off | `=1` exempts requests from 127.0.0.1 from pairing. **Never turn this on behind frp or a reverse proxy** — there, public requests also arrive from 127.0.0.1, i.e. everyone is "local". When on, it additionally requires `Host` to be a loopback literal |
-| `HERDR_WEB_TRUST_PROXY` | off | `=1` is required to read `X-Forwarded-For`. With no trusted proxy in front, leaving it on lets an attacker forge the source IP with a header and walk around per-IP rate limiting |
-| `HERDR_WEB_INSECURE` | off | `=1` permits "exposed but no TLS". No legitimate use beyond temporary debugging |
-| `HERDR_WEB_UPDATE_CHECK` | on | `=0` disables automatic update checks. With it off the process makes **no outbound requests at all** — a hard requirement in the kind of environment where an internal machine must not dial out. Only the automatic check is disabled; `herdr-web update --check` still works |
-
-### Troubleshooting
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `HERDR_WEB_DEBUG_INPUT` | off | `=1` logs every batch of bytes written into the PTY as hex (including the auto-typed line, prefixed `onconnect`). The only way to answer "what exactly did that key send" — guessing does not work |
-
-### Read but not prefixed with `HERDR_WEB_`
-
-| Variable | When it matters |
-|---|---|
-| `SHELL` | The shell run inside the PTY when `HERDR_WEB_SHELL` is unset (falling back to `/bin/zsh`) |
-| `HERDR_SOCKET_PATH` | Fallback herdr socket when `HERDR_WEB_SOCKET` is unset. **Do not count on it being there**: `dropEnv` strips `HERDR_*` from child processes (to prevent nesting), and this process may not have started from a herdr pane |
-
-### A few common setups
-
-```bash
-# 1. Purely local (default): plain http, since loopback is a secure context anyway
-./herdr-web
-
-# 2. Phone / tablet on the LAN: self-signed TLS, pair by scanning the banner QR
-HERDR_WEB_HOST=0.0.0.0 ./herdr-web
-
-# 3. Exposed through frp / a tunnel: point the tunnel at PUBLIC_PORT, never at the
-#    main port — the main port only serves the local network, and every default on
-#    it assumes the internet cannot reach it. PUBLIC_URL decides which address the
-#    QR code encodes
+# 4. 走 frp / 隧道暴露到公网：隧道指公网口，别指主口
 HERDR_WEB_PUBLIC_PORT=17788 HERDR_WEB_TLS=proxy \
 HERDR_WEB_PUBLIC_URL=https://herdr.example.com \
-HERDR_WEB_HOSTNAME=herdr.example.com ./herdr-web
-
-# 4. Your own domain + a real certificate (zero browser warnings, least friction)
-HERDR_WEB_HOST=0.0.0.0 HERDR_WEB_HOSTNAME=herdr.example.com \
-HERDR_WEB_TLS_CERT=/etc/ssl/herdr/fullchain.pem \
-HERDR_WEB_TLS_KEY=/etc/ssl/herdr/privkey.pem ./herdr-web
-
-# 5. Do not drop into herdr on connect (stay in the shell)
-HERDR_WEB_ONCONNECT= ./herdr-web
+HERDR_WEB_HOSTNAME=herdr.example.com herdr-web
 ```
 
-## Daemon
+主口（默认 7788）**只服务本地网络**：对端不是本机 / 私网一律 403。要暴露就另开
+`HERDR_WEB_PUBLIC_PORT`，判据是「请求落在哪个监听上」而不是一句声明 ——
+在一台挂着隧道的机器上，`127.0.0.1:7788` 有可能整个互联网都连得到，而本地一点症状都没有。
 
-Install it as a user-level service that starts on boot:
+→ 四十多个变量的完整表：[使用说明 · 配置](docs/USAGE.zh-CN.md#配置)
+
+## 常驻 · 更新
 
 ```bash
-herdr-web service install     # macOS → launchd LaunchAgent; Linux → systemd user unit
-herdr-web service status      # installed? running? PID? where are the logs?
-herdr-web service logs        # tail -f the log
-herdr-web service restart     # needed after replacing the binary
-herdr-web service uninstall   # stop and remove (data and logs untouched)
+herdr-web service install    # macOS → launchd，Linux → systemd user unit，开机自启
+herdr-web update             # 查 + 升（怎么升看当初是怎么装的）
 ```
 
-**Configuration is copied out of the current shell at install time**, so the order is "get the environment right, then install". **Changing it later takes the same route** — there is no "edit one setting" subcommand; changing configuration means installing again from a different environment (idempotent — it overwrites and restarts):
+配置是 `install` 那一刻从当前 shell 抄进去的，所以改配置 = 换个环境重新 `install`（幂等）。
 
-```bash
-HERDR_WEB_PUBLIC_PORT=9000 herdr-web service install   # change one, the rest comes from this shell
-herdr-web service install --env-file .env              # or let one file be the single source
-```
+→ [常驻](docs/USAGE.zh-CN.md#守护进程) · [更新](docs/USAGE.zh-CN.md#更新)
 
-What gets copied is every `HERDR_WEB_*`, plus `PATH` / `SHELL` / `HOME` / `USER` / `LOGNAME` / `LANG` / `LC_ALL` / `TERM` / `HERDR_SOCKET_PATH`. `install` prints the whole list — from then on, "which configuration is this machine's service actually using" can only be answered by the plist / unit, so it is cheapest to read it at install time. To check later, read that file directly (`service status` only answers installed / running, never configuration):
+## 安全
 
-```bash
-plutil -p ~/Library/LaunchAgents/io.github.zbysir.herdr-web.plist   # macOS
-systemctl --user cat herdr-web.service                              # Linux
-```
+这东西等于一个 HTTP 上的 shell，门是按这个前提设计的：
 
-It is **plaintext**, credentials included — do not paste that output into a pane with an agent in it.
+- **一台设备配一次**：一次性配对码换一份 per-device 凭据，服务端**只存 sha256**；
+- **凭据绑设备不绑 IP**，换网不掉线；**URL 里没有秘密**（`?pair=` 进来就换成 cookie 再 302 洗掉）；
+- **配对码只能由坐在机器前的人产生** —— 网页上任何路径都不出码，那是唯一的带外因子；
+- **暴露出去又没 TLS 就拒绝启动**；Host 白名单挡 DNS rebinding，三道挡 CSRF，猜码指数退避 + 封锁；
+- **passkey 是第二因子**，服务端只存公钥。
 
-**`install` redoes the whole snapshot; it does not edit one key.** What lands in the file is whatever that shell has at that moment, so **anything installed last time but absent from this shell disappears silently**: open a fresh terminal, run `install` with a single inline prefix, and the port does change — along with the DNS credentials (next paragraph) going missing, which only blows up at the next certificate renewal. So keep configuration either in your shell rc (every new shell carries it) or in an `--env-file` that is the single source; the list `install` prints is the only chance to notice **on the spot** that something dropped out.
+→ 威胁模型、每条为什么这么设计：[SECURITY.md](docs/dev/SECURITY.md)
 
-**`service restart` does not re-read configuration.** It only kills and restarts the process (that is what you want after replacing the binary); the snapshot inside the plist / unit is untouched. Changing configuration means running `install` again.
+## 文档
 
-**DNS provider credentials carry the `HERDR_WEB_` prefix too** (`HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN`, `HERDR_WEB_ALICLOUD_ACCESS_KEY` and friends), so the rule above already copies them — exporting them in your shell is enough, no `--env-file` required. The prefix is not cosmetic: a bare `CLOUDFLARE_DNS_API_TOKEN` matches neither the prefix nor the allowlist, so it is not copied, and that failure only surfaces at the first issuance (or three months later, at the first renewal). lego still reads the bare names, but those can only reach the service through `--env-file`; when both are set, the prefixed one wins. Per-provider variable names are in [DNS.md](DNS.md).
-
-Keys in `--env-file` go in **wholesale** (and override the current environment). The file is read at `install` time only and never touched again. In the list `install` prints, credentials show up as asterisks and a length — that output often lands in a pane with an agent in it.
-
-The plist / unit is **0600** — its contents are exactly that environment in plaintext.
-
-**Copying `PATH` is mandatory, and it is the most common failure after installing as a service**: launchd's default `PATH` is only `/usr/bin:/bin:/usr/sbin:/sbin`, so `HERDR_WEB_ONCONNECT=herdr` turns into `herdr: command not found` while the page just shows an empty shell with no clue why.
-
-Why user-level rather than system-level: this process opens **your** shell. Running it as a root system service means the terminal in the browser is root's, permissions jump straight to maximum, and `~/.herdr-web` and `~/.config/herdr/herdr.sock` all point at somebody else's home.
-
-Platform-specific traps:
-
-| | File | Note |
-|---|---|---|
-| macOS | `~/Library/LaunchAgents/io.github.zbysir.herdr-web.plist` | A LaunchAgent starts **at login**, not at boot. On a machine with automatic login the two are equivalent; otherwise you have to log in once. "Start with nobody logged in" would require a system-level daemon in `/Library/LaunchDaemons`, which makes the shell root's — this project does not do that. |
-| Linux | `~/.config/systemd/user/herdr-web.service` | `install` also runs `loginctl enable-linger`. **Without linger the service is stopped when you log out of ssh** — for a machine you want to reach at any time, that is the same as not running at all. If it fails it tells you to run `sudo loginctl enable-linger $USER`. |
-
-Logs are at `~/.herdr-web/logs/herdr-web.log` on both platforms (deliberately identical, so the docs and `service logs` have one answer). On Linux `journalctl --user -u herdr-web` works as well.
-
-`service status` reporting "installed but not running" means **it crashes on start**, and the reason is only in the log — launchd and systemd both keep retrying with a few seconds of backoff, so without looking you would assume it is running.
-
-Windows, and Linux without systemd (containers, WSL1), are told clearly that this cannot work and what to do instead, rather than being given something that will not run. On WSL2, add `[boot] systemd=true` to `/etc/wsl.conf` and `wsl --shutdown` to restart, and it works.
-
-## Updating
-
-```bash
-herdr-web update            # check and upgrade
-herdr-web update --check    # check only, change nothing
-herdr-web update --restart  # upgrade, then restart the service
-herdr-web version           # current version + how it was installed
-```
-
-**How it upgrades depends on how it was installed**, and `update` works that out itself (from the executable's path, resolving symlinks first):
-
-| Installed via | Upgrade action |
+| 要看什么 | 去哪儿 |
 |---|---|
-| npm | runs `npm install -g @bysir/herdr-web@latest` |
-| homebrew | runs `brew upgrade herdr-web` |
-| `go install` | runs `go install …@latest` |
-| release archive / install.sh | **does it itself**: download → verify sha256 → write a temp file in the same directory → atomic `rename` |
+| 怎么装、怎么用、每个配置项什么意思 | [docs/USAGE.zh-CN.md](docs/USAGE.zh-CN.md) |
+| 放在哪儿跑、公网访问、TLS 四档 | [DEPLOY.md](DEPLOY.md) |
+| 各家 DNS 的 token 怎么拿 | [DNS.md](DNS.md) |
+| **为什么这么设计**、实测出来的语义、会静默出错的坑 | [docs/dev/](docs/dev/README.md) |
+| 改代码之前先读（代码结构、发版、配色） | [CLAUDE.md](CLAUDE.md) |
 
-Package-manager installs are not touched directly because editing things inside `node_modules` / `Cellar` gets overwritten the next time that package manager runs — wasted effort.
-
-Three things about the self-managed path are deliberate: **verify before landing** (a `checksums.txt` mismatch aborts everything), **the temp file must be in the same directory** (a cross-directory `rename` gives EXDEV), and **the old file is not deleted** (on unix, renaming over a running executable is allowed, the old inode is still held by the process, so the current process runs safely until it exits).
-
-**Replacing the file is not the same as replacing the running process.** Only a restart takes effect, and a restart kills every terminal session in use — so it is not done by default, only with `--restart`.
-
-New-version notices appear in three places:
-
-- the last line of the **startup banner** (from cache, so no request is made on the startup path — on a slow network that would turn into "startup hangs for ten seconds");
-- a strip at the top of the **admin page**, with the current version, the command to run and a link to the release notes;
-- while the service is running, a daily background check writes one line to the **log** when a new version appears (once per version, not daily nagging).
-
-Checks go to GitHub Releases' anonymous API, with results cached in `~/.herdr-web/update.json` (on disk, so frequent restarts do not mean checking every time; failures are stamped too, so a machine with no connectivity does not eat a timeout on every start). `HERDR_WEB_UPDATE_CHECK=0` disables the automatic check entirely — with it off, this process makes no outbound requests at all. Local builds (where `version` reports `dev`) neither check nor nag.
-
-## Security
-
-**This thing amounts to a shell over HTTP** (the outbox alone can make an agent run commands, even
-without a PTY), so the door is designed on that premise. What is implemented:
-
-- **Pair each device once.** A one-time code is exchanged for a per-device credential in an
-  `HttpOnly; SameSite=Strict` cookie; the server **stores only sha256** — the agents on this machine
-  read untrusted content all day, so the credential file being read by prompt injection is a daily
-  risk, not a theoretical one.
-- **Credentials bind to a device, not an IP.** Changing networks costs nothing; trusting an IP loses
-  both ways.
-- **No secrets in URLs.** `?pair=` is exchanged for a cookie and scrubbed with a 302, so bookmark
-  sync and screenshots stop being leak channels.
-- **Revocable.** `herdr-web revoke`, or Settings → Devices; the next request gets 401.
-- **Only someone at the machine can produce a pairing code** — no path on the web issues one. That
-  terminal is the only out-of-band factor in the system.
-- **Refuses to start when exposed without TLS.** A Host allowlist blocks DNS rebinding; Origin +
-  `SameSite=Strict` + a custom header make three layers against CSRF; guessing a pairing code gets
-  exponential backoff, per-IP lockout and a global breaker.
-- **Passkeys are the second factor** (the server stores only the public key). With one registered,
-  moving to a new device does not require going back to the machine, and session credential lifetime
-  can drop from three months to one day.
-
-→ Threat model, the reasoning behind each choice, what is not built yet: [SECURITY.md](docs/dev/SECURITY.md)
-　Reaching it from the internet (frp / tunnels) and the four TLS tiers: [DEPLOY.md](DEPLOY.md)
-
-## Documents
-
-Everything below is in Chinese — that is where the "why" lives.
-
-**This file, plus DEPLOY / DNS, is the user documentation.** The first five below live in [`docs/dev/`](docs/dev/README.md) — that layer is *why it is built this way*: design rationale, hand-verified semantics, and the traps that fail silently.
-
-| What you want | Where |
-|---|---|
-| Outbox: why a separate box, how images work, measured polling latency | [OUTBOX.md](docs/dev/OUTBOX.md) |
-| Reading the screen: scraping the input line, scraping what the agent said | [COMPOSER.md](docs/dev/COMPOSER.md) |
-| herdr socket API semantics, verified by hand | [HERDR-API.md](docs/dev/HERDR-API.md) |
-| The whole phone / tablet layer (gestures, keyboard, dock, top bar, notices, clipboard) | [MOBILE.md](docs/dev/MOBILE.md) |
-| Security design and threat model; the rules on the file-serving route | [SECURITY.md](docs/dev/SECURITY.md) |
-| Where to run it, public access, TLS tiers | [DEPLOY.md](DEPLOY.md) |
-| Getting a DNS token from each provider and the scope it needs | [DNS.md](DNS.md) |
-| Read before changing code (layout, releasing, colours, the silent traps) | [CLAUDE.md](CLAUDE.md) |
-
-MIT.
+MIT。

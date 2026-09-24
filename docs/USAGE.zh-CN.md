@@ -1,21 +1,13 @@
-# herdr-web
+# herdr-web 使用说明
 
-<p align="center">
-  <img src="assets/logo.png" alt="herdr-web" width="96" />
-</p>
+← 回 [README](../README.md)（一页速览）
 
-<p align="center">
-  <a href="README.md">English</a> · <b>简体中文</b>
-</p>
+这一份是**完整使用说明**：怎么装、怎么用、每个配置项是什么意思，一条不落。
+每件事「为什么这么做、踩过什么坑」在[下面的文档索引](#文档)里，那些才是这个项目真正的家底。
 
 浏览器里的终端，用来跑 [`herdr`](https://github.com/zbysir/herdr)。一个 Go 二进制（前端嵌在里面），
-手机也能用。
-
-**语音投稿**是这个项目的主功能：在平板上说话打字，说错的字框选重说就改掉，改完整段投进 agent 的
+手机也能用。**语音投稿**是主功能：在平板上说话打字，说错的字框选重说就改掉，改完整段投进 agent 的
 输入行。手机上够用，平板横屏 211 列 —— 那是个工位。
-
-这份文档只讲**怎么装、怎么用、怎么配**。每件事「为什么这么做、踩过什么坑」在
-[下面的文档索引](#文档)里，那些才是这个项目真正的家底。
 
 ## 装
 
@@ -119,7 +111,7 @@ herdr 的某个 pane。
 传图不用开发件箱：顶栏 / 快捷键条上那个「传图」，或者**整页粘贴**（剪贴板里是图就直接传）。
 路径去哪儿看发件箱开没开 —— 开着接到草稿末尾，没开就直接敲进终端。
 
-→ 为什么要单独一个框、图片怎么走通、双向同步的注意事项、轮询的实测延迟：[OUTBOX.md](docs/dev/OUTBOX.md)
+→ 为什么要单独一个框、图片怎么走通、双向同步的注意事项、轮询的实测延迟：[OUTBOX.md](dev/OUTBOX.md)
 
 ### 快捷键条
 
@@ -131,7 +123,7 @@ herdr 的某个 pane。
   home end pgup pgdn f1-f12`）、原样文本（`text:/new`，带空格要引号）。
 - `sticky:ctrl` / `sticky:alt` 是**粘滞**修饰键：点一下亮起，再敲一个字母就发出组合键。
 - `act:` 是网页端动作，不发字节：`act:kbd` 呼出键盘、`act:img` 传图、`act:panes` 开面板一览、
-  `act:files` 开文件、`act:clip` / `act:paste` 是[手机上的复制粘贴](docs/dev/MOBILE.md#手机上怎么复制--粘贴)。
+  `act:files` 开文件、`act:clip` / `act:paste` 是[手机上的复制粘贴](dev/MOBILE.md#手机上怎么复制--粘贴)。
 - 每个键有个**「两下」**勾选框，关 pane / 关标签 / `/clear` 默认就带 —— 键挨得近，误触没法撤销。
 - 键宽**按内容自适应**，没有「占几格」那种设置 —— 条是横滑的，滑一下上下两行就对不齐，
   格子对齐压根不成立。（唯一还需要固定格宽的是**弹出组的浮窗**，那儿不滚动。）
@@ -175,7 +167,7 @@ herdr 的某个 pane。
 框里那条竖线就是界线。它是**排布**，所以每套一份（平板和手机各钉各的）。
 
 存的是**个数**不是另一份列表 —— 那一行照旧是完整顺序，所以降级回老版本也不会
-「钉住的那几个不见了」。细节见 [MOBILE.md](docs/dev/MOBILE.md#键宽是几格钉住的那几个不跟着滑)。
+「钉住的那几个不见了」。细节见 [MOBILE.md](dev/MOBILE.md#键宽是几格钉住的那几个不跟着滑)。
 
 按键谱在**服务端**解析成字节，写错了保存时就告诉你是第几个键、哪儿不认，不会下发一个点了
 没反应的键。
@@ -199,8 +191,38 @@ agent 停下来等你回答（或刚跑完），顶栏 ▦ 上点一个红点；
 
 它是索引，不是第二个界面：点完看的还是同一个 herdr 终端，键盘那套操作一个字都没变。
 
-→ 排序规则、「3 分钟前」那一列、什么时候弹、红点怎么算、系统通知：[MOBILE.md](docs/dev/MOBILE.md)
-　那段话是怎么抽出来的：[COMPOSER.md](docs/dev/COMPOSER.md)
+→ 排序规则、「3 分钟前」那一列、什么时候弹、红点怎么算、系统通知：[MOBILE.md](dev/MOBILE.md)
+　那段话是怎么抽出来的：[COMPOSER.md](dev/COMPOSER.md)
+
+### 对话（chat 模式）
+
+顶栏的「对话」（或 `act:chat`）把 agent 的对话**读成一条流**，代替那一屏 TUI —— 手机上读它比读
+TUI 舒服得多：长行折行、markdown 渲染成排好的文档、往上翻历史不用 pager。它**铺在终端那块区域上
+但不占浮层那个槽**，所以开面板一览换个 agent 不会把它挤掉，底下那行发件箱也还点得到 ——
+一边看一边说才是这块界面的用法。
+
+内容是 **agent 自己写在磁盘上的会话记录**（claude 的 JSONL、codex 的 rollout），不是读屏。
+落盘粒度是**一次 API 请求**，所以体感是几秒冒出一块，不是逐字 —— 要逐字的回终端看。
+
+**得先装 hook**：`herdr integration install claude`（或 `codex`），是它告诉 herdr「这个 pane 在跑
+哪个会话」。hook 只在 agent **启动那一下**报一次，所以**装之前已经跑着的 agent 一律认不出**，
+把那个 agent 重开一次就有了。认不出时会退回按目录猜，而**同一个目录下开着两个同一家的 agent
+就干脆不猜** —— 猜错的表现是「显示的是隔壁那个 pane 的对话」，而两边都在同一个项目里干活，
+屏幕上看着完全正常。
+
+头上那个药丸写的是**模型名**（`Opus 5` 这种），只有「在等你回答」写中文 —— 那一档要人动手，
+不能靠颜色猜。旁边还有一句「X 分钟没更新」：codex 的 `/clear` 不新建文件、旧文件也不再长，
+而 herdr 手上那个会话 id 还是旧的，数据层认不出这件事，所以不猜，给个判断依据让你自己看
+（说下一句它就跟到新会话上了）。
+
+**基本上只读**：发言走底下那行发件箱（不另开一个发送框），审批一律留在终端。两个例外形状都是
+固定的 —— agent 弹出来的**选择题**能在这儿直接答（服务端按下标换算成按键），以及在一个空 pane 里
+**起一个 agent**（只认 claude / codex 两个名字）。
+
+整块关掉是 `HERDR_WEB_CHAT=0`；这台机器上既没有 claude 也没有 codex 时同样不画那个按钮。
+
+→ 内容从哪儿来、两家格式的坑、界面上那十几条：[CHAT.md](dev/CHAT.md)
+
 
 ### 文件浏览
 
@@ -219,7 +241,7 @@ agent 说「图生成在 `/tmp/plot-3.png`」，**点那行路径就能看**。�
 **默认没有边界** —— 能打开这个页面的人已经有一个登录 shell，白名单挡不住他、只会天天挡路。
 要边界就配 `HERDR_WEB_FILE_ROOTS`（那才是真 jail），整块不要就 `HERDR_WEB_FILES=0`。
 
-→ 短时链接那条路、四条硬规矩（绝不以 `text/html` 吐、SVG 为什么敢渲染）：[SECURITY.md](docs/dev/SECURITY.md)
+→ 短时链接那条路、四条硬规矩（绝不以 `text/html` 吐、SVG 为什么敢渲染）：[SECURITY.md](dev/SECURITY.md)
 
 ### 看 diff
 
@@ -278,7 +300,7 @@ agent 说「图生成在 `/tmp/plot-3.png`」，**点那行路径就能看**。�
 画成一个 mono 方块，和图标一眼分得开。存的是**引用**：改一处按键谱两边一起变，在快捷键条那页
 删掉一个，顶栏上也跟着没了。所以 `ctrl+b z` 这种不用等它变成内置按钮，自己配一个拖上来就行。
 
-→ 手势为什么这么分、键盘怎么收、手机上怎么复制粘贴、面板和顶栏的细节：[MOBILE.md](docs/dev/MOBILE.md)
+→ 手势为什么这么分、键盘怎么收、手机上怎么复制粘贴、面板和顶栏的细节：[MOBILE.md](dev/MOBILE.md)
 
 ### 装成 app（PWA）
 
@@ -329,7 +351,7 @@ legacy 表达不了的组合，默认开着（设置 →「终端」里可关）
 
 复制 `⌘C`（或 `Ctrl+Shift+C`）· 粘贴 `⌘V` · 清屏 `⌘K` · `Option` 默认当 Meta。
 手机上复制粘贴是另一回事（herdr 复制到的是**跑 herdr 那台机器**的剪贴板），
-见 [MOBILE.md](docs/dev/MOBILE.md#手机上怎么复制--粘贴)。
+见 [MOBILE.md](dev/MOBILE.md#手机上怎么复制--粘贴)。
 
 ## 配置
 
@@ -372,7 +394,7 @@ export HERDR_WEB_TLS=auto
 | `HERDR_WEB_DIR` | `~/.herdr-web` | 数据目录，分两层：配置和文件（`softkeys.json` / `tls/` / `uploads/`）在根上，**内部数据**（设备凭据、passkey 公钥）在 `data/` 里 —— 那两个用户不该手改，被改了会在终端告警。**路径别太深**：里面要开一个 unix socket（`ctl.sock`），全长超过 ~100 字节就 bind 不上，子命令会用不了 |
 | `HERDR_WEB_FILES` | 开 | `=0` 关掉文件浏览：`/api/files/*` 和 `/_f/` 全部 404，顶栏那个 📁 也不画（点开一片 404 比没有入口更糟） |
 | `HERDR_WEB_GIT` | 开 | `=0` 关掉「看 diff」那个面板：`/api/git/*` 全部 404，顶栏那个按钮也不画。**它还压在 `HERDR_WEB_FILES` 底下** —— 一份 diff 就是文件内容，文件浏览关着却还能看 diff 的话，那个开关就是假的。这台机器上没有 `git` 时同样不画 |
-| `HERDR_WEB_CHAT` | 开 | `=0` 关掉「对话」那个面板（chat 模式）：`/api/chat/*` 全部 404，顶栏那个按钮也不画。它读的是 **agent 自己写的会话记录**（claude 的 `~/.claude/projects/**.jsonl`、codex 的 rollout），所以这台机器上既没有 claude 也没有 codex 时同样不画。**它不压在 `HERDR_WEB_FILES` 底下** —— 转录在 `~/.claude` / `~/.codex` 下，而 `FILE_ROOTS` 一配就把它们挡在外面，那样这个面板在配了白名单的部署上永远打不开。边界由它自己钉（只认那两个根 + 会话 id 过正则 + 必须 `.jsonl`），见 [CHAT.md](docs/dev/CHAT.md) §9.4 |
+| `HERDR_WEB_CHAT` | 开 | `=0` 关掉「对话」那个面板（chat 模式）：`/api/chat/*` 全部 404，顶栏那个按钮也不画。它读的是 **agent 自己写的会话记录**（claude 的 `~/.claude/projects/**.jsonl`、codex 的 rollout），所以这台机器上既没有 claude 也没有 codex 时同样不画。**它不压在 `HERDR_WEB_FILES` 底下** —— 转录在 `~/.claude` / `~/.codex` 下，而 `FILE_ROOTS` 一配就把它们挡在外面，那样这个面板在配了白名单的部署上永远打不开。边界由它自己钉（只认那两个根 + 会话 id 过正则 + 必须 `.jsonl`），见 [CHAT.md](dev/CHAT.md) §9.4 |
 | `HERDR_WEB_FILE_ROOTS` | 空 | 逗号分隔的目录，配了就是**真白名单**（jail），只有这几棵树看得到。**空 = 不设边界**，理由见[文件浏览](#文件浏览)。展开 `~`，非绝对路径直接扔掉（相对谁？留着只会让前缀检查在意想不到的地方通过） |
 
 ### 发件箱 / 和 herdr 对接
@@ -387,18 +409,18 @@ export HERDR_WEB_TLS=auto
 
 ### 暴露 / TLS / 凭据
 
-细节见 [SECURITY.md](docs/dev/SECURITY.md)。
+细节见 [SECURITY.md](dev/SECURITY.md)。
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `HERDR_WEB_PUBLIC_PORT` | 关 | **要暴露就暴露这个口。** 在 `0.0.0.0:<端口>` 上另起一个监听（和主口同一个 handler），隧道 / 端口转发 / 反代指它，**别指主口**（主口只服务本地网络）。落在这个口上的请求按公网对待：本机免配对、旧 token 的 `loopback` 档都不生效（穿透进来的源地址也是 127.0.0.1，唯一靠得住的判据是「落在哪个监听上」）、限速的「本机永不封」豁免关掉、TLS 变成强制。为什么是多一个口而不是主口上加个开关：开关是**声明**，而声明会漏 —— 在这台机器上写代码的人（尤其是 agent）看到的是 `127.0.0.1:7788`，它没法知道机器上还有一条隧道正把这个口转出去，于是「反正只有本机能连」这个前提下做的每个决定都变成公网上的洞。换成独立端口之后，漏配的表现是隧道那头 connection refused |
 | `HERDR_WEB_EXPOSED` | 关 | **老写法，新配置用 `HERDR_WEB_PUBLIC_PORT`。** `=1` 声明**主口本身**能从公网碰到（frp / 端口转发 / 隧道）—— 这件事没法自动测，只能你自己说。声明之后：强制要求 TLS、关掉本机免配对，主口那道「只服务本地网络」的门也跟着让开（既然你说了它是公网口）。留着只为兼容已经这么配的机器 |
 | `HERDR_WEB_TLS_CERT` / `_KEY` | 空 | 用指定的证书。自己有域名、DNS-01 签了张真证书就走这条 —— 浏览器零警告、不用装描述文件，最省事 |
-| `HERDR_WEB_ACME_DNS` | 空 | 让 herdr-web **自己去签证书**，值是 DNS 服务商：`cloudflare` / `alidns` / `tencentcloud` / `route53` / `digitalocean` / `huaweicloud`。走 DNS-01，所以不需要外网能连进来 —— NAT 后面、甚至域名指到内网地址都能签。**各家 token 怎么拿、要给什么权限：[DNS.md](DNS.md)** |
+| `HERDR_WEB_ACME_DNS` | 空 | 让 herdr-web **自己去签证书**，值是 DNS 服务商：`cloudflare` / `alidns` / `tencentcloud` / `route53` / `digitalocean` / `huaweicloud`。走 DNS-01，所以不需要外网能连进来 —— NAT 后面、甚至域名指到内网地址都能签。**各家 token 怎么拿、要给什么权限：[DNS.md](../DNS.md)** |
 | `HERDR_WEB_ACME_EMAIL` | 空 | ACME 账号邮箱。可以空着，但那样到期提醒也收不到 |
 | `HERDR_WEB_ACME_STAGING` | 关 | `=1` 用 Let's Encrypt 测试环境。**调试时一定先开**：正式环境同一组域名一周只给 5 张证书，试几次就把自己锁一周 |
 | `HERDR_WEB_TLS` | 见说明 | `auto` 自签（本地 CA + 397 天叶子，IP 变了自动重签）/ `off` 明文 / `proxy` 前置已经终止了 TLS。默认：暴露或听局域网 → `auto`，纯本机 → `off` |
-| `HERDR_WEB_LAN_PORT` | 关 | 在 `0.0.0.0:<端口>` 上**另开一个监听**，自签证书、SAN 跟着当前局域网地址走。这样从隧道进来的页面能嗅探出「其实就在同一个局域网里」并切过去 —— 每个字的往返从两跳公网变成一跳交换机。每台设备有一步手动的、跳不过去：**先开一次它、点「继续访问」**；没点过的话嗅探会在 TLS 握手那里失败，页面就安静留在隧道那条路上。这个口**必须是 TLS**：https 页面对 `http://` 目标的 fetch 算 active mixed content，浏览器一律拦死，明文的口压根探不到。主口本来就在局域网上服务自签 TLS 的话不用配它。**直连那个 origin 上是一份独立凭据**（cookie 是 host-only 的），所以同一台平板在设备面板里会出现两条 —— 切过去那一下会带一个一次性配对码过去，不用你手配 —— 而且那一侧**用不了 passkey**：WebAuthn 的 RPID 只能是域名，裸 IP 不是，装了 CA 也一样。细节见 [DEPLOY.md](DEPLOY.md) |
+| `HERDR_WEB_LAN_PORT` | 关 | 在 `0.0.0.0:<端口>` 上**另开一个监听**，自签证书、SAN 跟着当前局域网地址走。这样从隧道进来的页面能嗅探出「其实就在同一个局域网里」并切过去 —— 每个字的往返从两跳公网变成一跳交换机。每台设备有一步手动的、跳不过去：**先开一次它、点「继续访问」**；没点过的话嗅探会在 TLS 握手那里失败，页面就安静留在隧道那条路上。这个口**必须是 TLS**：https 页面对 `http://` 目标的 fetch 算 active mixed content，浏览器一律拦死，明文的口压根探不到。主口本来就在局域网上服务自签 TLS 的话不用配它。**直连那个 origin 上是一份独立凭据**（cookie 是 host-only 的），所以同一台平板在设备面板里会出现两条 —— 切过去那一下会带一个一次性配对码过去，不用你手配 —— 而且那一侧**用不了 passkey**：WebAuthn 的 RPID 只能是域名，裸 IP 不是，装了 CA 也一样。细节见 [DEPLOY.md](../DEPLOY.md) |
 | `HERDR_WEB_HOSTNAME` | 空 | 允许出现在 `Host` 头里的域名，逗号分隔。**IP 一律放行，域名必须在名单里** —— 这是 DNS rebinding 的唯一防线，不在名单里直接 421 |
 | `HERDR_WEB_PUBLIC_URL` | 空 | 你**实际访问**的地址（`https://herdr.example.com:17788`）。frp 的公网端口和本地端口经常不是一个，不给就横幅上的二维码是废的。里面的域名自动进白名单 |
 | `HERDR_WEB_DEVICE_TTL_DAYS` | `90` | 设备凭据多久不活跃就失效（每次用都续期）。`0` = **永不过期** |
@@ -479,7 +501,7 @@ systemctl --user cat herdr-web.service                              # Linux
 
 **`service restart` 不重读配置。** 它只是把进程杀掉重起（换过二进制之后要的就是这一步），plist / unit 里那份快照一个字都没动。改配置只有重新 `install` 一条路。
 
-**DNS provider 的凭据也带 `HERDR_WEB_` 前缀**（`HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN`、`HERDR_WEB_ALICLOUD_ACCESS_KEY` 这些），所以跟着上面那条规则一起抄进去 —— shell 里 export 过就行，不用非走 `--env-file`。前缀不是为了整齐：光秃秃的 `CLOUDFLARE_DNS_API_TOKEN` 前缀和白名单两头都不占，抄不进去，而这个失败要等到第一次签发（或者三个月后第一次续期）才现形。老写法 lego 自己仍然认，但只能靠 `--env-file` 送进服务；两个都给的话带前缀的赢。各家变量名见 [DNS.md](DNS.md)。
+**DNS provider 的凭据也带 `HERDR_WEB_` 前缀**（`HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN`、`HERDR_WEB_ALICLOUD_ACCESS_KEY` 这些），所以跟着上面那条规则一起抄进去 —— shell 里 export 过就行，不用非走 `--env-file`。前缀不是为了整齐：光秃秃的 `CLOUDFLARE_DNS_API_TOKEN` 前缀和白名单两头都不占，抄不进去，而这个失败要等到第一次签发（或者三个月后第一次续期）才现形。老写法 lego 自己仍然认，但只能靠 `--env-file` 送进服务；两个都给的话带前缀的赢。各家变量名见 [DNS.md](../DNS.md)。
 
 `--env-file` 里的 key 是**整份**进去的（还盖过当前环境），文件只在 `install` 那一刻读，之后不再碰。`install` 打出来的那份清单里，凭据只显示星号和长度 —— 那段输出常常就落在一个跑着 agent 的 pane 里。
 
@@ -551,22 +573,24 @@ herdr-web version           # 当前版本 + 当初是怎么装的
 - **passkey 是第二因子**（服务端只存公钥，泄露也没用）。加完之后换新设备不用回机器前，
   会话凭据的寿命能从三个月压到一天。
 
-→ 威胁模型、每条为什么这么设计、还没做的：[SECURITY.md](docs/dev/SECURITY.md)
-　从公网连（frp / 隧道）、TLS 四档：[DEPLOY.md](DEPLOY.md)
+→ 威胁模型、每条为什么这么设计、还没做的：[SECURITY.md](dev/SECURITY.md)
+　从公网连（frp / 隧道）、TLS 四档：[DEPLOY.md](../DEPLOY.md)
 
 ## 文档
 
-**这一份和 DEPLOY / DNS 是「使用说明」**；下面前五份在 [`docs/dev/`](docs/dev/README.md) 里，那一层写的是**开发理由**：为什么这么设计、实测出来的语义、会静默出错的坑。
+**这一份和 DEPLOY / DNS 是「使用说明」**，GitHub 首页那份 [README](../README.md) 是它的一页速览；
+下面前六份在 [`docs/dev/`](dev/README.md) 里，那一层写的是**开发理由**：为什么这么设计、实测出来的语义、会静默出错的坑。
 
 | 要看什么 | 去哪儿 |
 |---|---|
-| 发件箱：为什么单独一个框、图片怎么走通、轮询实测 | [OUTBOX.md](docs/dev/OUTBOX.md) |
-| 读屏：抽输入框、抽提示卡上那段话 | [COMPOSER.md](docs/dev/COMPOSER.md) |
-| herdr socket API 实测出来的语义 | [HERDR-API.md](docs/dev/HERDR-API.md) |
-| 手机 / 平板那一整套（手势、键盘、面板、顶栏、提示、复制粘贴） | [MOBILE.md](docs/dev/MOBILE.md) |
-| 安全设计和威胁模型、文件浏览那条路的规矩 | [SECURITY.md](docs/dev/SECURITY.md) |
-| 放在哪儿跑、公网访问、TLS 分档 | [DEPLOY.md](DEPLOY.md) |
-| 各家 DNS 的 token 怎么拿、要给什么权限 | [DNS.md](DNS.md) |
-| 改代码之前先读（代码结构、发版、配色、会静默出错的坑） | [CLAUDE.md](CLAUDE.md) |
+| 发件箱：为什么单独一个框、图片怎么走通、轮询实测 | [OUTBOX.md](dev/OUTBOX.md) |
+| 读屏：抽输入框、抽提示卡上那段话 | [COMPOSER.md](dev/COMPOSER.md) |
+| herdr socket API 实测出来的语义 | [HERDR-API.md](dev/HERDR-API.md) |
+| 手机 / 平板那一整套（手势、键盘、面板、顶栏、提示、复制粘贴） | [MOBILE.md](dev/MOBILE.md) |
+| chat 模式：内容从哪儿来、两家转录格式的坑 | [CHAT.md](dev/CHAT.md) |
+| 安全设计和威胁模型、文件浏览那条路的规矩 | [SECURITY.md](dev/SECURITY.md) |
+| 放在哪儿跑、公网访问、TLS 分档 | [DEPLOY.md](../DEPLOY.md) |
+| 各家 DNS 的 token 怎么拿、要给什么权限 | [DNS.md](../DNS.md) |
+| 改代码之前先读（代码结构、发版、配色、会静默出错的坑） | [CLAUDE.md](../CLAUDE.md) |
 
 MIT。
