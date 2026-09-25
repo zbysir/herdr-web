@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/zbysir/herdr-web/internal/herdr"
 	"github.com/zbysir/herdr-web/internal/transcript"
@@ -183,8 +185,12 @@ chatAnswer：**替人答那个选择框**（`AskUserQuestion`）。
 
 请求里给的是**每题选了哪几个选项（下标）**，不是按键 —— 键序列在服务端按下标算出来
 （见 askKeys）。这样即使前端被人改了、或者这个口被别的东西调，它也只可能发出「序号 /
-enter / tab」这几下，发不出别的任何东西。（前端传一串按键过来是最自然的写法，但那就等于
+enter / tab / 方向」这几下，发不出别的任何东西。（前端传一串按键过来是最自然的写法，但那就等于
 开了一个「往任意 pane 打任意按键」的口。）
+
+唯一带字的是「自己写」那一格（TUI 列表里的 `Type something.`，`Other`）：那串字只会在
+**光标已经落在那一格上**之后才发，而且换行 / 控制字符在 cleanOther 里剥掉了 —— 一个 `\r`
+混进去就是在输入框里按了回车。
 
 # 按 pane 寻址，不走焦点
 
@@ -216,6 +222,9 @@ func (s *Server) chatAnswer(w http.ResponseWriter, r *http.Request) {
 		Pane string
 		// Picks 每题选了哪几个选项（下标）。多选那题可以给多个。
 		Picks [][]int
+		// Other 每题「自己写」那一格的字（空 = 没写）。单选题写了它就不能再选选项；
+		// 多选题是和勾选的并存的。
+		Other []string
 		// Index 老前端那条路：单题单选时的那一个序号。Picks 有值就不看它。
 		Index int
 	}
@@ -263,17 +272,22 @@ func (s *Server) chatAnswer(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "reason": "not_pending"})
 		return
 	}
-	picks, err := resolvePicks(ask, b.Picks, b.Index)
+	other, err := cleanOthers(ask, b.Other)
 	if err != nil {
 		fail(w, 400, err)
 		return
 	}
-	keys := askKeys(ask, picks)
+	picks, err := resolvePicks(ask, b.Picks, b.Index, other)
+	if err != nil {
+		fail(w, 400, err)
+		return
+	}
+	keys := askKeys(ask, picks, other)
 	if err := sendOneByOne(sess.outbox.C, b.Pane, keys); err != nil {
 		fail(w, 400, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"pane": b.Pane, "picked": pickedLabels(ask, picks), "keys": len(keys)})
+	writeJSON(w, 200, map[string]any{"pane": b.Pane, "picked": pickedLabels(ask, picks, other), "keys": len(keys)})
 }
 
 /*
@@ -321,29 +335,110 @@ Submit 页发 `1` 提交，转录里四题的答案一字不差。
 TUI 的列表里 payload 的选项排在前面，后面还跟着 `Type something` / `Chat about this` 这些
 它自己加的行 —— 所以 payload 第 i 个 ⇒ 数字 i+1。**因此选项不能超过 9 个**（一个数字字符），
 pendingAsk 里挡着。
+
+# 「自己写」那一格（`Type something.`，就排在选项后面、第 n+1 行）
+
+2026-09-25 拿真 claude 2.1.282 在单独的 herdr session 里量的，两种题**完全不是一个走法**：
+
+	单选  发 `n+1` → 光标落到那一格、直接进编辑态 → 打字 → `enter`（记下这串字 + 跳题；
+	      只有这一题时就直接提交了，和选序号一样）
+	多选  数字键只**切换勾选、光标不动**，所以 `n+1` 只会勾上一个空格子、字没处去。
+	      得把光标**挪过去**：`down` × n（从第 1 行起）→ 打字（**打字自己就会勾上**，
+	      别再按 `n+1`，那是切换、会把它取消）→ `down` 落到这一题自己的 Submit 行 →
+	      `enter` 答完这一题、翻到下一页。**不能用 `tab` 翻页**：光标在那一格上时 tab 只是
+	      往下挪一行，挪到 Submit 行上再按 tab / right 都不动（实测，一个字都不报）。
+
+`down` × n 假设「光标此刻在第 1 行」。从上一题跳过来（单选自动跳 / 多选 enter）时确实在
+第 1 行（实测）；**第一题不一定** —— 人可能在终端里按过方向键。所以第一题先 `right` + `left`
+出去再回来：重进一页光标一定回到第 1 行（实测）。只在第一题做，因为光标要是正好停在那一格上
+（编辑态），左右键挪的是字里的光标，不翻页 —— 后面的题不会是这个状态。
+（`home` / `pageup` herdr 不认，`up` 到顶会绕回底下，都当不了「回到第 1 行」。）
 */
-func askKeys(ask *transcript.Ask, picks [][]int) []string {
-	var keys []string
+func askKeys(ask *transcript.Ask, picks [][]int, other []string) []askKey {
+	var keys []askKey
+	k := func(names ...string) {
+		for _, n := range names {
+			keys = append(keys, askKey{Key: n})
+		}
+	}
 	for qi, q := range ask.Questions {
+		text := other[qi]
+		if text != "" && !q.Multi {
+			// 单选：序号直接把光标带进编辑态，打完 enter 就是选中 + 跳题
+			k(strconv.Itoa(len(q.Options) + 1))
+			keys = append(keys, askKey{Text: text})
+			k("enter")
+			continue
+		}
+		if text != "" && qi == 0 {
+			k("right", "left") // 回到第 1 行，见上面
+		}
 		for _, oi := range picks[qi] {
-			keys = append(keys, strconv.Itoa(oi+1))
+			k(strconv.Itoa(oi + 1))
 			// 带 preview 的单选：序号只把光标移过去，enter 才是「选中并跳到下一题」。
 			// **多选那边不补** —— preview 只在单选题上有（工具那边的限制），而多选的
 			// enter 在 TUI 里是「答完这一题」，补上去就把后面几个勾选一起吞了。
 			if q.Preview && !q.Multi {
-				keys = append(keys, "enter")
+				k("enter")
 			}
 		}
-		if q.Multi {
+		switch {
+		case q.Multi && text != "":
+			for range q.Options {
+				k("down")
+			}
+			keys = append(keys, askKey{Text: text})
+			k("down", "enter")
+		case q.Multi:
 			// 多选不会自己跳题，得手动翻页
-			keys = append(keys, "tab")
+			k("tab")
 		}
 	}
 	// 单题单选那种发完序号就已经提交了，再补一个 `1` 会被打进输入框
 	if !(len(ask.Questions) == 1 && !ask.Questions[0].Multi) {
-		keys = append(keys, "1")
+		k("1")
 	}
 	return keys
+}
+
+// askKey 那串序列里的一下：要么是一个键名，要么是「自己写」那一格里的一串字。
+type askKey struct {
+	Key  string
+	Text string
+}
+
+// maxOther 「自己写」那一格最多收多少个字。TUI 那一格是单行的，这儿只是别让一个超长的
+// 请求往 pane 里灌上几兆。
+const maxOther = 2000
+
+// cleanOthers 把每题「自己写」的字理一遍：换行和控制字符换成空格（**一个 `\r` 混进去
+// 就是在那一格里按了回车**，后面的键全对不上位置）、去掉首尾空白、限长。
+func cleanOthers(ask *transcript.Ask, raw []string) ([]string, error) {
+	out := make([]string, len(ask.Questions))
+	if len(raw) == 0 {
+		return out, nil
+	}
+	if len(raw) != len(ask.Questions) {
+		return nil, fmt.Errorf("有 %d 个问题，「自己写」给了 %d 份", len(ask.Questions), len(raw))
+	}
+	for i, t := range raw {
+		t = strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return ' '
+			}
+			return r
+		}, t)
+		t = strings.TrimSpace(t)
+		if n := utf8.RuneCountInString(t); n > maxOther {
+			return nil, fmt.Errorf("第 %d 个问题自己写的字太长了（%d 个字，最多 %d）", i+1, n, maxOther)
+		}
+		// 单选那条路要按 n+1 这个序号，所以同样受「一个数字字符」限制
+		if t != "" && !ask.Questions[i].Multi && len(ask.Questions[i].Options)+1 > 9 {
+			return nil, fmt.Errorf("第 %d 个问题选项太多，「自己写」这一格按不到 —— 回终端答", i+1)
+		}
+		out[i] = t
+	}
+	return out, nil
 }
 
 // keyGap 两下之间隔多久。见 sendOneByOne 的 ③。
@@ -374,12 +469,20 @@ sendOneByOne：把那串按键发出去。三条**全是在真 pane 上量出来
 顺带解释了为什么原来那串 `↓↓⏎` 一次发能用：那些是转义序列，herdr 按键编码之后 claude
 逐个解析，不走「粘贴」那条路 —— 所以老那条路从来没暴露过 ①。
 */
-func sendOneByOne(c *herdr.Client, pane string, keys []string) error {
+//
+// 带字的那一下（「自己写」）走 `text`：那一格是个真输入框，粘贴进去是认的（实测）。
+func sendOneByOne(c *herdr.Client, pane string, keys []askKey) error {
 	for i, k := range keys {
 		if i > 0 {
 			time.Sleep(keyGap)
 		}
-		if err := c.SendKeys(pane, []string{k}); err != nil {
+		var err error
+		if k.Text != "" {
+			err = c.SendText(pane, k.Text, nil)
+		} else {
+			err = c.SendKeys(pane, []string{k.Key})
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -390,7 +493,13 @@ func sendOneByOne(c *herdr.Client, pane string, keys []string) error {
 //
 // **每题都必须有选择**：缺一题的话 Submit 页会拒（那边要求全答完），而我们已经把前面几题
 // 的按键发出去了 —— 停在一个半填的选择器上比什么都没发更糟。
-func resolvePicks(ask *transcript.Ask, picks [][]int, index int) ([][]int, error) {
+//
+// 「自己写」了字的那题（`other[qi] != ""`）可以一个选项都不选；单选题写了字就**不能**再选
+// 选项（TUI 里那是同一个单选框里的两行）。
+func resolvePicks(ask *transcript.Ask, picks [][]int, index int, other []string) ([][]int, error) {
+	if len(picks) == 0 && hasOther(other) {
+		picks = make([][]int, len(ask.Questions))
+	}
 	if len(picks) == 0 {
 		// 老前端：只传了一个序号，那时候只可能是单题单选
 		if len(ask.Questions) != 1 {
@@ -403,10 +512,13 @@ func resolvePicks(ask *transcript.Ask, picks [][]int, index int) ([][]int, error
 	}
 	for qi, q := range ask.Questions {
 		got := picks[qi]
-		if len(got) == 0 {
+		if len(got) == 0 && other[qi] == "" {
 			return nil, fmt.Errorf("第 %d 个问题还没选", qi+1)
 		}
-		if !q.Multi && len(got) != 1 {
+		if !q.Multi && len(got) > 0 && other[qi] != "" {
+			return nil, fmt.Errorf("第 %d 个问题是单选，选了选项又自己写了字", qi+1)
+		}
+		if !q.Multi && len(got) > 1 {
 			return nil, fmt.Errorf("第 %d 个问题是单选，给了 %d 个", qi+1, len(got))
 		}
 		seen := map[int]bool{}
@@ -424,13 +536,26 @@ func resolvePicks(ask *transcript.Ask, picks [][]int, index int) ([][]int, error
 	return picks, nil
 }
 
+func hasOther(other []string) bool {
+	for _, t := range other {
+		if t != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // pickedLabels 回一句「选了什么」给前端做反馈（每题用 `,` 连、题之间用 ` / `）。
-func pickedLabels(ask *transcript.Ask, picks [][]int) string {
+// 自己写的字排在勾选的后面 —— 和 claude 记进转录的顺序一样（`苹果, 荔枝`）。
+func pickedLabels(ask *transcript.Ask, picks [][]int, other []string) string {
 	var qs []string
 	for qi, q := range ask.Questions {
 		var one []string
 		for _, oi := range picks[qi] {
 			one = append(one, q.Options[oi].Label)
+		}
+		if other[qi] != "" {
+			one = append(one, other[qi])
 		}
 		qs = append(qs, strings.Join(one, ", "))
 	}

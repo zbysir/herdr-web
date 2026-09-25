@@ -723,8 +723,8 @@ export const chatApi = {
    *
    * `picks[i]` 是第 i 题选的那几个下标：单选题给一个，可多选的那题能给几个。
    */
-  answer: (pane: string, picks: number[][]) =>
-    api.post<{ pane: string; picked: string; keys: number }>('/chat/answer', { pane, picks }),
+  answer: (pane: string, picks: number[][], other?: string[]) =>
+    api.post<{ pane: string; picked: string; keys: number }>('/chat/answer', { pane, picks, other }),
 
   /**
    * 在一个**没有 agent 的** pane 里开一个 agent（往那个 pane 里敲命令名 + 回车）。

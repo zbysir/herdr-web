@@ -683,6 +683,71 @@ func TestChatAnswerKeys(t *testing.T) {
 	}
 }
 
+// 「自己写」那一格（TUI 里的 `Type something.`）。序列是 2026-09-25 拿真 claude 2.1.282
+// 量出来的，理由在 askKeys 的注释里。字那一下写成 `text:…`，其余是键名。
+func TestChatAnswerOtherKeys(t *testing.T) {
+	for _, tc := range []struct {
+		why  string
+		qs   []askQ
+		body string
+		want []string
+	}{
+		{
+			"单题单选自己写：n+1 进编辑态 → 字 → enter 就提交了，不补 Submit 那一下",
+			[]askQ{{multi: false, opts: []string{"a", "b", "c"}}},
+			`{"pane":"p1","picks":[[]],"other":["紫色"]}`,
+			[]string{"4", "text:紫色", "enter"},
+		},
+		{
+			"只给 other 不给 picks 也行",
+			[]askQ{{multi: false, opts: []string{"a", "b"}}},
+			`{"pane":"p1","other":["x"]}`,
+			[]string{"3", "text:x", "enter"},
+		},
+		{
+			// 实测过的那一张：第一题单选自己写、第二题多选勾一个再自己写
+			"单选自己写 + 多选勾选再自己写：多选那题 down×n 挪过去、down+enter 答完，不走 tab",
+			[]askQ{{multi: false, opts: []string{"红", "蓝", "绿"}}, {multi: true, opts: []string{"苹果", "香蕉", "橙子"}}},
+			`{"pane":"p1","picks":[[],[0]],"other":["紫色 purple","荔枝"]}`,
+			[]string{"4", "text:紫色 purple", "enter", "1", "down", "down", "down", "text:荔枝", "down", "enter", "1"},
+		},
+		{
+			"第一题就是多选自己写：先 right+left 把光标送回第 1 行",
+			[]askQ{{multi: true, opts: []string{"a", "b"}}, {multi: false, opts: []string{"x", "y"}}},
+			`{"pane":"p1","picks":[[1],[0]],"other":["zz",""]}`,
+			[]string{"right", "left", "2", "down", "down", "text:zz", "down", "enter", "1", "1"},
+		},
+		{
+			"换行和控制字符换成空格、首尾空白去掉（一个 \\r 就是在那一格里按了回车）",
+			[]askQ{{multi: false, opts: []string{"a"}}},
+			`{"pane":"p1","other":["  一\r\n二\t三  "]}`,
+			[]string{"2", "text:一  二 三", "enter"},
+		},
+	} {
+		s, store, keys := chatServerKeys(t, true, askPanes())
+		writeAskQs(t, store, "-w", sid, tc.qs)
+		w := postChat(t, s, tc.body)
+		if w.Code != 200 {
+			t.Errorf("%s：%d %s", tc.why, w.Code, strings.TrimSpace(w.Body.String()))
+			continue
+		}
+		var got []string
+		for _, c := range keys.all() {
+			if c.Text != "" {
+				if len(c.Keys) != 0 {
+					t.Errorf("%s：字和键混在一次调用里了：%+v", tc.why, c)
+				}
+				got = append(got, "text:"+c.Text)
+				continue
+			}
+			got = append(got, strings.Join(c.Keys, "+"))
+		}
+		if strings.Join(got, " | ") != strings.Join(tc.want, " | ") {
+			t.Errorf("%s：\n  该是 %q\n  实际 %q", tc.why, tc.want, got)
+		}
+	}
+}
+
 // 选择给得不对时**一个键都不许发**：发了一半停在半填的选择器上，比什么都没发更糟
 // （Submit 页要求全答完）。
 func TestChatAnswerRejectsBadPicks(t *testing.T) {
@@ -694,6 +759,9 @@ func TestChatAnswerRejectsBadPicks(t *testing.T) {
 		{"序号越界", `{"pane":"p1","picks":[[0],[9]]}`},
 		{"同一个选项给了两次（多选是切换，等于没选）", `{"pane":"p1","picks":[[0],[1,1]]}`},
 		{"多题却走老的 index 路", `{"pane":"p1","index":0}`},
+		{"单选那题选了又自己写", `{"pane":"p1","picks":[[0],[0]],"other":["x",""]}`},
+		{"自己写的份数对不上", `{"pane":"p1","picks":[[0],[0]],"other":["x"]}`},
+		{"自己写的只有空白（等于没写，那题还是没选）", `{"pane":"p1","picks":[[],[0]],"other":["   ",""]}`},
 	} {
 		s, store, keys := chatServerKeys(t, true, askPanes())
 		writeAskQs(t, store, "-w", sid, two)

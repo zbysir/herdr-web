@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDown, Check, ChevronDown, ChevronUp, Play, Terminal, Wrench, AlertCircle, MessageSquare, X } from 'lucide-react'
+import { ArrowDown, Check, ChevronDown, ChevronUp, LoaderCircle, Play, Terminal, Wrench, AlertCircle, MessageSquare, X } from 'lucide-react'
 import { ApiError, chatApi, type ChatLog, type ChatMsg, type Pane } from '@/lib/api'
 import type { SentEcho } from '@/hooks/useCompose'
 import { STATUS_DOT } from '@/lib/agentstatus'
@@ -601,9 +601,9 @@ export function ChatPanel({
    * （CLAUDE.md 那条「点了没反应多半是反馈离手指太远」）。成功那一下照旧走 toast：
    * 那是「顺手做完、结果马上看得见」的那类（对话流当场就会动）。
    */
-  const answer = useCallback(async (picks: number[][]) => {
+  const answer = useCallback(async (picks: number[][], other: string[]) => {
     if (!active) throw new Error('还不知道在看哪个 pane')
-    const r = await chatApi.answer(active, picks)
+    const r = await chatApi.answer(active, picks, other)
     // 立刻补一拍：答完 agent 马上就动起来了，等 3 秒才更新看着像没答上
     void tick(active)
     onToast?.(`已选「${r.picked}」`)
@@ -1382,15 +1382,40 @@ function Problem({ err, agent }: { err: { msg: string; reason?: string }; agent?
  */
 function AskCard({ m, onAnswer, live }: {
   m: ChatMsg
-  onAnswer?: (picks: number[][]) => void
+  onAnswer?: (picks: number[][], other: string[]) => void
   live?: boolean
 }) {
   const qs = m.ask?.questions ?? []
   /** 还没提交、只在本地攒着的选择：每题一串选项下标 */
   const [picks, setPicks] = useState<number[][]>(() => qs.map(() => []))
-  const [sending, setSending] = useState(false)
+  /**
+   * 每题「自己写」那一格的字（TUI 列表里的 `Type something.`）。
+   *
+   * 单选题里它和选项是**同一个单选框里的两行**：写了字就把选项清掉、点了选项就把字清掉 ——
+   * 服务端也这么核（两样都给报 400），而 TUI 里本来就只能落在一行上。多选题是并存的。
+   */
+  const [others, setOthers] = useState<string[]>(() => qs.map(() => ''))
+  const wrote = (qi: number) => !!others[qi]?.trim()
+  /**
+   * 提交键的三档：`idle` → 点下去 `sending`（请求在路上）→ 成功后 `sent`，**一直锁到这张卡
+   * 答完**（转录里出现回答、`live` 变 false，提交键整个不画了）。
+   *
+   * 为什么成功了还不放开：请求回来只说明键按下去了，转录要等下一拍（最慢 3 秒）才显示
+   * 「答过了」—— 原来那一段里键又变回一个一模一样的「提交」，看着像没点到（用户报的），
+   * 再点一次就是往一个已经答完的界面上再灌一串数字键，落进 agent 的输入框里。
+   * 兜底 `SENT_UNLOCK` 之后放开：键真没落上（对面卡住了）时人得有办法重来。
+   */
+  const [phase, setPhase] = useState<'idle' | 'sending' | 'sent'>('idle')
+  const sending = phase !== 'idle'
+  /** 挡同一帧里的连点：setState 还没生效时第二下 click 看到的 phase 还是 idle */
+  const inflight = useRef(false)
   const [bad, setBad] = useState('')
   const canPick = !!(live && onAnswer)
+  useEffect(() => {
+    if (phase !== 'sent') return
+    const t = setTimeout(() => setPhase('idle'), SENT_UNLOCK)
+    return () => clearTimeout(t)
+  }, [phase])
   /** 当时选了哪几个（多题的话每题一个，用 / 连起来）。空 = 拿不到 */
   const chosen = qs.map((q) => q.picked).filter(Boolean).join(' / ')
   /**
@@ -1402,25 +1427,34 @@ function AskCard({ m, onAnswer, live }: {
    * 所以除了下面那句「还有 N 题没选」，每题头上还画一个 `☐`/`☑`（和 TUI 那条标签栏
    * 同一个办法：`☐ 关注方面 ☒ 确认方式`），一眼能看出缺的是哪一题。
    */
-  const missing = qs.map((_, qi) => qi).filter((qi) => !picks[qi]?.length)
+  const missing = qs.map((_, qi) => qi).filter((qi) => !picks[qi]?.length && !wrote(qi))
   const ready = qs.length > 0 && missing.length === 0
 
-  const toggle = (qi: number, oi: number, multi?: boolean) => setPicks((prev) => {
+  const toggle = (qi: number, oi: number, multi?: boolean) => {
+    if (!multi) setOthers((o) => o.map((t, i) => (i === qi ? '' : t)))
+    setPicks((prev) => pick(prev, qi, oi, multi))
+  }
+  const pick = (prev: number[][], qi: number, oi: number, multi?: boolean) => {
     const next = prev.map((a) => [...a])
     if (!multi) next[qi] = [oi]
     // 多选是**切换**（和 TUI 里一致）：再点一下取消
     else if (next[qi].includes(oi)) next[qi] = next[qi].filter((x) => x !== oi)
     else next[qi] = [...next[qi], oi].sort((a, b) => a - b)
     return next
-  })
+  }
+
+  const write = (qi: number, text: string, multi?: boolean) => {
+    setOthers((o) => o.map((t, i) => (i === qi ? text : t)))
+    if (!multi && text.trim()) setPicks((p) => p.map((a, i) => (i === qi ? [] : a)))
+  }
 
   return (
     <div className="flex flex-col gap-2 rounded-card border border-brand/40 bg-brand/10 px-3 py-2.5">
       {qs.map((q, qi) => (
         <div key={qi} className="flex flex-col gap-1.5">
           <span className="text-[0.9em] text-brand">
-            {canPick && <span className={cn('mr-1', picks[qi]?.length ? 'text-brand' : 'text-faint')}>
-              {picks[qi]?.length ? '☑' : '☐'}
+            {canPick && <span className={cn('mr-1', picks[qi]?.length || wrote(qi) ? 'text-brand' : 'text-faint')}>
+              {picks[qi]?.length || wrote(qi) ? '☑' : '☐'}
             </span>}
             {q.header || `第 ${qi + 1} 问`}{q.multi ? '（可多选）' : ''}
           </span>
@@ -1485,6 +1519,39 @@ function AskCard({ m, onAnswer, live }: {
                 </button>
               )
             })}
+            {canPick && (q.multi || q.options.length + 1 <= 9) && (
+              /*
+                「自己写」那一格（TUI 里的 `Type something.`）。按下去的键在服务端算（askKeys：
+                单选按 n+1 进编辑态、多选要把光标挪过去 —— 两种走法完全不同），这儿只送字。
+                **回车不提交**：手机输入法上回车常常是「换行 / 完成」，写到一半就替人答出去了；
+                服务端也会把换行换成空格。
+              */
+              <label
+                className={cn(
+                  'flex items-center gap-1.5 rounded-md border px-2 py-1',
+                  wrote(qi) ? 'border-brand/40 bg-brand/12' : 'border-line bg-ctl',
+                )}
+              >
+                <span className="shrink-0 font-mono text-[0.85em] text-faint">{q.options.length + 1}</span>
+                <input
+                  type="text"
+                  value={others[qi] ?? ''}
+                  disabled={sending}
+                  onChange={(e) => write(qi, e.target.value, q.multi)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault() }}
+                  placeholder={q.multi ? '自己写（和上面勾的一起交）' : '自己写…'}
+                  className="min-w-0 flex-1 bg-transparent text-[1em] text-fg outline-none placeholder:text-faint"
+                />
+              </label>
+            )}
+            {!canPick && customOf(q) && (
+              // 答过的卡：自己写的那句不在选项里，单独画一行标出来（不画的话「当时写了什么」
+              // 只剩底下那行小字）
+              <div className="flex items-start gap-1.5 rounded-md border border-brand/40 bg-brand/12 px-2 py-1">
+                <span className="shrink-0 text-[0.85em] text-faint">自己写</span>
+                <span className="min-w-0 text-[1em] text-fg">{customOf(q)}</span>
+              </div>
+            )}
           </div>
         </div>
       ))}
@@ -1503,26 +1570,33 @@ function AskCard({ m, onAnswer, live }: {
             type="button"
             disabled={!ready || sending}
             onClick={async () => {
+              if (inflight.current) return
+              inflight.current = true
               setBad('')
-              setSending(true)
+              setPhase('sending')
               try {
-                await onAnswer?.(picks)
+                await onAnswer?.(picks, others.map((t) => t.trim()))
+                setPhase('sent')
               } catch (e) {
                 // **失败要画在这张卡上**，不能只发 toast —— 那个贴在整屏最下沿，而眼睛在
                 // 刚点的这个按钮上（CLAUDE.md 那条「反馈离手指太远」）。
                 setBad(e instanceof Error ? e.message : String(e))
+                setPhase('idle')
               } finally {
-                setSending(false)
+                inflight.current = false
               }
             }}
             className={cn(
-              'shrink-0 rounded-md border px-3 py-1 text-[1em] disabled:opacity-100',
+              'inline-flex shrink-0 items-center gap-1.5 rounded-md border px-3 py-1 text-[1em] disabled:opacity-100',
               ready
                 ? 'border-brand-line bg-brand-bg text-brand-fg'
                 : 'border-line bg-ctl text-faint',
+              // 锁着的那段稍微压一点：一眼看得出「现在点不了」，但别压到看不清转圈
+              sending && 'opacity-80',
             )}
           >
-            {sending ? '发送中…' : '提交'}
+            {sending && <LoaderCircle className="size-3.5 animate-spin" />}
+            {phase === 'sending' ? '提交中…' : phase === 'sent' ? '已提交' : '提交'}
           </button>
           {/* 按不动的时候**就在按钮旁边**说为什么（见 missing 那段注释） */}
           {!ready && (
@@ -1551,10 +1625,23 @@ function AskCard({ m, onAnswer, live }: {
  * 「在等你答，回终端」，绝不能落到「已经答过了」那句上 —— 那会让人干脆不去答，而对面
  * 一直卡着（用户报的「我没有答啊 为什么说我答过了」）。
  */
+/**
+ * 答过的题里「自己写」的那部分：claude 记进转录的是 `勾的, 勾的, 自己写的`，把能对上选项的
+ * 去掉，剩下的就是自己写的。（自己写的字里本身带 `, ` 会被切开再拼回去，不影响。）
+ */
+function customOf(q: { picked?: string; options: { label: string }[] }) {
+  if (!q.picked) return ''
+  const labels = new Set(q.options.map((o) => o.label))
+  return q.picked.split(', ').filter((x) => !labels.has(x)).join(', ')
+}
+
+/** 提交成功后锁多久还没看到「答过了」就放开（见 AskCard 的 phase） */
+const SENT_UNLOCK = 20_000
+
 function footer(canPick: boolean, live: boolean | undefined, ready: boolean, chosen: string) {
   if (canPick) {
     // 缺哪几题由按钮旁边那行说（那儿离手指近），这儿只讲怎么用
-    return ready ? '点「提交」就替你在终端里按下去' : '每题都要选（可多选的那题能选几个），选完点「提交」'
+    return ready ? '点「提交」就替你在终端里按下去' : '每题都要选（或者自己写一句），选完点「提交」'
   }
   if (live) return '选项太多，这儿发不了 —— 回终端答'
   return chosen ? `已选：${chosen}` : '这个问题已经答过了'
@@ -1621,7 +1708,7 @@ function ToolLine({ m, toggle }: { m: ChatMsg; toggle?: { open: boolean; n: numb
 function Bubble({ m, onAnswer, live, onOpenPath }: {
   m: ChatMsg
   /** 点了第 index 个选项（已经过二次确认）。不给 = 这条 ask 只显示不给点 */
-  onAnswer?: (picks: number[][]) => void
+  onAnswer?: (picks: number[][], other: string[]) => void
   /** 这条 ask 是不是**还没答**（= 它是最后一条工具调用且没有结果）。只有它才给点 */
   live?: boolean
   /** 点了正文里一条本地路径（走终端那套 openPath） */
