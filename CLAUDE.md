@@ -299,6 +299,10 @@
   而它压在 `main` 里 —— 所以还夹了一道 `max-w-[calc(100%-20px)]`，不然横屏手机上贴右的面板
   左边溢出屏幕；② 快捷键条放右边时每行要**横滑**（`Softkeys` 的 `slide`），按宽屏那档换行的话
   两排会折成三四排。
+- **界面上的「焦点」只有一份**（App 的 `view`）：点一行切 pane 时的抢跑提示（`focusHint`）
+  直接折进 pane / 工作空间的 `focused` 往下传，chat、面板一览、文件、改动都只看 `focused`。
+  原来只有 chat 认提示，于是 chat 当场切过去了、面板一览的选中框晚一两个往返才挪（用户报的）。
+  只有 focusHint 的收尾 effect 和发件箱看 herdr 的原话（`compose.panes`）。
 - **「我现在在哪个项目」= 焦点 pane 那个工作空间**（`DiffPanel` 的 `dirKey`、`FilesPanel` 的
   `starts`、App 里那个 `diffRepo`）。用户报的是「改动面板打开，看到的是另一个项目的 diff」。
   三处是同一件事：herdr 里同时开着好几个工作空间、几十个 pane 是常态（实测 48 个 pane / 34 个

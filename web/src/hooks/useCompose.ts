@@ -267,6 +267,16 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, toast: (m: string)
         agent 的那台机器上问几十个 pane（实测 55 个），每拍白拉一次不值当。
       */
       if (!first) void loadPanes(true)
+    } else if (!first && (r.agent || '') !== (panesRef.current.find((p) => p.id === r.target)?.agent || '')) {
+      /*
+        **同一个 pane 里 agent 起来了 / 退掉了，列表也要跟着刷。**
+
+        chat 那一屏「这个 pane 里没有 agent → 开 claude」判的是**列表**里那条 pane 的
+        `agent`，而列表只在上面那种切换时才重拉 —— 在原地敲 `claude` 焦点一动不动，于是
+        这一行已经写着「claude idle」，chat 却一直停在「正在开 claude…」（用户报的）。
+        判据只比 agent 名，不比状态：状态每拍都可能变，比它就等于每拍都拉一次列表。
+      */
+      void loadPanes(true)
     }
     say2(`${label(r)}${own.current ? ' · 本地草稿未投' : ''}${pinNote}`)
   }, [aimed, label, loadPanes, say2, visible])

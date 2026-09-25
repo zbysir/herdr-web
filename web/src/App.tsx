@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Maximize, Minimize } from './icons'
 import { api, deviceKind, filesApi, libMap, resolveRows, SESSION, spaceApi, topbarKeyRef, topbarSegments, UNAUTHED, type ClipResult, type FileStat, type Notice, type Pin, type ProfilesResponse, type RowSegments, type SoftKey, type SoftkeysConfig, type SoftkeysResponse, type State, type TopbarResponse, type UnauthedDetail, type UploadResult, type WhoAmI } from '@/lib/api'
 import { applyBrand, applyPrefs, brandId, composeEnter, composeRich, holdRate, keyStyle, panesSort, popupClear, pushPref, type BrandId, type HoldRate, type KeyStyle, type PaneSort, type PopupClear } from '@/lib/prefs'
@@ -544,6 +544,27 @@ export default function App() {
   const compose = useCompose(cfg, showCompose && gate === 'ok', toast)
 
   /**
+   * **界面上认的「焦点」只有这一份**：抢跑提示（focusHint）活着的时候，就当焦点已经在它上面了。
+   *
+   * 原来只有 chat 认这个提示，面板一览 / 文件 / 改动都认列表里的 `focused` —— 于是点一行切
+   * agent，chat 当场换过去了，面板一览里那个选中框却还停在老那行上，要等 goto + 重拉列表
+   * 两次往返之后才挪（用户报的「选中状态始终晚一步」）。同一件事两套口径，就会一先一后。
+   * 所以在这儿把提示**折进列表**（pane 的 `focused` 和工作空间的 `focused` 一起改），往下
+   * 传的都是这一份，各处照旧只看 `focused`，不用各自再认一遍提示。
+   *
+   * **只有两处必须看 herdr 的原话**，别换成这份：focusHint 那个收尾 effect（它判的就是
+   * 「列表追上来没有」），和发件箱（跟着真焦点投，见 useCompose）。
+   */
+  const view = useMemo(() => {
+    const hinted = focusHint ? compose.panes.find((p) => p.id === focusHint) : undefined
+    if (!hinted || hinted.focused) return { panes: compose.panes, spaces: compose.spaces }
+    return {
+      panes: compose.panes.map((p) => (p.focused === (p.id === hinted.id) ? p : { ...p, focused: p.id === hinted.id })),
+      spaces: compose.spaces.map((sp) => (sp.focused === (sp.id === hinted.workspaceId) ? sp : { ...sp, focused: sp.id === hinted.workspaceId })),
+    }
+  }, [focusHint, compose.panes, compose.spaces])
+
+  /**
    * 提示：哪个 agent 等你回答了 / 跑完了（右上角弹一下 + ▦ 上挂个红点）。
    *
    * 间隔是服务端下发的（`HERDR_WEB_NOTICE_MS`，0 = 这个部署关了提示）。state 还没拉回来
@@ -594,7 +615,7 @@ export default function App() {
    * （那是在对面那台机器上跑 git，而那台机器正跑着 agent）。
    */
   const gitDirty = useGitDirty(
-    diffRepo || compose.panes.find((p) => p.focused)?.cwd || undefined,
+    diffRepo || view.panes.find((p) => p.focused)?.cwd || undefined,
     gate === 'ok' && state?.git !== false && noticeDot,
   )
   /**
@@ -603,15 +624,18 @@ export default function App() {
    * 面板关着的时候没人会来更新它 —— 不作废的话你切到另一个项目上，角标还在盯着上一个
    * 项目的改动（见 diffRepo 的注释）。作废只是退回默认，面板一开又会告诉我们准确的那个。
    */
-  const focusWs = compose.panes.find((p) => p.focused)?.workspace
+  const focusWs = view.panes.find((p) => p.focused)?.workspace
   useEffect(() => { setDiffRepo(null) }, [focusWs])
+
+  const loadPanesFn = compose.loadPanes
+  const refreshPanes = useCallback(() => { void loadPanesFn(true) }, [loadPanesFn])
 
   const cwdRef = useRef('')
   useEffect(() => {
     // 认**焦点** pane 而不是发件箱瞄准的那个：屏幕上那行字是焦点 pane 打出来的，
     // 而发件箱可能被钉在别的 pane 上（框里一有草稿就锁定，见 useCompose）。
-    cwdRef.current = compose.panes.find((p) => p.focused)?.cwd ?? ''
-  }, [compose.panes])
+    cwdRef.current = view.panes.find((p) => p.focused)?.cwd ?? ''
+  }, [view.panes])
 
 
 
@@ -2158,8 +2182,8 @@ export default function App() {
         )}
         {panesOpen && (
           <PaneSwitcher
-            panes={compose.panes}
-            spaces={compose.spaces}
+            panes={view.panes}
+            spaces={view.spaces}
             watching={compose.watching}
             onClose={() => setPanel(null)}
             onGoto={(id, zoom) => void gotoPane(id, zoom)}
@@ -2170,7 +2194,7 @@ export default function App() {
         )}
         {filesOpen && (
           <FilesPanel
-            panes={compose.panes}
+            panes={view.panes}
             start={filesAt}
             onClose={() => setPanel(null)}
             onOpen={(p) => void openPath(p)}
@@ -2178,7 +2202,7 @@ export default function App() {
         )}
         {diffOpen && (
           <DiffPanel
-            panes={compose.panes}
+            panes={view.panes}
             profile={profile.id}
             onClose={() => setPanel(null)}
             onBrowse={(d) => openFiles(d)}
@@ -2192,7 +2216,7 @@ export default function App() {
         {chatMounted && (
           <ChatPanel
             hidden={!chatOpen}
-            panes={compose.panes}
+            panes={view.panes}
             // 刚投出去还没在转录里露面的那几条：先在 chat 里本地回显，真的那条读回来再撤掉
             // （投稿 → agent 写进转录 → 我们轮到，中间有几秒空窗，用户报过「投了但 chat 里没有」）
             sent={compose.sent}
@@ -2203,7 +2227,7 @@ export default function App() {
             // 开文本 / 开目录）。agent 给的「下载图片」那种 markdown 链接走的就是这条
             onOpenPath={(p) => void openPath(p)}
             onHealth={setChatOK}
-            focus={focusHint}
+            onRefreshPanes={refreshPanes}
             chatFont={chatFont}
             nudge={keyNudge}
             onPickPane={openPanes}

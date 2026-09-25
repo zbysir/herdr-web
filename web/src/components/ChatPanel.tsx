@@ -87,7 +87,7 @@ const WAIT_MS = 25_000
 const Markdown = lazy(() => import('./ChatMarkdown'))
 
 export function ChatPanel({
-  panes, sent, onDropSent, onClose, onToast, onOpenPath, onHealth, focus, chatFont, nudge, onPickPane, hidden,
+  panes, sent, onDropSent, onClose, onToast, onOpenPath, onHealth, chatFont, nudge, onPickPane, hidden, onRefreshPanes,
 }: {
   /**
    * 关掉 = **藏起来，不卸载**（用户点名的：每次打开都从头读一遍、重新排版，太慢）。
@@ -124,8 +124,8 @@ export function ChatPanel({
    * 左上角那个点原来只说终端，在 chat 模式下就变成「看着像整个 app 掉线了」（用户报的）。
    */
   onHealth?: (ok: boolean) => void
-  /** 刚切过去的那个 pane（抢跑用，见 App 的 focusHint）。没给就按列表里的 focused 走 */
-  focus?: string | null
+  /** 重拉一次 pane 列表（开 agent 之后等它露面用，见 Nobody 的 ③） */
+  onRefreshPanes?: () => void
   /** 一键作答的反馈走 toast（这一下是「顺手做完、结果马上看得见」那类，见 CLAUDE.md） */
   onToast?: (m: string) => void
   /**
@@ -151,10 +151,10 @@ export function ChatPanel({
    * 让人从面板一览挑。
    */
   /**
-   * 抢跑：`focus` 是「刚点过去的那个 pane」，比列表里那个 `focused` 标记早一到两个往返
-   * 到手（见 App 的 focusHint）。列表里已经有那条 pane 的 agent / cwd，所以这儿什么都不缺。
+   * 抢跑那一下（刚点过去的 pane 比列表里的 `focused` 早一到两个往返到手）**已经折进
+   * `panes` 了**（App 的 `view`）—— 面板一览和这儿认的是同一份，所以这儿只看 `focused`。
    */
-  const cur = (focus ? panes.find((p) => p.id === focus) : undefined) ?? panes.find((p) => p.focused)
+  const cur = panes.find((p) => p.focused)
   const info = cur?.agent ? cur : undefined
   const active = info?.id ?? null
 
@@ -735,7 +735,7 @@ export function ChatPanel({
             写着「当前 pane 里没有 agent」（用户报的）。
           */}
           {!active ? (
-            <Nobody pane={cur?.id} onClose={onClose} onStart={start} />
+            <Nobody pane={cur?.id} onClose={onClose} onStart={start} onRefresh={onRefreshPanes} />
           ) : err && !msgs.length ? (
             /*
               **手上有对话时，出错只占顶上一条细带**（见下面那个 Strip），别把整块换掉。
@@ -1200,13 +1200,19 @@ const STARTABLE = ['claude', 'codex'] as const
  *    所以失败就在按钮底下写一行红字（不发 toast —— 那个贴在整屏最下沿，而眼睛在屏幕正中），
  *    而且**成功之后还有一道兜底**：agent 起不来 / herdr 半天不报，`WAIT_MS` 到了就说清楚
  *    「敲下去了，但这个 pane 里还是没检测到」，而不是无限转。
- * ③ 起来之后这一屏**自己就没了** —— `active` 是从 App 那份 pane 列表推的（3 秒一拍），
- *    herdr 一报 `agent` 这个组件就整个卸掉。所以这儿不需要自己去轮，也别自己去猜。
+ * ③ 起来之后这一屏**自己就没了** —— `active` 是从 App 那份 pane 列表推的，herdr 一报
+ *    `agent` 这个组件就整个卸掉。那份列表**不是定时重拉的**：平时靠发件箱那一拍发现焦点
+ *    pane 的 agent 和列表里对不上才拉（useCompose 的 `tick`）—— 漏了那条的表现就是一直停在
+ *    「正在开…」（用户报的）。但发件箱能被关掉，关着时那一拍不跑，所以**点了「开」之后这儿
+ *    自己也轮**（`onRefresh`，3 秒一拍、页面不可见不问；列表带 `rev`，没变只回几十字节）。
+ *    只在 `busy` 时轮：没点过「开」的 shell pane 上不该为这一屏买单。别自己去猜 agent 起没起。
  */
 function Nobody({
-  pane, onClose, onStart,
+  pane, onClose, onStart, onRefresh,
 }: {
   pane?: string
+  /** 重拉 pane 列表（见 ③） */
+  onRefresh?: () => void
   onClose: () => void
   /** 开一个 agent。失败时 throw（错误原文画在这一屏上） */
   onStart?: (agent: 'claude' | 'codex') => Promise<void>
@@ -1230,6 +1236,13 @@ function Nobody({
     const t = window.setTimeout(() => setSlow(true), WAIT_MS)
     return () => clearTimeout(t)
   }, [busy])
+
+  // 敲下去之后自己轮列表（③）。过了 WAIT_MS 也不停：agent 起得慢不等于起不来
+  useEffect(() => {
+    if (!busy || !onRefresh) return
+    const t = window.setInterval(() => { if (!document.hidden) onRefresh() }, 3000)
+    return () => clearInterval(t)
+  }, [busy, onRefresh])
 
   const go = async (agent: 'claude' | 'codex') => {
     if (!onStart || busy) return
