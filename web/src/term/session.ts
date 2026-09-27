@@ -138,6 +138,14 @@ const VV_CAP = 900 // 视口一直在动也得落一次（iOS 上地址栏能来
 const RETRY_MS = [400, 800, 1500, 3000, 5000, 8000] // 最后一档一直用下去
 const MAX_RETRY = 8 // 连不上就别无限敲后端（前台可见时约 30 秒），改成把原因摊在遮罩上
 const PROBE_MS = 3000 // 「你还活着吗」的等回音时间
+/*
+  握手最多等这么久。WebSocket 自己**没有连接超时**：切后台回来那一下发出去的握手要是落在
+  一条僵掉的路上（安卓上常见，见 lib/api.ts 里「每个请求都要有个头」那段），它能一直停在
+  CONNECTING，既不 open 也不 close —— 而 wake() 看到 CONNECTING 就当「正在连，让它连」，
+  于是终端停在「连接中…」很久很久，只有关掉浏览器重开才好（用户报的）。隧道上正常握手是
+  几百毫秒，10 秒宽到足以容下慢网。
+*/
+const CONNECT_MS = 10_000
 
 export class Session {
   readonly term: Terminal
@@ -153,6 +161,8 @@ export class Session {
   private retries = 0
   private retryTimer: ReturnType<typeof setTimeout> | undefined
   private probeTimer: ReturnType<typeof setTimeout> | undefined
+  private connectTimer: ReturnType<typeof setTimeout> | undefined
+  private openedAt = 0
   private paintTimer: ReturnType<typeof setTimeout> | undefined
   private paintHeals = 0
   private settleTimer: ReturnType<typeof setTimeout> | undefined
@@ -399,7 +409,44 @@ export class Session {
       this.send(cut[1], ENTER_GAP_MS)
       return
     }
+    // 粘滞 Ctrl / Alt 也要管条上的键：Ctrl 亮着再点条上的 ↵，要的是 ctrl+enter
+    // （Claude Code 的「ctrl+enter to send now」），不是一个光秃秃的回车（用户报的）
+    const mod = this.stickyMods() > 1 ? this.modKey(bytes, this.stickyMods()) : null
+    if (mod !== null) {
+      this.dropOnce()
+      this.send(mod)
+      return
+    }
     this.send(bytes === '\x1b' ? this.escBytes() : bytes)
+  }
+
+  /** 粘滞修饰键折成 CSI 的修饰位（1 = 没有修饰） */
+  private stickyMods() {
+    return 1 + (this.sticky.alt !== 'off' ? 2 : 0) + (this.sticky.ctrl !== 'off' ? 4 : 0)
+  }
+
+  /** 此刻有没有粘滞修饰键亮着（App 拿它判断「↵ 是投稿还是 ctrl+enter」） */
+  stickyActive() {
+    return this.stickyMods() > 1
+  }
+
+  /**
+   * 带修饰的**功能键**（回车 / Tab / 退格 / Esc / 方向）怎么编。不是功能键回 null。
+   *
+   * 这几个键 legacy 编码里带不上 Ctrl：ctrl+enter 和 enter 都是 `\r`，程序分不出来 ——
+   * 所以原来粘滞 Ctrl + 回车发出去的就是个普通回车。kitty 模式下（herdr 声明了）有
+   * 唯一的编码 `CSI 13;5 u`，和真键盘上按 ctrl+enter 走的 kittySeq 是同一种。
+   * 方向键的 `CSI 1;m A` 是 xterm 的老写法，legacy 下也认。
+   */
+  private modKey(d: string, mods: number): string | null {
+    const arrow = /^\x1b(?:\[|O)([ABCD])$/.exec(d)
+    if (arrow) return `\x1b[1;${mods}${arrow[1]}`
+    const code = d === '\r' || d === '\n' ? 13 : d === '\t' ? 9 : d === '\x7f' ? 127 : d === '\x1b' ? 27 : 0
+    if (!code) return null
+    if (this.kittyOn()) return `\x1b[${code};${mods}u`
+    // 不在 kitty 模式：Ctrl 编不进去，只剩 Alt 的老写法（ESC 前缀）
+    if (code === 27) return this.escBytes()
+    return mods & 2 ? '\x1b' + d : d
   }
 
   private kittySeq(e: KeyboardEvent): string | null {
@@ -462,6 +509,12 @@ export class Session {
     const ctrl = this.sticky.ctrl !== 'off'
     const alt = this.sticky.alt !== 'off'
     if (!ctrl && !alt) return d
+    // 回车 / Tab / 退格 / 方向（软键盘上的回车走的就是这儿）：按功能键编
+    const mod = this.modKey(d, this.stickyMods())
+    if (mod !== null) {
+      this.dropOnce()
+      return mod
+    }
     if (d.length !== 1) {
       // 多字符（粘贴、输入法上屏）不套修饰符：`\x03` 只对单个字符有意义。
       // **一次性的那档到此为止，锁住的留着** —— 锁住就是「我要连着用」
@@ -625,9 +678,12 @@ export class Session {
   private teardown() {
     clearTimeout(this.probeTimer)
     this.probeTimer = undefined
+    clearTimeout(this.connectTimer)
+    this.connectTimer = undefined
     const ws = this.ws
     this.ws = null
     if (!ws) return
+    ws.onopen = null
     ws.onmessage = null
     ws.onclose = null
     ws.onerror = null
@@ -684,6 +740,19 @@ export class Session {
     const ws = new WebSocket(ptyURL(this.term.cols, this.term.rows))
     ws.binaryType = 'arraybuffer'
     this.ws = ws
+    this.openedAt = performance.now()
+    this.connectTimer = setTimeout(() => {
+      this.connectTimer = undefined
+      if (this.ws !== ws || ws.readyState !== WebSocket.CONNECTING) return
+      console.warn('[herdr-web] 握手没回音，重新连')
+      // 已经确定这条走不通，不去 diagnose（它的 fetch 多半也落在同一条僵路上），直接排重连
+      this.teardown()
+      this.retry()
+    }, CONNECT_MS)
+    ws.onopen = () => {
+      clearTimeout(this.connectTimer)
+      this.connectTimer = undefined
+    }
 
     ws.onmessage = (ev) => {
       if (this.ws !== ws) return // 已经被 teardown 换掉了，别再往终端里写
@@ -819,7 +888,14 @@ export class Session {
     */
     this.repaint()
     const st = this.ws?.readyState
-    if (st === WebSocket.CONNECTING) return
+    // 正在连的就让它连 —— 除非这次握手是**藏起来之前**就发出去的（或者已经拖了好几秒）：
+    // 那种多半落在一条僵掉的路上，等 CONNECT_MS 是白等，当场重来。
+    if (st === WebSocket.CONNECTING && performance.now() - this.openedAt < 2000) return
+    if (st === WebSocket.CONNECTING) {
+      this.retries = 0
+      this.open()
+      return
+    }
     if (st === WebSocket.OPEN) {
       this.probe()
       return
@@ -853,7 +929,14 @@ export class Session {
   private async diagnose(): Promise<{ retry: boolean; msg: string }> {
     let r: Response
     try {
-      r = await fetch('/api/state', { credentials: 'same-origin', headers: { 'x-herdr-web': '1' } })
+      // 带超时：这一问要是也挂在僵连接上，retry 就永远排不上（dropped 在等它）
+      const ac = new AbortController()
+      const t = setTimeout(() => ac.abort(), 8000)
+      try {
+        r = await fetch('/api/state', { credentials: 'same-origin', headers: { 'x-herdr-web': '1' }, signal: ac.signal })
+      } finally {
+        clearTimeout(t)
+      }
     } catch {
       // 后端可能是正在重启（改完代码 make run 一下），值得再试
       return { retry: true, msg: '后端没在跑。到 herdr-web 目录里执行 <code>make run</code>（或 <code>./herdr-web</code>）。' }

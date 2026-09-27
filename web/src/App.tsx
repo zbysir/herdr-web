@@ -1608,7 +1608,8 @@ export default function App() {
    * （某些浏览器把焦点挪到了 body）就退回老路子，往终端发。
    */
   const sendKeyBytes = (b: string) => {
-    if ((b === '\r' || b === '\n') && enterSend && showCompose
+    // Ctrl / Alt 亮着时 ↵ 是「带修饰的回车」（ctrl+enter），要进终端，不是投稿
+    if ((b === '\r' || b === '\n') && enterSend && showCompose && !sess.current?.stickyActive()
       && document.activeElement?.closest?.('[data-testid="compose"]')) {
       submitCompose()
       return

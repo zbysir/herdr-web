@@ -151,15 +151,75 @@ async function handle<T>(r: Response): Promise<T> {
   return j as T
 }
 
+/*
+  **每个请求都要有个头，不然一条僵掉的连接能把轮询永久掐住。**
+
+  用户报的：安卓上把浏览器切到后台、回来之后「像没网了一样」，很久很久拿不到新数据，
+  只有关掉浏览器重开才好。原因是叠起来的：
+    ① 切后台期间系统会把页面挂起、把网络连接晾着，中间那几跳（运营商 NAT、反代、frp）
+       早把它丢了，而手机这头**一个 RST 都没收到** —— 连接在浏览器看来还是好的；
+    ② 挂在这条连接上的请求（藏起来之前发出去的那一拍，或者回来后复用了它的新请求）
+       就一直等回音，fetch 自己没有超时，要等 TCP 重传放弃，安卓上是十几分钟；
+    ③ 所有轮询（chat、发件箱、提示、改动角标）都是「上一拍回来了才排下一拍」——
+       这是故意的（不叠请求），代价就是一个不回的请求等于整条轮询停摆，屏幕冻住、不报错。
+  所以两道：
+    - **超时**：等响应头最多这么久（body 慢慢读不算，大文件 / 长转录在慢网上本来就要读一会儿）。
+      写操作给宽一点：投稿要清空输入框、等 settle，几秒是正常的，而这类请求被掐了人得重发。
+    - **回到前台，掐掉「藏起来之前就发出去、到现在还没回」的 GET 并原样重发一次**：
+      那些几乎一定挂在僵连接上，等超时是白等十几秒。只动 GET —— 它们可以放心重发；
+      写操作重发一次可能就是投两遍，那种只等超时、把错报给人。重发是在这里自己做的，
+      调用方看到的只是「这一拍慢了一点」，不会闪一下红字。
+*/
+const GET_TIMEOUT_MS = 20_000
+const WRITE_TIMEOUT_MS = 60_000
+
+type Flying = { ac: AbortController; at: number; stale: boolean }
+const flying = new Set<Flying>()
+let hiddenAt = -1
+// 模块加载时就挂上：要排在各个轮询自己的 visibilitychange 监听**前面**，
+// 这样它们回到前台补的那一拍发出去之前，僵着的那几个已经被掐掉了。
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    hiddenAt = performance.now()
+    return
+  }
+  for (const f of flying) {
+    if (f.at <= hiddenAt) {
+      f.stale = true
+      f.ac.abort()
+    }
+  }
+})
+
+async function send(method: string, path: string, body: unknown): Promise<Response> {
+  const idem = method === 'GET'
+  for (let attempt = 0; ; attempt++) {
+    const f: Flying = { ac: new AbortController(), at: performance.now(), stale: false }
+    let timedOut = false
+    const timer = setTimeout(() => { timedOut = true; f.ac.abort() }, idem ? GET_TIMEOUT_MS : WRITE_TIMEOUT_MS)
+    if (idem) flying.add(f)
+    try {
+      return await fetch(url(path), {
+        method,
+        credentials: 'same-origin',
+        headers: body === undefined ? CSRF : { ...CSRF, 'content-type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: f.ac.signal,
+      })
+    } catch (e) {
+      if (f.stale && attempt === 0) continue // 回到前台被掐的：重发一次
+      if (timedOut) throw new ApiError('网络没回音（超时了）', 0)
+      if (f.stale) throw new ApiError('网络没回音', 0)
+      throw e
+    } finally {
+      clearTimeout(timer)
+      flying.delete(f)
+    }
+  }
+}
+
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
-  return handle<T>(
-    await fetch(url(path), {
-      method,
-      credentials: 'same-origin',
-      headers: body === undefined ? CSRF : { ...CSRF, 'content-type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    }),
-  )
+  return handle<T>(await send(method, path, body))
 }
 
 export const api = {
