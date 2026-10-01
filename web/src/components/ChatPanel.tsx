@@ -1354,6 +1354,14 @@ function Problem({ err, agent }: { err: { msg: string; reason?: string }; agent?
           </p>
         </div>
       )}
+      {err.reason === 'foreign' && (
+        <p className="ml-6">
+          herdr 记在这个 pane 名下的会话，是在<strong className="text-fg">另一个目录</strong>里开的 ——
+          多半是这个 agent 跑测试 / 脚本时起了一个 {a} 子进程，它继承了 pane 的环境，把自己的
+          会话报了上去，盖掉了真正那段。照着显示的话这儿就是一段别人的对话，所以不认。
+          <strong className="text-fg">把这个 pane 里的 {a} 重开一次</strong>（或者 <code className="mx-1 rounded border border-line bg-ctl px-1.5 py-0.5 font-mono text-[11.5px] text-fg">--resume</code> 回到原来那段）就对上了。
+        </p>
+      )}
       {err.reason === 'ambiguous' && (
         <p className="ml-6">
           这个目录下同时开着好几个跑同一个 agent 的 pane，而 herdr 还没拿到会话身份 ——

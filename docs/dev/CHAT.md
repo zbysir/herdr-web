@@ -351,6 +351,20 @@ codex    session id **就在文件名里** → glob `~/.codex/sessions/*/*/*/rol
 `Siblings` 只在没报过会话时才去数（多一次 `pane.list`）—— 装了 hook 的正常情况下一次
 `pane.get` 就够。
 
+### 9.3b 报了会话也要核：**herdr 那个 id 可能是子进程冒报的**
+
+用户报的（2026-10-02）：chat 里显示「读一下 hello.txt，告诉我 magic number」+「运行中 49m」，
+终端里那个 agent 干的是另一件事。查下来是 pane 里的 agent 跑了一个**会起真 `claude` 子进程**
+的测试（`TestLiveCLI`，临时目录里），子进程继承了 pane 的 `HERDR_*` 环境变量，它的
+`SessionStart` hook 照常触发，把**它自己的** session id 报给 herdr、记在这个 pane 名下，
+盖掉了真正那段。herdr 不核这个（它只转发 hook 报的），要等 agent 重开才会改回来。
+
+所以按 id 找到文件之后还要核一道（`transcript.checkOwner`）：转录里记的 cwd 和 pane 的 cwd
+**是同一个项目**（相同 / 一个在另一个底下 —— worktree 和「进子目录开的 agent」都得认，
+符号链接两边都解）才采纳，否则报 `foreign`。**认不出 cwd 就放行**（挡的是明显别处来的，
+不是要求证明清白）。不采纳之后**不退回按 cwd 猜**：冒报多半发生在一个开着好几个 agent pane
+的项目里，正是 9.3 管的情况；界面上让人把 agent 重开一次。
+
 ### 9.4 边界：这一层自己钉，**不借文件浏览那一处**
 
 看 diff 那条路是借 `files.Browser.Check` 当唯一鉴权点（见 `internal/gitdiff`），这儿不能照抄：
@@ -790,7 +804,7 @@ claude 那边没有这条：它的 `/clear` 会换文件，而 §9.6 那条 `sig
   真被别处挪走焦点时不用等满 4 秒：发件箱那条 500ms 的心跳每拍都现问 `pane.current`，
   一发现变了就顺手重拉列表（`useCompose` 的 `switched`）。
 - **页面不可见就不轮询**，3 秒一拍，自排队的 `setTimeout` 不用 `setInterval`（网络一慢会叠）。
-- 读不出来时按**服务端给的 `reason`**（`need_install` / `ambiguous`）说不同的话，
+- 读不出来时按**服务端给的 `reason`**（`need_install` / `ambiguous` / `foreign`）说不同的话，
   **不按错误文案 `includes()` 判断** —— 那是最脆的耦合，改一个字就静默失效
   （为此在 `lib/api.ts` 里加了 `ApiError` 把结构化字段带出来）。
 

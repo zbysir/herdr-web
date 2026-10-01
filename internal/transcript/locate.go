@@ -157,6 +157,9 @@ func (s *Store) find(ref Ref, root string) (Source, error) {
 		if _, err := os.Stat(p); err != nil {
 			return Source{}, err
 		}
+		if err := checkOwner(ref, p); err != nil {
+			return Source{}, err
+		}
 		return Source{Path: p, Agent: ref.Agent, Sig: ref.Value}, nil
 
 	case "id":
@@ -165,6 +168,9 @@ func (s *Store) find(ref Ref, root string) (Source, error) {
 		}
 		p, err := s.byID(ref.Agent, root, ref.Value, ref.CWD)
 		if err != nil {
+			return Source{}, err
+		}
+		if err := checkOwner(ref, p); err != nil {
 			return Source{}, err
 		}
 		return Source{Path: p, Agent: ref.Agent, Sig: ref.Value}, nil
@@ -330,6 +336,80 @@ func codexCWD(path string) string {
 		return ""
 	}
 	return p.CWD
+}
+
+// checkOwner 核一下 herdr 报的这份转录是不是**这个 pane** 的（见 ErrForeign）。
+//
+// 判据是「转录里记的 cwd 和 pane 的 cwd 是不是同一个项目」。**认不出来就放行**（转录里
+// 没有 cwd、pane 没报 cwd）—— 这道是挡「明显是别处来的」，不是要求证明清白；拿不准就挡
+// 的话，格式哪天变一下 chat 就整个打不开了。
+//
+// 不采纳之后**不退回去按 cwd 猜**：冒报多半发生在一个本来就开着好几个 agent pane 的项目里
+// （一个 agent 在跑测试，旁边还有别的），那正是「同一个目录多个 pane 就不猜」那条规矩
+// 管的情况；而让人把 agent 重开一次，herdr 那边就改回来了。
+func checkOwner(ref Ref, path string) error {
+	if ref.CWD == "" {
+		return nil
+	}
+	var cwd string
+	if ref.Agent == "codex" {
+		cwd = codexCWD(path)
+	} else {
+		cwd = claudeCWD(path)
+	}
+	if cwd == "" || sameProject(cwd, ref.CWD) {
+		return nil
+	}
+	return fmt.Errorf("%w：会话记在 %s，这个 pane 在 %s", ErrForeign, oneLine(cwd, 80), oneLine(ref.CWD, 80))
+}
+
+// sameProject 两个目录是不是同一个项目：相同，或者一个在另一个底下。
+//
+// 「底下」两个方向都要认：claude 的 worktree 会话 cwd 是 `<项目>/.claude/worktrees/x`
+// 而 pane 还停在项目根上；反过来 pane 也可能 cd 进了子目录再开的 agent。
+// 符号链接两边都解一下（macOS 上 `/var` 是 `/private/var` 的链接，同一个目录两种写法）。
+func sameProject(a, b string) bool {
+	norm := func(p string) string {
+		p = filepath.Clean(p)
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			p = r
+		}
+		return p
+	}
+	a, b = norm(a), norm(b)
+	under := func(x, y string) bool {
+		return x == y || y == string(filepath.Separator) || strings.HasPrefix(x, y+string(filepath.Separator))
+	}
+	return under(a, b) || under(b, a)
+}
+
+// claudeCWD 从 claude 转录的头几行里拿 cwd。
+//
+// 头一行不一定带（`summary` / `file-history-snapshot` 那几种没有），所以在头 64KB 里
+// 找第一条带 cwd 的整行；最后那半行不算。和 codexCWD 一样在这儿掐住读多少。
+func claudeCWD(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	buf := make([]byte, 64<<10)
+	n, _ := f.Read(buf)
+	b := buf[:n]
+	for len(b) > 0 {
+		i := indexByte(b, '\n')
+		if i < 0 {
+			break
+		}
+		var l struct {
+			CWD string `json:"cwd"`
+		}
+		if json.Unmarshal(b[:i], &l) == nil && l.CWD != "" {
+			return l.CWD
+		}
+		b = b[i+1:]
+	}
+	return ""
 }
 
 // underRoot 把 hook 报上来的路径夹在根底下。

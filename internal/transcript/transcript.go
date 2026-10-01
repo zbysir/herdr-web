@@ -188,6 +188,14 @@ var (
 	// 「找不到会话 670b5857-… 的转录文件」，看着像坏了（用户报的「提示比较生硬」）。
 	// 说完第一句，下一拍轮询就读得到了，不用做任何事。
 	ErrNoTranscript = errors.New("这个会话还没有对话记录")
+	// ErrForeign herdr 报的那个会话**不属于这个 pane**：转录里记的 cwd 和 pane 的 cwd 毫无关系。
+	//
+	// 实测的来路：pane 里的 agent 跑了一个会起真 `claude` 子进程的测试（临时目录里），
+	// 子进程继承了 pane 的 `HERDR_*` 环境变量，于是它的 SessionStart hook 把**它自己的**
+	// session id 报给了 herdr、记在这个 pane 名下，盖掉了真正那段。照单全收的表现是 chat
+	// 里显示一段别人的对话（「读一下 hello.txt」那种），而且「运行中」的计时永远停在那个
+	// 子进程退出的时候 —— herdr 那边要等 agent 重开才会改回来。见 locate.go 的 sameProject。
+	ErrForeign = errors.New("herdr 报的会话不属于这个 pane 的目录")
 	// ErrUnsupported 这个 agent 的转录格式还没支持。
 	ErrUnsupported = errors.New("还不支持这个 agent 的会话记录")
 )

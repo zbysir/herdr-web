@@ -607,6 +607,7 @@ var errNoAgent = errors.New("这个 pane 里没有 agent")
 //
 //	409 + need_install   herdr 还没拿到会话身份 → 界面上要说「装 integration / 重开这个 agent」
 //	409 + ambiguous      同一个目录好几个 agent pane → 说清为什么不猜
+//	409 + foreign        herdr 报的会话不是这个 pane 的（子进程 claude 冒报）→ 让人重开 agent
 //	409 + no_transcript  会话有了、文件还没有 → 多半是「还没对话」，界面上是空状态不是错误
 //	404                  这个 agent 的格式还不支持（只有 claude / codex）
 //	400                  这个 pane 里压根没有 agent
@@ -620,6 +621,11 @@ func chatFail(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"error":  err.Error(),
 			"reason": "ambiguous",
+		})
+	case errors.Is(err, transcript.ErrForeign):
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":  err.Error(),
+			"reason": "foreign",
 		})
 	case errors.Is(err, transcript.ErrNoTranscript):
 		writeJSON(w, http.StatusConflict, map[string]any{

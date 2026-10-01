@@ -277,3 +277,45 @@ func TestFindByIDNoTranscriptYet(t *testing.T) {
 		}
 	}
 }
+
+// **herdr 报的会话不是这个 pane 的就不采纳。** 实测来路：pane 里的 agent 跑了个会起真
+// claude 子进程的测试，子进程继承了 `HERDR_*`，它的 SessionStart hook 把临时目录里那段
+// 会话报成了这个 pane 的 —— chat 里显示「读一下 hello.txt」，而终端里是另一回事。
+func TestFindRejectsForeignSession(t *testing.T) {
+	s := store(t)
+	p := filepath.Join(s.ClaudeRoot, "-private-var-folders-T-TestLiveCLI-proj", uuid+".jsonl")
+	os.MkdirAll(filepath.Dir(p), 0o700)
+	body := `{"type":"file-history-snapshot"}` + "\n" +
+		`{"type":"user","cwd":"/private/var/folders/T/TestLiveCLI/proj"}` + "\n"
+	os.WriteFile(p, []byte(body), 0o600)
+	_, err := s.Find(Ref{Agent: "claude", Kind: "id", Value: uuid, CWD: "/Users/bysir/dev/bysir/shuttle"})
+	if !errors.Is(err, ErrForeign) {
+		t.Fatalf("cwd 对不上该报 ErrForeign，实际 %v", err)
+	}
+}
+
+// 同一个项目的几种合法形状都得放行：worktree（会话在 pane 底下）、pane 进了子目录、
+// 转录里认不出 cwd。
+func TestFindAcceptsSameProject(t *testing.T) {
+	for _, c := range []struct{ sess, pane string }{
+		{"/w/proj", "/w/proj"},
+		{"/w/proj/.claude/worktrees/x", "/w/proj"},
+		{"/w/proj", "/w/proj/sub"},
+		{"", "/w/proj"},
+	} {
+		s := store(t)
+		p := filepath.Join(s.ClaudeRoot, "-w-proj", uuid+".jsonl")
+		os.MkdirAll(filepath.Dir(p), 0o700)
+		line := "{}\n"
+		if c.sess != "" {
+			line = `{"type":"user","cwd":"` + c.sess + `"}` + "\n"
+		}
+		os.WriteFile(p, []byte(line), 0o600)
+		if _, err := s.Find(Ref{Agent: "claude", Kind: "id", Value: uuid, CWD: c.pane}); err != nil {
+			t.Fatalf("%q 在 %q 底下开的会话该认：%v", c.sess, c.pane, err)
+		}
+	}
+	if sameProject("/w/proj", "/w/project") {
+		t.Fatal("前缀相同不等于在底下")
+	}
+}

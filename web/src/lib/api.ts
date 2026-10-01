@@ -753,7 +753,7 @@ export const chatApi = {
   /**
    * 读某个 pane 的对话。`from` 是上一拍的 `next`（0 / 省略 = 整份重来，只给尾部那些）。
    *
-   * 读不出来时抛 `ApiError`，`reason` 是机器判据（'need_install' / 'ambiguous'）——
+   * 读不出来时抛 `ApiError`，`reason` 是机器判据（'need_install' / 'ambiguous' / 'foreign'）——
    * 别按文案判断，见 ApiError 的注释。
    */
   log: (pane: string, from = 0, sig = '') =>
