@@ -47,6 +47,8 @@ type Ref struct {
 	// Siblings 同一个 cwd 下还有几个跑着同一个 agent 的 pane（含自己）。
 	// 只在**没报过会话**时用得上：>1 就一律不猜，见 ErrAmbiguous。
 	Siblings int
+	// Pane herdr 的 pane id。冒报时拿它去认「这个 pane 里那个 claude 进程」（见 live.go）。
+	Pane string
 }
 
 // Store 定位 + 一点缓存。
@@ -59,6 +61,8 @@ type Store struct {
 	// 生产上就是 ~/.claude/projects 和 ~/.codex/sessions。
 	ClaudeRoot string
 	CodexRoot  string
+	// PaneOf 进程 → 它环境里的 HERDR_PANE_ID。nil 就是真去读（paneOfPIDs），留成字段给测试换。
+	PaneOf func(pids []int) map[int]string
 
 	mu sync.Mutex
 	// cache 懒初始化 —— **零值的 Store 必须能用**：两个根是导出字段，直接用结构体字面量
@@ -111,7 +115,9 @@ func (s *Store) Find(ref Ref) (Source, error) {
 	if err != nil {
 		return Source{}, err
 	}
-	key := strings.Join([]string{ref.Agent, ref.Kind, ref.Value, ref.CWD}, "\x00")
+	// 带上 pane：冒报时好几个 pane 会报**同一个** id（同一个子进程先后盖了它们），
+	// 不带的话找回来的真会话会串到隔壁 pane 上。
+	key := strings.Join([]string{ref.Agent, ref.Kind, ref.Value, ref.CWD, ref.Pane}, "\x00")
 	s.mu.Lock()
 	if e, ok := s.cache[key]; ok && time.Since(e.at) < cacheTTL {
 		s.mu.Unlock()
@@ -158,7 +164,7 @@ func (s *Store) find(ref Ref, root string) (Source, error) {
 			return Source{}, err
 		}
 		if err := checkOwner(ref, p); err != nil {
-			return Source{}, err
+			return s.recover(ref, root, err)
 		}
 		return Source{Path: p, Agent: ref.Agent, Sig: ref.Value}, nil
 
@@ -171,7 +177,7 @@ func (s *Store) find(ref Ref, root string) (Source, error) {
 			return Source{}, err
 		}
 		if err := checkOwner(ref, p); err != nil {
-			return Source{}, err
+			return s.recover(ref, root, err)
 		}
 		return Source{Path: p, Agent: ref.Agent, Sig: ref.Value}, nil
 	}
@@ -188,6 +194,24 @@ func (s *Store) find(ref Ref, root string) (Source, error) {
 	// 猜出来的那份，sig 用文件路径而不是 session id —— 前端只拿 sig 判「换了没换」，
 	// 而这条路上「换了会话」的表现正是换了一份文件。
 	return Source{Path: p, Agent: ref.Agent, Sig: "path:" + p}, nil
+}
+
+// recover herdr 报的是冒报（foreign）时，按进程找回这个 pane 真正那段（见 live.go）。
+// 找不到就原样报 foreign。只有 claude 有那份 pid 文件，codex 照旧请人重开。
+func (s *Store) recover(ref Ref, root string, foreign error) (Source, error) {
+	if ref.Agent != "claude" {
+		return Source{}, foreign
+	}
+	id := s.paneClaude(ref)
+	if id == "" {
+		return Source{}, foreign
+	}
+	p, err := s.byID(ref.Agent, root, id, ref.CWD)
+	if err != nil {
+		// 进程在、文件还没有：新开的会话还没说话。照「还没对话」那条报，别报 foreign。
+		return Source{}, err
+	}
+	return Source{Path: p, Agent: ref.Agent, Sig: id}, nil
 }
 
 // byID 按 session id 找文件。
@@ -346,7 +370,7 @@ func codexCWD(path string) string {
 //
 // 不采纳之后**不退回去按 cwd 猜**：冒报多半发生在一个本来就开着好几个 agent pane 的项目里
 // （一个 agent 在跑测试，旁边还有别的），那正是「同一个目录多个 pane 就不猜」那条规矩
-// 管的情况；而让人把 agent 重开一次，herdr 那边就改回来了。
+// 管的情况。找回真会话靠的是进程（recover / live.go），不是猜。
 func checkOwner(ref Ref, path string) error {
 	if ref.CWD == "" {
 		return nil

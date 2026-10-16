@@ -319,3 +319,41 @@ func TestFindAcceptsSameProject(t *testing.T) {
 		t.Fatal("前缀相同不等于在底下")
 	}
 }
+
+// 冒报之后按进程找回真会话：herdr 报的是子进程那段（cwd 对不上），而这个 pane 里那个
+// 交互式 claude 的 pid 文件 + 环境里的 HERDR_PANE_ID 指着真正那段。
+// 冒报的子进程本身（sdk-cli）环境里也是这个 pane，必须被 entrypoint 那道筛掉。
+func TestFindRecoversForeignByProcess(t *testing.T) {
+	s := store(t)
+	const bogus = "11111111-1111-1111-1111-111111111111"
+	const real = "22222222-2222-2222-2222-222222222222"
+	const other = "33333333-3333-3333-3333-333333333333"
+	write := func(path, body string) {
+		os.MkdirAll(filepath.Dir(path), 0o700)
+		os.WriteFile(path, []byte(body), 0o600)
+	}
+	write(filepath.Join(s.ClaudeRoot, "-tmp-annulo", bogus+".jsonl"), `{"type":"user","cwd":"/tmp/annulo"}`+"\n")
+	write(filepath.Join(s.ClaudeRoot, "-w-proj", real+".jsonl"), `{"type":"user","cwd":"/w/proj"}`+"\n")
+	write(filepath.Join(s.ClaudeRoot, "-w-proj", other+".jsonl"), `{"type":"user","cwd":"/w/proj"}`+"\n")
+	// 三个都用本进程的 pid 当「还活着」，靠 PaneOf 区分是哪个 pane 的。
+	me := os.Getpid()
+	sess := filepath.Join(filepath.Dir(s.ClaudeRoot), "sessions")
+	write(filepath.Join(sess, "1.json"), `{"pid":`+itoa(me)+`,"sessionId":"`+bogus+`","cwd":"/w/proj/sub","entrypoint":"sdk-cli"}`)
+	write(filepath.Join(sess, "2.json"), `{"pid":`+itoa(me)+`,"sessionId":"`+other+`","cwd":"/w/proj","entrypoint":"cli","startedAt":3}`)
+	write(filepath.Join(sess, "3.json"), `{"pid":`+itoa(me)+`,"sessionId":"`+real+`","cwd":"/w/proj","entrypoint":"cli","startedAt":2}`)
+	s.PaneOf = func(pids []int) map[int]string { return map[int]string{me: "w1:pA"} }
+
+	got, err := s.Find(Ref{Agent: "claude", Kind: "id", Value: bogus, CWD: "/w/proj", Pane: "w1:pB"})
+	if !errors.Is(err, ErrForeign) {
+		t.Fatalf("pane 对不上该照旧报 foreign，实际 %v / %+v", err, got)
+	}
+	got, err = s.Find(Ref{Agent: "claude", Kind: "id", Value: bogus, CWD: "/w/proj", Pane: "w1:pA"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 两个 cli 都在这个 pane 名下时取后开的那个（other，startedAt 3）；sdk-cli 那份不认。
+	if got.Sig != other || !strings.HasSuffix(got.Path, other+".jsonl") {
+		t.Fatalf("该找回后开的那段，实际 %+v", got)
+	}
+}
+

@@ -158,7 +158,7 @@ func (s *Server) chatRef(sess *live, pane string) (transcript.Ref, string, error
 	if p.Agent == "" {
 		return transcript.Ref{}, "", errNoAgent
 	}
-	ref := transcript.Ref{Agent: p.Agent, CWD: p.CWD}
+	ref := transcript.Ref{Agent: p.Agent, CWD: p.CWD, Pane: p.PaneID}
 	if as := p.AgentSession; as != nil && as.Value != "" {
 		ref.Kind, ref.Value = as.Kind, as.Value
 		return ref, p.AgentStatus, nil

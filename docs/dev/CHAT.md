@@ -363,7 +363,18 @@ codex    session id **就在文件名里** → glob `~/.codex/sessions/*/*/*/rol
 **是同一个项目**（相同 / 一个在另一个底下 —— worktree 和「进子目录开的 agent」都得认，
 符号链接两边都解）才采纳，否则报 `foreign`。**认不出 cwd 就放行**（挡的是明显别处来的，
 不是要求证明清白）。不采纳之后**不退回按 cwd 猜**：冒报多半发生在一个开着好几个 agent pane
-的项目里，正是 9.3 管的情况；界面上让人把 agent 重开一次。
+的项目里，正是 9.3 管的情况。
+
+**不采纳之后要自己找回真会话，不能只请人重开**（用户报的，2026-10-16：「前一秒还好好的，
+后面就突然报这个错」「重启一下不是一个好的方案」）。冒报是**反复发生**的 —— annulo 这类工具
+在 pane 里长期挂着一个 `claude -p` 后端，每起一次就盖一次；实测一个子进程把**两个** pane
+（`w16:p0` / `w16:p25`）都盖成了同一个 id。真身份从 herdr 以外拿（`transcript/live.go`）：
+claude 给每个活着的进程写 `~/.claude/sessions/<pid>.json`（sessionId / cwd / entrypoint），
+pane 里那个 claude 的环境变量里带着 `HERDR_PANE_ID`（macOS `ps eww`、Linux `/proc/<pid>/environ`）。
+三道筛：进程活着、**entrypoint 是 `cli`**（冒报那个子进程的 `HERDR_PANE_ID` 也是这个 pane ——
+它就是这么冒报的 —— 区别只在它是 `sdk-cli`）、cwd 同项目。缓存 key 必须带 pane id，不然
+两个被盖成同一个 id 的 pane 会串成同一段。找不到（codex 没有这份 pid 文件 / 读不到进程环境）
+才报 `foreign`、请人重开。
 
 ### 9.4 边界：这一层自己钉，**不借文件浏览那一处**
 
