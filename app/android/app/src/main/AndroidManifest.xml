@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 后台通知（NoticeService）：前台服务 + 弹通知 + 请求不受电池优化限制 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Herdr">
+        <!--
+          configChanges 全接住：转屏 / 接外接键盘 / 分屏改尺寸时 Activity 不重建 ——
+          重建等于 WebView 整个重载，终端断开重连、chat 从头读，而网页那边本来就会按视口重排。
+          adjustResize 配合 MainActivity 里按 IME inset 垫 padding：键盘一弹 WebView 变矮，
+          和 PWA 上 interactive-widget=resizes-content 是同一个效果。
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <receiver
+            android:name=".AgentsWidget"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/agents_widget" />
+        </receiver>
+        <!--
+          specialUse 而不是 dataSync：后者在 Android 15 上一天最多跑 6 小时，而这个服务要一直挂着。
+          它干的事是「长连自己托管的服务器、收提示」，没有更贴切的类型。
+        -->
+        <service
+            android:name=".NoticeService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Long-poll the user's self-hosted herdr-web server for agent notices" />
+        </service>
+    </application>
+</manifest>

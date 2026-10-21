@@ -724,6 +724,10 @@ func LabelFromUA(ua string) string {
 	}
 	br := ""
 	switch {
+	// 原生壳（app/android）的 WebView 在 UA 末尾加了这一截。它的 UA 里也有 Chrome，
+	// 不先认它的话设备列表里和手机浏览器同名，批准页上也分不清是谁在要凭据
+	case strings.Contains(ua, "HerdrWebApp"):
+		br = "App"
 	case strings.Contains(ua, "Edg"):
 		br = "Edge"
 	case strings.Contains(ua, "CriOS"), strings.Contains(ua, "Chrome"):

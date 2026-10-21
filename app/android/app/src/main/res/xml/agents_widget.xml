@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  不靠系统定时刷新（updatePeriodMillis = 0）：数据是后台服务（NoticeService）长轮询拿到、
+  状态一变就推过来的（AgentsWidget.push）。系统那个定时最短半小时，靠它的话一览永远是旧的。
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/widget_desc"
+    android:initialLayout="@layout/widget_agents"
+    android:minWidth="250dp"
+    android:minHeight="110dp"
+    android:minResizeWidth="180dp"
+    android:minResizeHeight="80dp"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+    android:updatePeriodMillis="0"
+    android:previewLayout="@layout/widget_agents"
+    android:widgetCategory="home_screen" />

@@ -101,6 +101,13 @@ type Watcher struct {
 	worked    map[string]bool
 	notes     []Notice
 	seq       uint64
+	// bell 来一条新提示就关掉、换一个新的 —— 「广播给所有在等的人」最省事的写法。
+	// 长轮询（WaitNotices）挂在它上面，见那儿的注释
+	bell chan struct{}
+	// stVer / stBell 是「agent 状态一览」那一档的版本号和铃：任何一个 agent 的状态变了
+	// （包括头一回见到）就加一、打铃。原生 App 常驻通知里那份一览挂在上面（WaitStatus）
+	stVer  uint64
+	stBell chan struct{}
 }
 
 // New：file 是存时间的 JSON（传空字符串就只在内存里）。
@@ -111,6 +118,7 @@ func New(socket, file string) *Watcher {
 		pane: map[string]herdr.Pane{}, pend: map[string]string{}, busy: map[string]bool{},
 		lastText: map[string]string{}, seeding: map[string]bool{}, decided: map[string]uint64{},
 		lastClass: map[string]string{}, worked: map[string]bool{},
+		bell: make(chan struct{}), stBell: make(chan struct{}),
 	}
 	w.load()
 	return w
@@ -278,12 +286,21 @@ func (w *Watcher) observe(p herdr.Pane) (bool, string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.term[p.PaneID] = p.TerminalID
+	prev, seen := w.pane[p.TerminalID]
 	w.pane[p.TerminalID] = p
 	if p.AgentStatus == "working" {
 		w.worked[p.TerminalID] = true // 重新开工了：下一条同类提示就是「下一件事」
 	}
 	old, ok := w.status[p.TerminalID]
 	w.status[p.TerminalID] = p.AgentStatus
+	// 标题变了也算「一览变了」：一览里每行的正文就是标题（agent 自己起的会话名），只认状态的话
+	// 数量对、正文一直是旧的（用户在桌面小部件上看到的）。标题是 herdr 去掉转圈字符之后的那份，
+	// 实测在跑的时候也是稳的，不会每 3 秒抖一次把长轮询白叫醒
+	if !ok || old != p.AgentStatus || (seen && prev.Title != p.Title) {
+		w.stVer++
+		close(w.stBell)
+		w.stBell = make(chan struct{})
+	}
 	if ok && old != p.AgentStatus {
 		w.at[p.TerminalID] = time.Now().UnixMilli()
 		w.dirty = true
@@ -376,5 +393,32 @@ func (w *Watcher) save() {
 	}
 	if err := os.Rename(tmp, w.file); err != nil {
 		_ = os.Remove(tmp)
+	}
+}
+
+// WaitStatus 挂着等「有 agent 的状态变了」：版本号和 ver 不一样就当场回新的，否则等到变了、
+// 等满 max、或者 ctx 断了。
+//
+// 给原生 App 常驻通知里的「agent 状态一览」用（app/android 的 NoticeService）。和
+// WaitNotices 是一个道理：手机上不能几秒问一次，挂着等的话状态一变一览就跟着变。
+// 注意它只管「变没变」，列表本身由调用方另取（server 那边走 outbox.ListTargets，
+// 标题 / 工作空间这些 watcher 手上没有）。
+func (w *Watcher) WaitStatus(ctx context.Context, ver uint64, max time.Duration) uint64 {
+	deadline := time.NewTimer(max)
+	defer deadline.Stop()
+	for {
+		w.mu.RLock()
+		cur, bell := w.stVer, w.stBell
+		w.mu.RUnlock()
+		if cur != ver {
+			return cur
+		}
+		select {
+		case <-bell:
+		case <-deadline.C:
+			return cur
+		case <-ctx.Done():
+			return cur
+		}
 	}
 }

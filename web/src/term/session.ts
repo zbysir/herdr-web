@@ -609,21 +609,37 @@ export class Session {
    * 启动时查颜色、DSR）也走 onData，拦了 herdr 会卡在等回答上；② 挂在**外层 host 的捕获阶段**：
    * xterm 自己在输入框上挂的就是捕获监听，同一元素上后挂的排在它后面，拦不住，得在它之前拦。
    */
-  private holdTyping = false
-  setHoldTyping(on: boolean) {
-    if (this.holdTyping === on) return
-    this.holdTyping = on
+  /*
+    **拦的理由不止一个**，所以是一个集合：连接期间（`link`，见 App 的 whenReady）和 chat
+    「各看各的」时 herdr 的焦点还没拉到这台设备那个 pane 上（`own`，见 App 的 alignFocus）。
+    写成一个布尔的话，连上那一下 whenReady 放开，就把 `own` 那道也一起放了 —— 字落进别人的 pane。
+  */
+  private holds = new Set<string>()
+  private get holdTyping() { return this.holds.size > 0 }
+  setHoldTyping(on: boolean, why = 'link') {
+    const was = this.holdTyping
+    if (on) this.holds.add(why)
+    else this.holds.delete(why)
     // 拦下期间输入法可能在框里攒了字（组词那一段拦不掉），放开时清掉，别让 xterm 事后读到
-    if (!on) {
+    if (was && !this.holdTyping) {
       const el = this.kbdEl()
       if (el) el.value = ''
     }
+  }
+  /** 拦下了人打的字（给 `own` 那道用：被拦就说明人要去终端了，见 App） */
+  private heldCbs = new Set<() => void>()
+  onHeld(fn: () => void) {
+    this.heldCbs.add(fn)
+    return () => { this.heldCbs.delete(fn) }
   }
   private installTypingHold() {
     const block = (e: Event) => {
       if (!this.holdTyping || e.target !== this.kbdEl()) return
       e.preventDefault()
       e.stopPropagation()
+      const k = e as KeyboardEvent
+      if (e.type === 'keydown' && ['Shift', 'Control', 'Alt', 'Meta'].includes(k.key)) return
+      this.heldCbs.forEach((f) => f())
     }
     for (const t of ['keydown', 'keypress', 'beforeinput', 'input', 'compositionend']) {
       this.host.addEventListener(t, block, true)

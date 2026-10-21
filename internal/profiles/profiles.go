@@ -77,7 +77,8 @@ var Kinds = map[string]bool{"phone": true, "tablet": true, "desktop": true}
 // **不在里面的**是这些：kbdFullErr（上次全屏为什么失败，一条本机诊断）、面板的尺寸位置
 // （还要按横竖屏各存一份，见前端 lib/oriented.ts）、提示的未读游标、发件箱瞄准哪个 pane，
 // 以及发件箱 / 快捷键条显不显示 —— 最后这几个是随手开关的视图状态，一次会话里点十几次，
-// 每点一次写一趟服务端不值当。
+// 每点一次写一趟服务端不值当。chat「各看各的」那一档里**这台设备看的是哪个 pane** 也不在
+// 里面（开关 `chatOwn` 在）：它是一台设备的事，跟着套走的话同一套排布的两台手机会互相改。
 var Prefs = []string{
 	"fontSize", "chatFont", "scheme", "brand",
 	"kitty", "meta", "copyOnSelect", "sync2026", "switchPanel",
@@ -86,6 +87,7 @@ var Prefs = []string{
 	"keyStyle", "popupClear", "holdRate",
 	"diffWrap", "panesSort",
 	"composeEnter", "composeRich",
+	"chatOwn",
 }
 
 // Profile 是一套排布的身份 + 它自己那几个小开关。

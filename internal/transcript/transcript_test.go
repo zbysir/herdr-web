@@ -74,6 +74,10 @@ func TestClaudeParse(t *testing.T) {
 		// 三个字段全认不出时**按人话放过去** —— 宁可多显示一条机器消息（一眼看得见），
 		// 也不要再来一次「人话静静消失」。中间那条 origin=task-notification 照旧挡在外面。
 		"human 三个字段都没有时按人话放过去",
+		// 带了贴图的排队人话，prompt 是 `[text, image]` 数组而不是字符串 —— 原来字段声明成
+		// string，整行解析失败、被当坏行跳过（用户报的「丢数据了」）。只贴了图的给占位。
+		"human [Image #1] 排队时贴了图的这句也要出现",
+		"human [图片]",
 	}
 	diff(t, want, got)
 }

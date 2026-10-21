@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/zbysir/herdr-web/internal/agentwatch"
 	"github.com/zbysir/herdr-web/internal/config"
@@ -47,6 +48,28 @@ func (l *live) notices(since uint64) ([]agentwatch.Notice, uint64) {
 	}
 	list, seq := l.agents.Notices(since)
 	return list, seq
+}
+
+// waitStatus 挂着等「有 agent 状态变了」（agentwatch.WaitStatus）。没在盯的时候等满再回 ——
+// 当场回的话对面会变成一个死循环地狂发请求。
+func (l *live) waitStatus(ctx context.Context, ver uint64, max time.Duration) uint64 {
+	if l.agents == nil {
+		select {
+		case <-time.After(max):
+		case <-ctx.Done():
+		}
+		return ver
+	}
+	return l.agents.WaitStatus(ctx, ver, max)
+}
+
+// waitNotices 是 notices 的长轮询版（agentwatch.WaitNotices）。没在盯的时候直接回空的 ——
+// 等也等不来，挂着只会让对面以为连着。
+func (l *live) waitNotices(ctx context.Context, since uint64, max time.Duration) ([]agentwatch.Notice, uint64) {
+	if l.agents == nil {
+		return []agentwatch.Notice{}, 0
+	}
+	return l.agents.WaitNotices(ctx, since, max)
 }
 
 // sessionOf 取请求里的 session 名（空 = 默认 session）。

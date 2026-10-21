@@ -6,6 +6,8 @@ import type { Pin } from '@/lib/api'
 import { BRANDS, HOLD_RATES, PANE_SORTS, POPUP_CLEARS, type BrandId, type HoldRate, type KeyStyle, type PaneSort, type PopupClear } from '@/lib/prefs'
 import { enableNotify, notifyState, testNotify, type NotifyState } from '@/lib/notify'
 import { installState, onInstallChange, promptInstall, type InstallState } from '@/lib/install'
+import { isNative, postNative } from '@/lib/native'
+import { NativeNotify } from './NativeNotify'
 import { Panel } from './ui/panel'
 import { Button } from './ui/button'
 import { Checkbox } from './ui/checkbox'
@@ -65,7 +67,7 @@ export function SettingsPanel({
   tab, onTab, onClose, opts, setOpt, card, onCard, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs,
   kbdFull, onKbdFull, keyStyle, onKeyStyle, popupClear, onPopupClear, holdRate, onHoldRate,
   paneSort, onPaneSort,
-  enterSend, onEnterSend, rich, onRich,
+  enterSend, onEnterSend, rich, onRich, chatOwn, onChatOwn,
   heals, onSaved, onTopbar, toast, state,
   fontSize, onFont, chatFont, onChatFont, scheme, onScheme, brand, onBrand, profile, onProfiles,
 }: {
@@ -110,6 +112,9 @@ export function SettingsPanel({
   /** 发件箱的输入框：富的（图片 chip 住在框里）还是纯 textarea。**那一档是退路**，同上 */
   rich: boolean
   onRich: (v: boolean) => void
+  /** chat 模式下这台设备看自己的 pane（true）还是跟着 herdr 的焦点（见 lib/prefs 的 chatOwn） */
+  chatOwn: boolean
+  onChatOwn: (v: boolean) => void
   heals: number
   onSaved: (c: SoftkeysConfig) => void
   /** 顶栏存好了：把新的那一串 id 交回去，顶栏立刻跟着变（不用刷新页面） */
@@ -193,6 +198,7 @@ export function SettingsPanel({
           paneSort={paneSort} onPaneSort={onPaneSort}
           enterSend={enterSend} onEnterSend={onEnterSend}
           rich={rich} onRich={onRich}
+          chatOwn={chatOwn} onChatOwn={onChatOwn}
           osFg={osFg} onOSFg={onOSFg} cardMs={cardMs} onCardMs={onCardMs}
           heals={heals} state={state} toast={toast}
           fontSize={fontSize} onFont={onFont} chatFont={chatFont} onChatFont={onChatFont} scheme={scheme} onScheme={onScheme}
@@ -209,7 +215,7 @@ export function SettingsPanel({
 function TermSection({
   opts, setOpt, card, onCard, dot, onDot, os, onOS, osFg, onOSFg, cardMs, onCardMs, kbdFull, onKbdFull,
   keyStyle, onKeyStyle, popupClear, onPopupClear, holdRate, onHoldRate, paneSort, onPaneSort,
-  enterSend, onEnterSend, rich, onRich,
+  enterSend, onEnterSend, rich, onRich, chatOwn, onChatOwn,
   heals, state, fontSize, onFont, chatFont, onChatFont, scheme, onScheme, brand, onBrand, toast,
 }: {
   opts: TermOpts
@@ -242,6 +248,9 @@ function TermSection({
   /** 发件箱：输入框用富的（图片 chip 住在框里）还是纯 textarea。**那一档是退路** */
   rich: boolean
   onRich: (v: boolean) => void
+  /** chat 模式下这台设备看自己的 pane（true）还是跟着 herdr 的焦点（见 lib/prefs 的 chatOwn） */
+  chatOwn: boolean
+  onChatOwn: (v: boolean) => void
   toast: (m: string) => void
   heals: number
   state?: State | null
@@ -489,10 +498,35 @@ function TermSection({
         <span className="text-xs text-faint">次/秒（左快右慢）。按住约 0.4 秒开始连发，只有 ↑↓←→ 和 PgUp/PgDn 有</span>
       </div>
 
+      {/* chat 的「各看各的」。放在发件箱那两件**上面**：它决定的正是发件箱投给谁（开着时
+          发件箱指名投给这台设备看着的那个 pane），挨着放才看得出两件是一回事。 */}
+      <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-line pt-3 text-[13px]">
+        对话看哪个 pane
+        <div className="flex overflow-hidden rounded-md border border-line">
+          <Button
+            size="tiny" on={!chatOwn} title="跟着 herdr 的焦点走（默认）：哪台设备切了，大家一起切"
+            className="rounded-none border-0 border-r border-line"
+            onClick={() => onChatOwn(false)}
+          >
+            跟随焦点
+          </Button>
+          <Button
+            size="tiny" on={chatOwn} title="这台设备在对话里看自己挑的 pane，切了不影响别的设备"
+            className="rounded-none border-0"
+            onClick={() => onChatOwn(true)}
+          >
+            各看各的
+          </Button>
+        </div>
+        <span className="text-xs text-faint">
+          「各看各的」：对话里切 pane 只换这台设备的，发件箱也投给它；回到终端时 herdr 的焦点会跳到这个 pane 上
+        </span>
+      </div>
+
       {/* 发件箱那两件。发件箱现在是**一行**（输入框 + 一个投稿键），原来那一排控件
           （投给谁 / 拉回 / 图 / 双向）全没了 —— 拉回和双向同步整个去掉了（只保留发信），
           传图在顶栏 / 快捷键条上。见 components/Compose.tsx 那段注释。 */}
-      <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-line pt-3 text-[13px]">
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-[13px]">
         发件箱回车
         <div className="flex overflow-hidden rounded-md border border-line">
           <Button
@@ -592,6 +626,8 @@ function TermSection({
         </span>
       </label>
 
+      {/* 原生壳里换成壳那套后台通知（App 关着也收得到）；网页这套在 WebView 里用不了 */}
+      {isNative() ? <NativeNotify /> : (<>
       {/* 系统通知：本地开关 + 浏览器权限两件事。权限**当场问一次**再显示 ——
           用户可能在浏览器设置里把它撤了，只信 localStorage 会显示成开着但一条都不弹。 */}
       <label
@@ -639,10 +675,25 @@ function TermSection({
           我正看着这一页时也弹
         </label>
       </div>
+      </>)}
 
       {/* 装成 app。放在通知旁边是因为它们是同一类东西 —— 浏览器 / 操作系统那侧的能力，
           不是终端的开关（见 TUI-VS-GUI.md 的第 ④ 条）。装好之后这一行只剩一句话，
           不再留一个按不动的按钮占位。 */}
+      {/* 原生壳里：本来就是 app，「装成 app」没意义；换成「连的是哪台」+ 换服务器的入口。
+          壳里只有连不上时的错误页才有「换服务器」，连上了就得从这儿走（用户问的「怎么换域名」） */}
+      {isNative() ? (
+      <div className="mt-3 border-t border-line pt-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[13px]">连接的服务器</span>
+          <span className="truncate font-mono text-xs text-muted">{location.origin}</span>
+          <Button size="tiny" onClick={() => postNative({ t: 'setup' })}>换服务器</Button>
+        </div>
+        <p className="mt-1 text-xs/relaxed text-faint">
+          换到另一台 herdr-web 要在那台上重新登录（配对码或 passkey）；这台的登录状态留着，换回来不用再登。
+        </p>
+      </div>
+      ) : (
       <div className="mt-3 border-t border-line pt-3">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[13px]">装成 app</span>
@@ -666,6 +717,7 @@ function TermSection({
         </div>
         <p className="mt-1 text-xs/relaxed text-faint">{INSTALL_HINT[inst]}</p>
       </div>
+      )}
 
       {heals > 0 && (
         <p className="mt-3 text-xs/relaxed text-muted">

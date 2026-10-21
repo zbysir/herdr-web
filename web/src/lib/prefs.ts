@@ -32,6 +32,7 @@ export const PREF_KEYS = [
   'keyStyle', 'popupClear', 'holdRate',
   'diffWrap', 'panesSort',
   'composeEnter', 'composeRich',
+  'chatOwn',
 ] as const
 export type PrefKey = (typeof PREF_KEYS)[number]
 
@@ -229,3 +230,20 @@ export const brandId = (): BrandId => {
 export const applyBrand = (id: BrandId) => {
   document.documentElement.dataset.brand = id
 }
+
+/**
+ * chat 模式下**这台设备看自己的 pane**（「各看各的」），还是跟着 herdr 的焦点走（默认）。
+ *
+ * 为什么要这一档：herdr 的焦点全机只有一个，所有设备共用 —— 平板上在 chat 里切到 A，手机上
+ * 的 chat 也跟着跳到 A（用户要的是「多个设备各开各的对话区」）。终端模式做不到这件事（大家
+ * attach 的是同一个 herdr、同一屏），chat 做得到：读的是那个 pane 的会话记录、投稿能指名
+ * pane，都不靠焦点。
+ *
+ * 开着时：在 chat 里切 pane **只改这台设备记的那个**（`chatPane`，本机 localStorage，
+ * 不跟着套走），不动 herdr 的焦点；发件箱、留在 chat 里发的那几个键都指名投给它。
+ * 一回终端就回到共享的那个焦点 —— 回去那一下先把 herdr 的焦点拉到这台设备正看着的 pane 上
+ * （见 App 的 `alignFocus`）。
+ *
+ * 默认关：只有一台设备的人开着它只多一件要想的事（「我在 chat 里切了，终端怎么没跟着」）。
+ */
+export const chatOwn = () => localStorage.getItem('chatOwn') === '1'

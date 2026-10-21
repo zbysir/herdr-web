@@ -17,6 +17,8 @@
 | 认证、配对、暴露形态、文件浏览 / 看 diff 那条路 | [SECURITY.md](SECURITY.md) —— 分层设计 + 哪些禁令不能绕 |
 | **chat 模式**（对话流代替那一屏 TUI） | [CHAT.md](CHAT.md) —— 内容从哪儿来：读 agent 自己写的 JSONL，不读屏 |
 | **要不要新做一块界面**（还是该扩 herdr 的 TUI） | [TUI-VS-GUI.md](TUI-VS-GUI.md) —— 六条触发条件 + 反向判据 + 动手前的成本清单 |
+| **原生 App**（开发中，Android 先） | [NATIVE-APP.md](NATIVE-APP.md) —— 原生壳 + WebView：认证怎么进 WebView、推送为什么要中转和端到端加密 |
+| **原生 App 要不要换框架**（nsh 之类，还是原生壳 + WebView） | [WHY-NOT-NSH.md](WHY-NOT-NSH.md) —— 卡在终端上：nsh 没有 WebSocket，中间路线两头吃亏 |
 | **把 agent 起的本地服务（`localhost:5312`）代理出来**（方案，未开发） | [PORT-PROXY.md](PORT-PROXY.md) —— 为什么不能走路径前缀、子域名方案要在 herdr-web 和域名上各做什么 |
 
 还有两份在根上，因为它们同时是使用说明：

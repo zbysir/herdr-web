@@ -1,6 +1,7 @@
 package agentwatch
 
 import (
+	"context"
 	"log"
 	"strings"
 	"time"
@@ -284,14 +285,49 @@ func (w *Watcher) emit(p herdr.Pane, status string) {
 		return
 	}
 	w.lastText[p.TerminalID] = body
-	w.seq++
-	w.notes = append(w.notes, Notice{
-		Seq: w.seq, At: time.Now().UnixMilli(),
+	w.addLocked(Notice{
+		At:   time.Now().UnixMilli(),
 		Pane: p.PaneID, Term: p.TerminalID, Agent: p.Agent,
 		Status: status, Title: p.Title, Text: body,
 	})
-	if n := len(w.notes) - keepNotices; n > 0 {
-		w.notes = append(w.notes[:0], w.notes[n:]...)
+}
+
+// addLocked 把一条提示放进环里、打一下铃（叫醒在 WaitNotices 上挂着的）。调用方持写锁。
+func (w *Watcher) addLocked(n Notice) {
+	w.seq++
+	n.Seq = w.seq
+	w.notes = append(w.notes, n)
+	if k := len(w.notes) - keepNotices; k > 0 {
+		w.notes = append(w.notes[:0], w.notes[k:]...)
+	}
+	close(w.bell)
+	w.bell = make(chan struct{})
+}
+
+// WaitNotices 是 Notices 的长轮询版：此刻没有新的就挂着，等到来了一条、等满 max、
+// 或者 ctx 断了（对面挂了）才回。
+//
+// 给原生 App 的后台服务用的（app/android 的 NoticeService）：它要在 App 不在前台时也弹
+// 系统通知，而手机上**每几秒发一次请求**会让基带一直醒着、电掉得很快。挂着等的话一分钟
+// 才一个请求，提示却几乎是实时的。网页那边照旧短轮询（页面在前台，没这个顾虑）。
+func (w *Watcher) WaitNotices(ctx context.Context, since uint64, max time.Duration) ([]Notice, uint64) {
+	deadline := time.NewTimer(max)
+	defer deadline.Stop()
+	for {
+		w.mu.RLock()
+		bell := w.bell
+		w.mu.RUnlock()
+		// 先拿铃再查：查完到挂上去之间来的那条也会把这个铃关掉，漏不了
+		if list, seq := w.Notices(since); len(list) > 0 {
+			return list, seq
+		}
+		select {
+		case <-bell:
+		case <-deadline.C:
+			return w.Notices(since)
+		case <-ctx.Done():
+			return w.Notices(since)
+		}
 	}
 }
 

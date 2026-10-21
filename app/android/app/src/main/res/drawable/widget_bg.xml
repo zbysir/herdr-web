@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 小部件底：和 App 同一个深底（color/bg），圆角跟系统桌面的小部件对齐 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#F2121212" />
+    <corners android:radius="20dp" />
+</shape>

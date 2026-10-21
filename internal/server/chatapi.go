@@ -17,8 +17,8 @@ import (
 // chat 模式那条路的 HTTP 层。数据从哪儿来、为什么是读文件而不是读屏，都在
 // internal/transcript 的包注释和 docs/dev/CHAT.md 里，这儿只讲路由和「读不出来时怎么说」。
 //
-// **读那个口（`log`）是只读的，另外两个口各只发一件形状固定的事**：`answer` 只发
-// 「↓ ×n + ↵」，`start` 只发那张白名单里的一个命令名 + ↵。**这儿刻意不做「往 pane 里发任意
+// **读那个口（`log`）是只读的，另外三个口各只发一件形状固定的事**：`answer` 只发
+// 「↓ ×n + ↵」，`start` 只发那张白名单里的一个命令名 + ↵，`key` 只发三个键里的一个。**这儿刻意不做「往 pane 里发任意
 // 文本」的通道** —— 发言走的是现成的发件箱（`/api/herdr/say` → `agent.prompt`），那条路上
 // 那几个坑（清空要 2N−1 次、`text:…enter` 的回车要隔 200ms、回车发送必须挡输入法）全是拿
 // 真机换来的，另开一条通道就是把它们再踩一遍。
@@ -40,6 +40,10 @@ func (s *Server) apiChat(w http.ResponseWriter, r *http.Request, seg []string) {
 	}
 	if seg[1] == "start" && r.Method == http.MethodPost {
 		s.chatStart(w, r)
+		return
+	}
+	if seg[1] == "key" && r.Method == http.MethodPost {
+		s.chatKey(w, r)
 		return
 	}
 	if seg[1] != "log" || r.Method != http.MethodGet {
@@ -724,4 +728,53 @@ func (s *Server) chatStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"pane": b.Pane, "agent": b.Agent})
+}
+
+// chatKeys 是 `/chat/key` 认的全部键：前端 chat 模式下**留在 chat 里发**的那几个
+// （App.tsx 的 `chatVisible`：回车 / Esc / ⌃C）去掉「一串字 + 回车」那种 —— 那种走发件箱
+// （`/herdr/say` 指名 pane），理由见包头那段：这儿不开「往 pane 里发任意文本」的通道。
+// 左边是前端发来的名字，右边是 herdr 的键名（`esc` / `ctrl+c` / `enter`，0.9.0 实测认）。
+var chatKeys = map[string]string{"esc": "esc", "ctrl+c": "ctrl+c", "enter": "enter"}
+
+// chatKey 往**指名的** pane 里按一个键。给 chat 的「各看各的」那一档用（前端 prefs 的
+// `chatOwn`）。
+//
+// 为什么要这个口：chat 模式下那几个「效果在对话流里看得见」的键原来是借终端那条 WebSocket
+// 发的，落在 herdr **焦点**那个 pane 上 —— 跟着焦点走时 chat 看的也是那个，所以两者是同一个。
+// 各看各的时这台设备看的 pane 和 herdr 的焦点不是同一个（焦点可能正被另一台设备拿着），
+// 再借终端发就是**按到了别人正看着的那个 agent 上**（一个 Esc 打断的是别人的活），而且
+// 这边一点症状都没有。所以指名 pane，走 herdr 的 `pane.send_input`。
+func (s *Server) chatKey(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		Pane string
+		Key  string
+	}
+	if err := readJSON(r, &b); err != nil {
+		fail(w, 400, err)
+		return
+	}
+	if b.Pane == "" {
+		fail(w, 400, errf("要带上 pane"))
+		return
+	}
+	key, ok := chatKeys[b.Key]
+	if !ok {
+		fail(w, 400, fmt.Errorf("按不了 %q —— 这个口只认 esc / ctrl+c / enter", b.Key))
+		return
+	}
+	name, err := sessionOf(r)
+	if err != nil {
+		fail(w, 400, err)
+		return
+	}
+	sess, err := s.live(name)
+	if err != nil {
+		fail(w, 400, err)
+		return
+	}
+	if err := sess.outbox.C.SendKeys(b.Pane, []string{key}); err != nil {
+		fail(w, 400, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"pane": b.Pane, "key": b.Key})
 }

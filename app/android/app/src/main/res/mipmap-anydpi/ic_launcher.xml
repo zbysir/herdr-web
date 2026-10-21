@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  前景用网页那张 maskable 图（assets/make-logo.py 出的，别手改）。自适应图标只露出图层中间
+  72/108，而 maskable 只保证中心 80% 的圆 —— 所以先往里缩 1/6，让露出来的正好是整张图。
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/icon_bg" />
+    <foreground>
+        <inset android:drawable="@drawable/ic_launcher_art" android:inset="16.7%" />
+    </foreground>
+</adaptive-icon>

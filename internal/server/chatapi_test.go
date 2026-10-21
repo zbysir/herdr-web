@@ -930,3 +930,46 @@ func quote(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
 }
+
+// /chat/key：指名 pane 按一个键（chat「各看各的」那一档用）。只认三个键，落在**点名的**
+// pane 上 —— 落到焦点那个 pane 上正是这个口要避免的事。
+func TestChatKey(t *testing.T) {
+	panes := []map[string]any{
+		{"pane_id": "p1", "agent": "claude", "cwd": "/w", "agent_status": "working", "focused": true},
+		{"pane_id": "p2", "agent": "claude", "cwd": "/w", "agent_status": "idle"},
+	}
+	for _, k := range []string{"esc", "ctrl+c", "enter"} {
+		s, _, keys := chatServerKeys(t, true, panes)
+		w := postKey(t, s, `{"pane":"p2","key":"`+k+`"}`)
+		if w.Code != 200 {
+			t.Fatalf("%s：%d %s", k, w.Code, w.Body.String())
+		}
+		got := keys.all()
+		if len(got) != 1 || got[0].Pane != "p2" || strings.Join(got[0].Keys, ",") != k || got[0].Text != "" {
+			t.Fatalf("%s：该往 p2 按一下 %s，实际 %+v", k, k, got)
+		}
+	}
+	for _, body := range []string{
+		`{"pane":"p2","key":"a"}`,
+		`{"pane":"p2","key":"ctrl+d"}`,
+		`{"pane":"p2","key":""}`,
+		`{"key":"esc"}`,
+	} {
+		s, _, keys := chatServerKeys(t, true, panes)
+		if w := postKey(t, s, body); w.Code != 400 {
+			t.Fatalf("%s 该 400，实际 %d", body, w.Code)
+		}
+		if n := len(keys.all()); n != 0 {
+			t.Fatalf("%s：参数错却发出去了 %d 次", body, n)
+		}
+	}
+}
+
+func postKey(t *testing.T, s *Server, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest("POST", "/api/chat/key", strings.NewReader(body))
+	r.Header.Set("content-type", "application/json")
+	w := httptest.NewRecorder()
+	s.apiChat(w, r, []string{"chat", "key"})
+	return w
+}

@@ -9,6 +9,8 @@
 // 另外那个事件对象是**一次性**的：`prompt()` 只能调一次，调完这一份就作废了，
 // 想再装得重新加载页面。所以用掉之后要把它丢掉，界面跟着改口。
 
+import { isNative } from './native'
+
 /** 'installed' 已经在独立窗口里跑了；'ready' 点一下就能装；'no' 浏览器没给我们这条路 */
 export type InstallState = 'installed' | 'ready' | 'no'
 
@@ -32,6 +34,8 @@ const emit = () => subs.forEach((f) => f())
  * 模式，人得从图标重新打开），所以读一次就够，没上 matchMedia 的 change 监听。
  */
 export function isStandalone(): boolean {
+  // 原生壳里同理：没有地址栏，「呼键盘自动全屏」只会赔一次重排；「装成 app」那个按钮也该说已经装了
+  if (isNative()) return true
   if (typeof matchMedia === 'function' && matchMedia('(display-mode: standalone)').matches) return true
   return (navigator as unknown as { standalone?: boolean }).standalone === true
 }

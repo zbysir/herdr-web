@@ -122,8 +122,11 @@ type clLine struct {
 // 但**排队发的人话也走这条路**，见 parseClaude 的第 ④ 条。
 type clAttachment struct {
 	Type string `json:"type"`
-	// Prompt 排队那条人话的原文（`type == "queued_command"` 时）
-	Prompt string `json:"prompt"`
+	// Prompt 排队那条人话的原文（`type == "queued_command"` 时）。**两种形状**：纯文字是
+	// 字符串；带了贴图就是 `[{type:"text"},{type:"image"}]` 数组 —— 和直接打的那条同一个
+	// 道理（见 claudeUser 的 ⑤）。原来声明成 string，数组那种让**整行**解析失败、被当坏行
+	// 跳过：带图的排队人话一条都不显示，而且完全静默（用户报的「丢数据了」）。
+	Prompt json.RawMessage `json:"prompt"`
 	// Origin.Kind 是**现在**那条判据：`human` / `task-notification`。实测带 origin 的记录里
 	// 它和 CommandMode 永远一致，而它比 HumanTurn 可靠得多（见 claudeQueued 那段）。
 	Origin struct {
@@ -216,12 +219,43 @@ func claudeQueued(l *clLine, out *[]Msg) {
 	if a == nil || a.Type != "queued_command" || !humanQueued(a) {
 		return
 	}
+	raw, imgs := promptText(a.Prompt)
 	// 和直接打的那条走同一套剥壳（排队发的也会被包 pasted_content / 斜杠命令壳）
-	text := humanText(a.Prompt)
+	text := humanText(raw)
 	if text == "" {
-		return
+		if imgs == 0 {
+			return
+		}
+		text = "[图片]" // 只贴了图：和 claudeSay 同一句占位
 	}
 	*out = append(*out, Msg{ID: l.UUID, Kind: KindHuman, Text: clip(text, 4000), At: l.Timestamp})
+}
+
+// promptText 从排队那条的 prompt 里取文字：字符串原样，数组取 text 块、数 image 块。
+// 图片本身不带出去（理由同 claudeUser 的 ⑤：一张图几百 KB base64，正文里本来就有
+// `[Image #n]` 记号）。
+func promptText(p json.RawMessage) (string, int) {
+	var s string
+	if json.Unmarshal(p, &s) == nil {
+		return s, 0
+	}
+	var blocks []clBlock
+	if json.Unmarshal(p, &blocks) != nil {
+		return "", 0
+	}
+	var say []string
+	imgs := 0
+	for _, b := range blocks {
+		switch b.Type {
+		case "text":
+			if t := strings.TrimSpace(b.Text); t != "" {
+				say = append(say, t)
+			}
+		case "image":
+			imgs++
+		}
+	}
+	return strings.Join(say, "\n"), imgs
 }
 
 // humanQueued 回答「这条排队的消息是不是人说的」。判据的来历见 claudeQueued 上面那段。

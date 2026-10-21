@@ -370,3 +370,11 @@ func TestPublicPortIgnoresLegacyLoopbackToken(t *testing.T) {
 		t.Errorf("公网口上不该认这把 token，得到 %+v", id)
 	}
 }
+
+// 原生壳的 WebView UA 里同时有 Chrome 和 HerdrWebApp，必须认成 App
+func TestLabelFromUAApp(t *testing.T) {
+	ua := "Mozilla/5.0 (Linux; Android 16; Pixel 7 Build/BP2A; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/133.0.6943.137 Mobile Safari/537.36 HerdrWebApp/0.1.0"
+	if got := LabelFromUA(ua); got != "Android · App" {
+		t.Fatalf("got %q", got)
+	}
+}

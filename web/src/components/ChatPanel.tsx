@@ -87,7 +87,7 @@ const WAIT_MS = 25_000
 const Markdown = lazy(() => import('./ChatMarkdown'))
 
 export function ChatPanel({
-  panes, sent, onDropSent, onClose, onToast, onOpenPath, onHealth, chatFont, nudge, onPickPane, hidden, onRefreshPanes,
+  panes, sent, onDropSent, onClose, onToast, onOpenPath, onHealth, chatFont, nudge, onPickPane, hidden, onRefreshPanes, onStatus,
 }: {
   /**
    * 关掉 = **藏起来，不卸载**（用户点名的：每次打开都从头读一遍、重新排版，太慢）。
@@ -126,6 +126,12 @@ export function ChatPanel({
   onHealth?: (ok: boolean) => void
   /** 重拉一次 pane 列表（开 agent 之后等它露面用，见 Nobody 的 ③） */
   onRefreshPanes?: () => void
+  /**
+   * 正看着的 pane 此刻是什么状态（藏起来时报空）。App 拿它判「各看各的」时这次完成算不算
+   * 看过了（见 App 里 MarkRead 那段）—— **pane 列表在 chat 里待着时是不刷新的**，
+   * 人看着 agent 跑完，只有这条轮询知道它 done 了。
+   */
+  onStatus?: (pane: string, status: string) => void
   /** 一键作答的反馈走 toast（这一下是「顺手做完、结果马上看得见」那类，见 CLAUDE.md） */
   onToast?: (m: string) => void
   /**
@@ -615,6 +621,7 @@ export function ChatPanel({
   // 而且 60 秒还没被真的那条顶掉就不再画 —— 一直挂着「投递中」比没有更让人不放心。
   const pending = (sent ?? []).filter((x) => x.target === active && Date.now() - x.at < 60_000)
   const st = meta?.status ?? info?.status ?? ''
+  useEffect(() => { onStatus?.(hidden ? '' : active ?? '', hidden ? '' : st) }, [onStatus, hidden, active, st])
 
   return (
     /*

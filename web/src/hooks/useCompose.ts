@@ -23,7 +23,12 @@ export interface SentEcho {
 /** 最多留几条回显。同时挂着好几条「投递中」本身就说明出问题了，留多了只是噪音 */
 const SENT_MAX = 8
 
-export function useCompose(cfg: ComposeCfg, visible: boolean, toast: (m: string) => void) {
+/**
+ * `aimAt`：**指名投给这个 pane**，盖过「跟随焦点」和草稿锁定。chat「各看各的」那一档用
+ * （lib/prefs 的 `chatOwn`）：这台设备看的 pane 和 herdr 的焦点不是一回事，跟着焦点投就是
+ * 「看着 A 的对话把话发给了 B」—— 而 B 此刻可能正被另一台设备看着。空 = 老规矩。
+ */
+export function useCompose(cfg: ComposeCfg, visible: boolean, toast: (m: string) => void, aimAt?: string | null) {
   const [text, setText] = useState('')
   const [panes, setPanes] = useState<Pane[]>([])
   /** 工作空间那一层（和 panes 同一拍回来，见 lib/api.ts 的 Space） */
@@ -72,7 +77,13 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, toast: (m: string)
    * pane 就该跟着换成新 pane 的内容。用「有没有字」当判据的话，只要框里有东西目标
    * 就被钉死，切 pane 后 input 再也不更新。
    */
-  const aimed = useCallback(() => (pinned.current && own.current ? pinned.current : FOLLOW), [])
+  // 镜像：aimed 是 useCallback（轮询和投稿的闭包都拿它），依赖里不能有每次都变的东西
+  const aimRef = useRef(aimAt)
+  aimRef.current = aimAt
+  const aimed = useCallback(
+    () => aimRef.current || (pinned.current && own.current ? pinned.current : FOLLOW),
+    [],
+  )
 
   const label = useCallback((r: SyncResult | SayResult) => {
     const cached = panes.find((p) => p.id === r.target)
@@ -248,7 +259,7 @@ export function useCompose(cfg: ComposeCfg, visible: boolean, toast: (m: string)
     const first = !resolved.current
     const switched = r.target !== resolved.current
     resolved.current = r.target
-    const pinNote = target === FOLLOW ? '' : ' · 草稿锁在这个 pane 上'
+    const pinNote = target === FOLLOW ? '' : aimRef.current ? ' · 这台设备的对话' : ' · 草稿锁在这个 pane 上'
 
     if (switched) {
       /*

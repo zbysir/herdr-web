@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 底色和网页暗色的 color-bg 一致：启动到页面画出来之前不闪白 -->
+    <style name="Theme.Herdr" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:colorBackground">@color/bg</item>
+        <item name="android:colorAccent">@color/brand</item>
+    </style>
+    <color name="bg">#121212</color>
+    <color name="brand">#3ECF8E</color>
+    <color name="icon_bg">#2B2B2B</color>
+</resources>

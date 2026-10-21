@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -26,7 +27,89 @@ type Outbox struct {
 	// 由 internal/agentwatch 提供，可以为 nil —— herdr 的 API 里没有任何时间戳，
 	// 时间是那边盯着事件自己打的，拿不到就当不知道，只影响显示不影响排序。
 	Seen func(paneID string) int64
+
+	readMu sync.Mutex // MarkRead 那一来一回别和另一次交错（交错了回不到原焦点）
 }
+
+// MarkRead 把 herdr 里这个 pane 的「跑完了」（`done`）清成「看过了」（`idle`）。
+//
+// **为什么要这一下**：herdr 的 `done` = idle 且**还没被看过**，而「看过」只有一个来源 ——
+// 焦点落到它上面（herdr 的 API 里 `seen` 只能读不能写；`pane.report_agent` 倒是能改状态，
+// 但那会把这个 pane 的状态归属从 claude / codex 的 hook 手里抢过来）。chat「各看各的」的
+// 全部意义是不动焦点，于是在 chat 里一个个点过去看完了，herdr 侧栏和面板一览里还是一片
+// 「完成」（用户报的，要的是**连 herdr 自己的侧栏一起清**，所有设备一起变）。
+//
+// 所以借一下焦点：聚焦目标 → 停 markReadDwell → 聚焦回原来那个。实测（herdr 0.9.5，
+// 挂一个 TUI 客户端、用 pyte 抓它的屏幕）：
+//   - **服务端和 TUI 客户端各记一份「看过没有」**（维护者在 herdr#3912 里说的）。
+//     不停顿地一来一回（1.4ms），服务端那份清了（agent.list 报 idle），**TUI 侧栏里那个点
+//     还是实心的** —— 第一版就是这么写的，用户报「无效」。客户端得先收到一次「焦点在它
+//     上面」的推送才认；本机上停 5ms 就够，取 30ms 留余量（远程客户端多一段网络，没量过）；
+//   - 代价是这 30ms 里所有挂着的客户端都真切过去了，可能闪一帧；
+//   - 跨工作空间、跨 tab 都清得掉；原焦点那个 tab 的全屏（zoom）不受影响；
+//   - 代价：目标所在 tab / 工作空间「上次停在哪个 pane」会变成它（那本来就是它该在的地方）。
+//
+// 目标**本来就是焦点**时光聚焦它不会再置 seen（真机上见过 focused 而 done 的 pane），
+// 所以先挪到别的 pane 再挪回来。
+//
+// seq 是前端看到 done 时的 `state_change_seq`：对不上说明它之后又变过（又跑了一轮 / 已经
+// 被人看过了），这时不动 —— 别把一次没人看过的新完成顺手吞掉。
+func (o *Outbox) MarkRead(pane string, seq uint64) error {
+	if pane == "" {
+		return fmt.Errorf("要说是哪个 pane")
+	}
+	o.readMu.Lock()
+	defer o.readMu.Unlock()
+	ags, err := o.C.AgentList()
+	if err != nil {
+		return err
+	}
+	hit := false
+	for _, a := range ags {
+		if a.PaneID == pane && a.AgentStatus == "done" && (seq == 0 || a.Seq == seq) {
+			hit = true
+			break
+		}
+	}
+	if !hit {
+		return nil
+	}
+	panes, err := o.C.PaneList()
+	if err != nil {
+		return err
+	}
+	orig, other := "", ""
+	for _, p := range panes {
+		if p.Focused {
+			orig = p.PaneID
+		}
+		if p.PaneID != pane && other == "" {
+			other = p.PaneID
+		}
+	}
+	if orig == pane {
+		if other == "" {
+			return nil // 只有这一个 pane：没处可挪，也没有别人在看别的
+		}
+		if err := o.C.PaneFocus(other); err != nil {
+			return err
+		}
+	} else if orig == "" {
+		orig = pane // 说不清原焦点在哪：那就停在它上面，不乱挪到第三个地方
+	}
+	if err := o.C.PaneFocus(pane); err != nil {
+		return err
+	}
+	if orig != pane {
+		time.Sleep(markReadDwell)
+		return o.C.PaneFocus(orig)
+	}
+	return nil
+}
+
+// markReadDwell MarkRead 借焦点时在目标上停多久，见 MarkRead。别改成 0：服务端照样清，
+// 但各个 TUI 客户端的侧栏不认，表现是「herdr-web 里没了、herdr 侧栏里还亮着」。
+const markReadDwell = 30 * time.Millisecond
 
 // Target 是一个可投的 pane。
 //

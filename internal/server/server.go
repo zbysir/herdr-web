@@ -610,6 +610,24 @@ func (s *Server) apiHerdr(w http.ResponseWriter, r *http.Request, seg []string) 
 		body["rev"] = rev
 		writeJSON(w, 200, body)
 
+	// 「这个 pane 那次跑完了，有人看过了」：chat「各看各的」不动 herdr 的焦点，herdr 的
+	// done 就清不掉，所以借焦点一来一回让 herdr 自己清（见 outbox.MarkRead）。
+	// seq 是前端看到 done 时那个 state_change_seq —— 带着它来，它之后又跑完的那次不会被误标。
+	case seg[1] == "read" && r.Method == http.MethodPost:
+		var b struct {
+			Pane string
+			Seq  uint64
+		}
+		if err := readJSON(r, &b); err != nil {
+			fail(w, 400, err)
+			return
+		}
+		if err := sess.outbox.MarkRead(b.Pane, b.Seq); err != nil {
+			fail(w, 400, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
+
 	// 跳到某个 pane：切焦点 + 全屏，一次调用（herdr 的 pane.zoom 按 pane_id 寻址，
 	// 跨 workspace / tab 也一起切过去）。手机上「面板一览」点一行走的就是这个口 ——
 	// 按键那条通道只能表达相对导航，说不出「让 w5:p3 全屏」。
@@ -675,9 +693,47 @@ func (s *Server) apiHerdr(w http.ResponseWriter, r *http.Request, seg []string) 
 	case seg[1] == "notices" && r.Method == http.MethodGet:
 		since, _ := strconv.ParseUint(q.Get("since"), 10, 64) // 解析不了就当 0（全给）
 		list, seq := sess.notices(since)
+		// `wait=秒`：长轮询，没有新的就挂着等（原生 App 的后台服务用，见 WaitNotices）。
+		// 上限 50 秒 —— 隧道 / 反代那一层常见 60 秒空闲就掐，得赶在它前面回
+		if wv, _ := strconv.Atoi(q.Get("wait")); wv > 0 && len(list) == 0 {
+			list, seq = sess.waitNotices(r.Context(), since, time.Duration(min(wv, 50))*time.Second)
+		}
 		writeJSON(w, 200, map[string]any{
 			"notices": list, "seq": seq, "watching": sess.watching(),
 		})
+
+	// agent 状态一览：只给 agent pane 的精简一行（状态 / 哪个项目 / 标题），给原生 App
+	// 常驻通知用（app/android 的 NoticeService）。`ver` 是上次拿到的版本号，`wait=秒` 长轮询：
+	// 状态没变就挂着（agentwatch.WaitStatus），变了当场回。上限 50 秒，理由同 notices。
+	//
+	// 不复用 /panes：那一份 53 个 pane 二十多 KB，而这条是手机在后台、走隧道、一分钟起码
+	// 一次地问。
+	case seg[1] == "agents" && r.Method == http.MethodGet:
+		ver, _ := strconv.ParseUint(q.Get("ver"), 10, 64)
+		if wv, _ := strconv.Atoi(q.Get("wait")); wv > 0 {
+			ver = sess.waitStatus(r.Context(), ver, time.Duration(min(wv, 50))*time.Second)
+		}
+		list, _, err := sess.outbox.ListTargets()
+		if err != nil {
+			fail(w, 400, err)
+			return
+		}
+		type row struct {
+			Pane      string `json:"pane"`
+			Agent     string `json:"agent"`
+			Status    string `json:"status"`
+			Workspace string `json:"workspace"`
+			Title     string `json:"title"`
+			Changed   int64  `json:"changed,omitempty"`
+		}
+		out := []row{}
+		for _, t := range list {
+			if t.Agent == "" {
+				continue
+			}
+			out = append(out, row{t.ID, t.Agent, t.Status, t.Workspace, t.Title, t.Changed})
+		}
+		writeJSON(w, 200, map[string]any{"agents": out, "ver": ver})
 
 	// 发件箱的轮询口：只回答「投给谁」（焦点在哪、什么 agent、什么状态），**不读屏**。
 	// 原来这一拍还抄回输入框里的字（自动拉回），和 /draft（双向同步）、/pull 一起去掉了，

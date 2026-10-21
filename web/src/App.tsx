@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Maximize, Minimize } from './icons'
 import { api, deviceKind, filesApi, libMap, resolveRows, SESSION, spaceApi, topbarKeyRef, topbarSegments, UNAUTHED, type ClipResult, type FileStat, type Notice, type Pin, type ProfilesResponse, type RowSegments, type SoftKey, type SoftkeysConfig, type SoftkeysResponse, type State, type TopbarResponse, type UnauthedDetail, type UploadResult, type WhoAmI } from '@/lib/api'
-import { applyBrand, applyPrefs, brandId, composeEnter, composeRich, holdRate, keyStyle, panesSort, popupClear, pushPref, type BrandId, type HoldRate, type KeyStyle, type PaneSort, type PopupClear } from '@/lib/prefs'
+import { applyBrand, applyPrefs, brandId, chatOwn, composeEnter, composeRich, holdRate, keyStyle, panesSort, popupClear, pushPref, type BrandId, type HoldRate, type KeyStyle, type PaneSort, type PopupClear } from '@/lib/prefs'
 import { cacheLayout, readLayoutCache } from '@/lib/layoutcache'
 import { readClipboard, writeClipboard } from '@/lib/clipboard'
 import { Session } from '@/term/session'
@@ -17,6 +17,7 @@ import { useGitDirty } from '@/hooks/useGitDirty'
 import { useLanDirect } from '@/hooks/useLanDirect'
 import { away, onNotifyClick, showNotify } from '@/lib/notify'
 import { isStandalone } from '@/lib/install'
+import { isNative, onNative, postNative, syncNativeTheme } from '@/lib/native'
 import { usePhone } from '@/hooks/usePhone'
 import { useKeyboardUp } from '@/hooks/useKeyboardUp'
 import { useArm } from '@/hooks/useArm'
@@ -36,6 +37,8 @@ import { CAP_BY_ID, TOPBAR_DEFAULT, TOPBAR_PIN_DEFAULT, type CapId, type PanelId
 
 /** chat 模式开着没有（localStorage）。模式熬不过刷新就不叫模式 */
 const LS_CHAT = 'chatOpen'
+/** chat「各看各的」时这台设备看的是哪个 pane（见 App 的 myPane） */
+const LS_CHAT_PANE = 'chatPane'
 /**
  * chat 模式下**留在 chat 里发**的键：效果能在对话流里看见的那几个。其余一律切到终端发，
  * 并且**留在终端**（见 viaTerm）。
@@ -331,6 +334,24 @@ export default function App() {
   const filesOpen = panel === 'files'
   const diffOpen = panel === 'diff'
   const chatOpen = chatMode
+  /**
+   * chat「各看各的」（lib/prefs 的 `chatOwn`）：开着时这台设备在 chat 里看**自己挑的** pane
+   * （`myPane`，本机 localStorage，不跟着套走 —— 同一套排布的两台手机各看各的），不动 herdr
+   * 的焦点。`own` = 这一档开着**而且**正在 chat 里；一回终端就回到共享的那个焦点。
+   */
+  const [chatOwnOn, setChatOwnOn] = useState(chatOwn)
+  const [myPane, setMyPaneS] = useState(() => {
+    try {
+      return localStorage.getItem(LS_CHAT_PANE) || ''
+    } catch {
+      return ''
+    }
+  })
+  const setMyPane = useCallback((id: string) => {
+    setMyPaneS(id)
+    try { localStorage.setItem(LS_CHAT_PANE, id) } catch { /* 存不进去：只是刷新之后接过 herdr 的焦点 */ }
+  }, [])
+  const own = chatOwnOn && chatOpen
   // chat 打开过一次就一直挂着，关掉只是藏起来（见 ChatPanel 的 `hidden`）
   const [chatMounted, setChatMounted] = useState(chatMode)
   useEffect(() => { if (chatMode) setChatMounted(true) }, [chatMode])
@@ -541,7 +562,58 @@ export default function App() {
 
   // gate 没过时别让自动拉回的心跳跑起来：那是 500ms 一拍的 401 风暴，
   // 而且设备被撤销时（gate 翻回 pair）也要跟着停
-  const compose = useCompose(cfg, showCompose && gate === 'ok', toast)
+  const compose = useCompose(cfg, showCompose && gate === 'ok', toast, own && myPane ? myPane : null)
+
+  /*
+    「各看各的」时记着的那个 pane **不在了**（关掉了 / 换了 herdr session / 第一次开这一档）
+    就接过 herdr 此刻的焦点。不接的话 chat 头上是一个不存在的 pane，发件箱往它投一律报错。
+  */
+  useEffect(() => {
+    if (!own || compose.panes.length === 0) return
+    if (compose.panes.some((p) => p.id === myPane)) return
+    const f = compose.panes.find((p) => p.focused)
+    if (f) setMyPane(f.id)
+  }, [own, compose.panes, myPane, setMyPane])
+
+  /*
+    「各看各的」时在 chat 里看着一个**跑完了**的 pane = 这次完成有人看过了，让服务端去
+    herdr 那边清掉（outbox.MarkRead：借焦点一来一回）。herdr 的 done 只有聚焦才清，而这一档
+    不动焦点 —— 不清的话点过去看完了，herdr 侧栏和面板一览里还是一片「完成」（用户报的）。
+    清的是 herdr 自己的状态，所以所有设备、herdr 的 TUI 一起变（用户点名要的）。带着 seq：
+    清的只是**这一次**，之后再跑完还会亮。页面看不见时不算看过（人不在跟前），所以还要跟着
+    visibility 重跑一次。
+  */
+  const [pageShown, setPageShown] = useState(() => document.visibilityState === 'visible')
+  useEffect(() => {
+    const f = () => setPageShown(document.visibilityState === 'visible')
+    document.addEventListener('visibilitychange', f)
+    return () => document.removeEventListener('visibilitychange', f)
+  }, [])
+  /*
+    「完成了」两个来源都认：**pane 列表在 chat 里待着时不刷新**（只在开面板 / 切焦点时拉），
+    人看着 agent 跑完时列表里它一直是「在跑」—— 第一版只认列表，于是这条路几乎从不触发
+    （用户报的「MarkRead 无效」）。chat 自己那条轮询一直是新的，所以主要靠它；列表那条
+    管「从面板一览点进一个早就 done 的」那一下（那时列表是刚拉的，比 chat 首读快）。
+    chat 那条拿不到 seq，给 0（服务端那边 = 「此刻是 done 就清」）—— 人正看着它，不存在
+    「把一次没看过的新完成吞掉」的问题。
+  */
+  const [chatSt, setChatSt] = useState({ pane: '', status: '' })
+  const onChatStatus = useCallback((pane: string, status: string) => {
+    setChatSt((c) => (c.pane === pane && c.status === status ? c : { pane, status }))
+  }, [])
+  const lookingAt = own && myPane ? compose.panes.find((p) => p.id === myPane) : undefined
+  const listDone = lookingAt?.status === 'done' ? lookingAt.seq ?? 0 : 0
+  const chatDone = own && chatSt.pane === myPane && chatSt.status === 'done'
+  const doneKey = listDone ? `s${listDone}` : chatDone ? 'chat' : ''
+  const { loadPanes } = compose
+  useEffect(() => {
+    if (!doneKey || !pageShown || !myPane) return
+    api.post('/herdr/read', { pane: myPane, seq: listDone })
+      .then(() => loadPanes(true))
+      .catch(() => { /* 没清上：那个「完成」多亮一会儿，下次状态变化时再试 */ })
+    // listDone 已经折进 doneKey 里了
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [myPane, doneKey, pageShown, loadPanes])
 
   /**
    * **界面上认的「焦点」只有这一份**：抢跑提示（focusHint）活着的时候，就当焦点已经在它上面了。
@@ -555,14 +627,20 @@ export default function App() {
    * **只有两处必须看 herdr 的原话**，别换成这份：focusHint 那个收尾 effect（它判的就是
    * 「列表追上来没有」），和发件箱（跟着真焦点投，见 useCompose）。
    */
+  /*
+    「各看各的」时这份「焦点」换成**这台设备看的那个 pane**（`myPane`）：chat、面板一览的
+    「当前」、改动 / 文件「我在哪个项目」都跟着它走 —— 和抢跑提示是同一种折法，所以各处一行
+    都不用改。只在 chat 开着时这么算：终端模式下屏幕上就是 herdr 的焦点，界面得跟它说同一句话。
+  */
   const view = useMemo(() => {
-    const hinted = focusHint ? compose.panes.find((p) => p.id === focusHint) : undefined
+    const want = own ? myPane : focusHint
+    const hinted = want ? compose.panes.find((p) => p.id === want) : undefined
     if (!hinted || hinted.focused) return { panes: compose.panes, spaces: compose.spaces }
     return {
       panes: compose.panes.map((p) => (p.focused === (p.id === hinted.id) ? p : { ...p, focused: p.id === hinted.id })),
       spaces: compose.spaces.map((sp) => (sp.focused === (sp.id === hinted.workspaceId) ? sp : { ...sp, focused: sp.id === hinted.workspaceId })),
     }
-  }, [focusHint, compose.panes, compose.spaces])
+  }, [own, myPane, focusHint, compose.panes, compose.spaces])
 
   /**
    * 提示：哪个 agent 等你回答了 / 跑完了（右上角弹一下 + ▦ 上挂个红点）。
@@ -872,6 +950,7 @@ export default function App() {
   useEffect(() => {
     document.documentElement.classList.toggle('light', scheme === 'light')
     sess.current?.setScheme(scheme)
+    syncNativeTheme() // 原生壳的系统栏跟着换底色（同样要在类落下之后读）
   }, [scheme])
   // 主题色同理：属性先落下去，终端再去读（光标和选区跟着主题色走，界面那一片是纯 CSS）
   useEffect(() => {
@@ -902,10 +981,13 @@ export default function App() {
    * 只兜 Esc 这一个键：它在网页控件上没有语义，而 TUI 那边到处要用。
    */
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.isComposing) return
-      // 面板开着就先收面板。必须 stopPropagation：否则这一下会既收面板又发给终端。
-      // 查看器盖在最上面，**必须第一个判**。
+    /**
+     * 收掉最上面那一层，收了返回 true。Esc 和原生壳的返回键共用这一份顺序 —— 两份各写
+     * 一遍迟早分家，而返回键收错一层（或者什么都不收就把 App 退到后台）比 Esc 更伤：
+     * 在手机上它是唯一的「退一步」。
+     */
+    const closeTop = (): boolean => {
+      // 面板开着就先收面板。查看器盖在最上面，**必须第一个判**。
       //
       // 以前它自己挂了一个捕获阶段的监听，结果要按两下：同一个 target 上的捕获监听
       // 按注册顺序跑，而这一条是挂载时就注册的、永远在前面 —— 从文件浏览面板里点开一张
@@ -915,21 +997,25 @@ export default function App() {
       // stat 卡在系统授权框上时这是唯一的出口。
       if (opening) {
         cancelOpen()
-        e.preventDefault()
-        e.stopPropagation()
-        return
+        return true
       }
       // 查看器被后开的面板压着时，先收上面那块面板（下面那条 panel 分支）
       if (viewing && !(viewerUnder && panel)) {
         // 走查看器自己那道关：有没存的修改时第一下只是举起来（见 FileViewer 的 leave）
         if (viewerClose.current) viewerClose.current()
         else setViewing(null)
-        e.preventDefault()
-        e.stopPropagation()
-        return
+        return true
       }
       if (panel) {
         setPanel(null)
+        return true
+      }
+      return false
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.isComposing) return
+      // 必须 stopPropagation：否则这一下会既收面板又发给终端。
+      if (closeTop()) {
         e.preventDefault()
         e.stopPropagation()
         return
@@ -942,10 +1028,16 @@ export default function App() {
       e.preventDefault()
       sess.current?.sendKey('\x1b')
     }
+    // 返回键：没东西可收就告诉壳「没处理」，壳把 App 退到后台。**不往终端发 Esc** ——
+    // 返回键是「离开」的意思，替人往 agent 里打一个 Esc 会打断它正在干的事。
+    const offBack = onNative('back', () => postNative({ t: 'back', handled: closeTop() }))
     // 用 capture 阶段：xterm.js 会在自己那个隐藏 textarea 上 stopPropagation，
     // 挂 bubble 的话终端一聚焦就收不到事件了（「面板开着按 Esc 却发给了终端」就是这么来的）。
     addEventListener('keydown', onKey, true)
-    return () => removeEventListener('keydown', onKey, true)
+    return () => {
+      offBack()
+      removeEventListener('keydown', onKey, true)
+    }
     // opening / cancelOpen 少一个，这个闭包就会拿着旧值 —— 表现是「正在打开」那一屏
     // 按 Esc 没反应，而那正是 stat 卡在系统授权框上时唯一的出口。
   }, [panel, viewing, viewerUnder, opening, cancelOpen])
@@ -1067,6 +1159,7 @@ export default function App() {
     setPaneSortS(panesSort())
     setEnterSend(composeEnter())
     setRich(composeRich())
+    setChatOwnOn(chatOwn())
     setNoticeCard(lsBool('noticeCard', false))
     setNoticeDot(lsBool('noticeDot', true))
     setNoticeOS(lsBool('noticeOS', false))
@@ -1292,7 +1385,18 @@ export default function App() {
       })
   }
 
+  // 原生壳里的「全屏」= 藏系统栏，由壳做。Fullscreen API 在 WebView 里要壳接 onShowCustomView
+  // 把整页挪进另一个 View，输入法 inset 跟不过去 —— 键盘会盖住终端，所以不走那条
+  useEffect(() => onNative('fullscreen', (m) => {
+    setFull(!!m.on)
+    relayoutVV()
+  }), [relayoutVV])
+
   const toggleFull = () => {
+    if (isNative()) {
+      postNative({ t: 'fullscreen', on: !full })
+      return
+    }
     const d = document as FsDoc
     if (d.fullscreenElement ?? d.webkitFullscreenElement) {
       void (d.exitFullscreen?.() ?? d.webkitExitFullscreen?.())
@@ -1535,6 +1639,13 @@ export default function App() {
     // 浮层照旧收掉（挑完了就该让路）。**chat 不在这个槽里，所以不受影响** ——
     // 它是个模式，切 pane 不该退出（用户报过两次）。
     setPanel(null)
+    // 「各看各的」：只换这台设备看的那个，**不动 herdr 的焦点**（那是别的设备共用的）。
+    // 不用抢跑、不用等往返 —— 这一下本来就是本地的。回终端时再对齐（见 alignFocus）
+    // 读 ref：系统通知的点击（onNotifyClick）挂在开页那一刻，闭包里的 `own` 是旧的
+    if (ownRef.current) {
+      setMyPane(id)
+      return
+    }
     // **抢跑**：chat 按 pane id 读，不用等 goto 和 pane 列表这两次往返（见 focusHint）
     const seq = ++hintSeq.current
     setFocusHint(id)
@@ -1619,6 +1730,11 @@ export default function App() {
       viaTerm(() => fire(b), `send:${b}`)
       return
     }
+    // 「各看各的」：借终端发就落在 herdr 的焦点上，而那可能是别的设备正看着的 pane
+    if (own) {
+      void ownKey(b)
+      return
+    }
     /*
       **终端没连上：连上、等 herdr 起来、再把这一下补发出去。**
 
@@ -1646,6 +1762,24 @@ export default function App() {
   const stickyKey = (w: 'ctrl' | 'alt') => {
     if (chatOpen) viaTerm(() => sess.current?.toggleSticky(w), `sticky:${w}`)
     else sess.current?.toggleSticky(w)
+  }
+
+  /**
+   * 「各看各的」时 chat 里那几个键（见 chatVisible）**指名**按到这台设备看的 pane 上，
+   * 不借终端那条 WebSocket（那条落在 herdr 的焦点上）。光秃秃的 Esc / ⌃C / 回车走
+   * `/chat/key`；「一串字 + 回车」（`/clear` 那种）走发件箱那条路（`/herdr/say` 指名 pane）——
+   * 服务端刻意不开「往 pane 里发任意文本」的口，见 chatapi.go 包头。
+   */
+  const ownKey = async (b: string) => {
+    if (!myPane) return
+    const key = b === '\x1b' ? 'esc' : b === '\x03' ? 'ctrl+c' : b === '\r' || b === '\n' ? 'enter' : ''
+    try {
+      if (key) await api.post('/chat/key', { pane: myPane, key })
+      else await api.post('/herdr/say', { target: myPane, text: b.replace(/[\r\n]+$/, '') })
+      setKeyNudge((n) => n + 1)
+    } catch (e) {
+      toast(`没按上：${(e as Error).message}`)
+    }
   }
 
   /** 真的发出去 + 让 chat 立刻读一次（这一下多半改了对面的状态，别等那 3 秒一拍，见 keyNudge） */
@@ -1742,9 +1876,64 @@ export default function App() {
    */
   const viaTerm = (send: () => void, tag: string) => {
     setChatMode(false)
-    if (sess.current?.appReady()) send()
-    else whenReady(send, tag)
+    const go = () => {
+      if (sess.current?.appReady()) send()
+      else whenReady(send, tag)
+    }
+    // 「各看各的」：先把 herdr 的焦点拉到这台设备看的 pane 上再发，不然这一下落在别人那儿
+    if (own) void alignFocus().then(go)
+    else go()
   }
+
+  /**
+   * 「各看各的」→ 回终端：把 herdr 的焦点拉到这台设备在 chat 里看着的那个 pane 上。
+   *
+   * 不拉的话终端里是另一个 pane（焦点可能早被别的设备挪走了），人在 chat 里看着 A、点一下
+   * 方向键切到终端，看到的是 B，按下去的键也进了 B。拉的代价是动了共用的焦点 —— 但终端本来
+   * 就是共用的那一屏，回到终端就是回到「大家一起看」的规则。
+   *
+   * 飞着的那一跳只有一个（`aligning`）：viaTerm 和「chat 关了」那个 effect 会前后脚各要一次。
+   * 跳完才放开 `own` 那道打字拦截（见下面那个 effect），中间打的字丢掉，不进别人的 pane。
+   */
+  const aligning = useRef<Promise<void> | null>(null)
+  const alignFocus = (): Promise<void> => {
+    if (aligning.current) return aligning.current
+    const id = myPane
+    const p = (async () => {
+      try {
+        if (id) await compose.jump(id, paneZoomPref())
+      } finally {
+        aligning.current = null
+        sess.current?.setHoldTyping(false, 'own')
+      }
+    })()
+    aligning.current = p
+    return p
+  }
+  /*
+    「各看各的」开在 chat 里时，**终端那个输入框里打的字先拦下**（Session 的 `own` 那道）：
+    这时候 herdr 的焦点不一定是这台设备看的 pane，而那个字一出来就进了焦点那个 pane ——
+    原来那条「打字就切回终端、字照常发」（onTyping）在这儿会把字发进别人的 pane。所以拦下、
+    切回终端、对齐焦点、再放开；被拦的那几个字丢掉（丢一个字比打进别人的 agent 里好）。
+    chat 一关（不论哪条路关的）就对齐一次，放开在 alignFocus 跳完之后。
+  */
+  const ownRef = useRef(own)
+  ownRef.current = own
+  const wasOwn = useRef(own)
+  useEffect(() => {
+    const was = wasOwn.current
+    wasOwn.current = own
+    if (own) sess.current?.setHoldTyping(true, 'own')
+    else if (was && chatOwnOn) void alignFocus()   // 从 chat 回终端
+    else sess.current?.setHoldTyping(false, 'own') // 这一档被关掉了
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [own, chatOwnOn, ready])
+  useEffect(() => sess.current?.onHeld(() => {
+    if (!ownRef.current) return
+    setChatMode(false)
+    if (status.cls !== 'on') connect()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [ready, status.cls])
 
 
   /**
@@ -2229,6 +2418,7 @@ export default function App() {
             onOpenPath={(p) => void openPath(p)}
             onHealth={setChatOK}
             onRefreshPanes={refreshPanes}
+            onStatus={onChatStatus}
             chatFont={chatFont}
             nudge={keyNudge}
             onPickPane={openPanes}
@@ -2281,6 +2471,16 @@ export default function App() {
             onEnterSend={(v) => { setEnterSend(v); pushPref(profile.id, 'composeEnter', v ? 'send' : 'newline', toast) }}
             rich={rich}
             onRich={(v) => { setRich(v); pushPref(profile.id, 'composeRich', v ? 'rich' : 'plain', toast) }}
+            chatOwn={chatOwnOn}
+            onChatOwn={(v) => {
+              // 打开那一下从 herdr 此刻的焦点起步（不然接的是上次关掉时记着的那个，看着像乱跳）
+              if (v && !chatOwnOn) {
+                const f = compose.panes.find((p) => p.focused)
+                if (f) setMyPane(f.id)
+              }
+              setChatOwnOn(v)
+              pushPref(profile.id, 'chatOwn', v ? '1' : '0', toast)
+            }}
             heals={heals}
             // 存完把整份配置回传过来：快捷键条那一条和顶栏上放的「我的按键」是同一份定义
             onSaved={applySoftkeys}

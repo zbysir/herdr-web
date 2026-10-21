@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, type WhoAmI } from '@/lib/api'
 import { isCancel, loginPasskey, passkeySupported } from '@/lib/passkey'
+import { isNative, onNative, postNative } from '@/lib/native'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { QrScan, qrScanSupported } from './QrScan'
@@ -56,9 +57,24 @@ export function Pairing({
     }
   }
 
+  /*
+   * 原生壳里 WebView 做不了 WebAuthn（要把 App 和域名绑起来，而每个人连的是自己的域名），
+   * 所以 passkey 交给壳：它走 device flow，在浏览器里刷 passkey 批准，领回凭据写进 cookie，
+   * 再在这儿回一声 done（见 docs/dev/NATIVE-APP.md §3、app/android/.../Login.kt）。
+   */
+  useEffect(() => onNative('login', (m) => {
+    setBusy(false)
+    if (m.state === 'done') onDone()
+    else if (m.state === 'error') setErr(String(m.msg ?? '没批准成功'))
+  }), [onDone])
+
   const usePasskey = useCallback(async () => {
     setBusy(true)
     setErr('')
+    if (isNative()) {
+      postNative({ t: 'login', reauth: mode === 'reauth' })
+      return
+    }
     try {
       await loginPasskey()
       onDone()
@@ -67,7 +83,7 @@ export function Pairing({
     } finally {
       setBusy(false)
     }
-  }, [onDone])
+  }, [onDone, mode])
 
   /**
    * 要不要画那个 passkey 按钮。**三个条件缺一不可**，最后那个是漏掉过的：
@@ -75,8 +91,9 @@ export function Pairing({
    * 少了它，从局域网直连那条 IP 路进来的人会看到一个按下去必然报错的按钮（服务端在
    * passkeyGate 那儿一律 409）。一个必然失败的按钮比没有按钮糟得多：人会以为是自己
    * 指纹没录好，反复试。下面页脚那句会告诉他该换哪个地址。
+   * 原生壳里后两条不算数：passkey 是在浏览器的批准页上刷的，那一页在服务端配的域名上。
    */
-  const canPasskey = !!who?.passkeys && who.passkeyAvailable && passkeySupported()
+  const canPasskey = !!who?.passkeys && (isNative() || (who.passkeyAvailable && passkeySupported()))
   const reauth = mode === 'reauth'
 
   return (
@@ -121,10 +138,12 @@ export function Pairing({
               className="w-full py-2.5"
               onClick={() => void usePasskey()}
             >
-              {busy ? '…' : reauth ? '用 passkey 验证' : '用 passkey 登录'}
+              {busy ? (isNative() ? '等浏览器里批准…' : '…') : reauth ? '用 passkey 验证' : '用 passkey 登录'}
             </Button>
             <p className="mt-1.5 text-xs text-muted">
-              {reauth ? '一次 Face ID / 指纹就好。' : '不用回机器前 —— 这是 passkey 的主要好处。'}
+              {isNative()
+                ? '会打开浏览器里的批准页，照着上面的码输进去、刷一次 passkey。'
+                : reauth ? '一次 Face ID / 指纹就好。' : '不用回机器前 —— 这是 passkey 的主要好处。'}
             </p>
           </div>
         )}

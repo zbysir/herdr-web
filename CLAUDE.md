@@ -27,6 +27,7 @@
 | 认证、配对、暴露形态、文件浏览 / 看 diff 那条路 | [SECURITY.md](docs/dev/SECURITY.md) |
 | **chat 模式**（对话流代替那一屏 TUI） | [CHAT.md](docs/dev/CHAT.md) |
 | **要不要在网页这边新做一块界面**（还是留在 TUI / 去扩 herdr） | [TUI-VS-GUI.md](docs/dev/TUI-VS-GUI.md) |
+| **原生 App 用什么做**（为什么是原生壳 + WebView、不用 nsh） | [WHY-NOT-NSH.md](docs/dev/WHY-NOT-NSH.md) |
 
 ## ⚠️ 起服务之前：本机的端口不一定只有本机能连
 
@@ -244,6 +245,20 @@
   **关掉 chat = 藏起来，不卸载**（`ChatPanel` 的 `hidden`，用户点名的「每次打开都从头加载」）：
   藏着时不轮询，再打开读的是增量；用 `invisible` 不用 `display:none`（后者丢 `scrollTop`）。
   详见 [CHAT.md](docs/dev/CHAT.md) §9。
+- **chat「各看各的」**（pref `chatOwn` + 本机 `chatPane`，App 的 `own` / `alignFocus`、
+  `useCompose` 的 `aimAt`、`POST /chat/key`）：多台设备各在 chat 里看自己挑的 pane，不动 herdr
+  的全局焦点。四条别破：① chat、发件箱、chat 里那几个键**三者认同一个 pane**（`myPane`）——
+  键要是还借终端发，就落在焦点上，打断的是别的设备正看着的 agent；② 回终端时**先**把焦点拉过来
+  再发键（`alignFocus`）；③ chat 开着时终端输入框的字**拦下**（hold 理由 `own`，hold 是按理由计
+  的集合，别改回布尔）；④ `chatPane` 不进 profile（同一套的两台设备要各看各的）。
+  **验焦点用 `herdr pane list` 的 `focused`，别用 `herdr pane current`**（那个报的是调用者自己的 pane）。
+  **已读**（`outbox.MarkRead` + `POST /herdr/read`）：herdr 的 `done` 只有聚焦才清、API 里没有
+  「只标已读」的口（herdr#1593 还开着），所以 chat 里看着一个跑完的 pane 时借焦点一来一回。两条
+  **静默**的：① 在目标上要**停一下**（`markReadDwell` 30ms）—— 服务端和每个 TUI 客户端各记一份
+  「看过没有」，不停顿的话服务端清了、herdr 侧栏照旧亮着（用 pyte 抓 TUI 屏幕量的，本机 5ms 就够）；
+  ② 「它跑完了」要认 **chat 那条轮询**报的状态（`ChatPanel` 的 `onStatus`）—— pane 列表在 chat
+  里待着时不刷新，只认它的话人看着 agent 跑完，这条路一次都不触发（第一版就是这样）。
+  详见 [CHAT.md](docs/dev/CHAT.md) §9.8b。
 - **`herdr-web connect`**（`internal/remote` + `auth.Authenticate` 里 bearer 那段 + `auth/cliapprove.go`）：
   另一台电脑的原生终端连过来，认证是同一张设备表。三条别改：① 令牌走 `Authorization: Bearer`
   **不走 cookie** —— `/pty` 上「没 Origin 的 cookie 请求」照旧拒，那条是 SECURITY.md §7 的，
@@ -662,6 +677,9 @@ web/                  Vite + React + TS + Tailwind v4 + shadcn 风格组件
 docs/dev/             **开发理由**：为什么这么设计、实测出来的语义、会静默出错的坑
                       （HERDR-API / COMPOSER / OUTBOX / MOBILE / SECURITY，索引在 README.md）。
                       根目录只留使用说明 —— 两种读者要的东西不一样
+app/android/          原生壳（Kotlin，一个 Activity + 一个 WebView 加载用户自己那台 herdr-web；
+                      界面全在网页里，壳只做推送 / 返回键 / 系统栏 / 文件选择这些）。
+                      和网页之间那条桥的另一半是 web/src/lib/native.ts，见 docs/dev/NATIVE-APP.md
 reference/            最早的 Python 原型，那三份文档里的「已验证」都是拿它验的
 npm/herdr-web/        npm 根包 @bysir/herdr-web：一个 JS 壳，按平台找二进制
 scripts/npm-*.mjs     把 goreleaser 产物摊成 npm 包 / 按顺序发布
