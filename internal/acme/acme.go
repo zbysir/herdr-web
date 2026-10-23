@@ -165,7 +165,8 @@ func (c Config) obtain(certFile, keyFile string) error {
 		return err
 	}
 	// lego 默认会等 DNS 传播（自己查一遍 TXT 记录），别关 —— 关了只会换来「验证失败」。
-	if err := client.Challenge.SetDNS01Provider(dns); err != nil {
+	// 唯一的例外是本机 53 端口被代理劫持，那时这道自检永远过不去，见 hijack.go。
+	if err := client.Challenge.SetDNS01Provider(dns, propagationOpts()...); err != nil {
 		return err
 	}
 
@@ -252,7 +253,15 @@ func (c Config) account() (*account, error) {
 		}
 	}
 
-	a := &account{Email: c.Email, key: key, regPath: filepath.Join(dir, "account.json")}
+	// 注册信息按环境分开存：测试环境和正式环境是**两个不同的 CA**，账户互不认识。共用一份的话，
+	// 先用 staging 试一次（文档里让人这么做）就把 staging 的账户地址写进去了，之后正式环境
+	// 拿着它去签，回一句「账户不存在」—— 而且这时 Reg 不为空，不会重新注册，一直失败下去。
+	// 私钥可以共用（同一把钥匙在两个 CA 上各注册一个账户）。
+	name := "account.json"
+	if c.Staging {
+		name = "account.staging.json"
+	}
+	a := &account{Email: c.Email, key: key, regPath: filepath.Join(dir, name)}
 	if b, err := os.ReadFile(a.regPath); err == nil {
 		_ = json.Unmarshal(b, a) // 读不出来就当没注册过，下面会重新注册
 	}
@@ -310,4 +319,17 @@ func safeName(domains []string) string {
 		}
 		return '-'
 	}, s)
+}
+
+// AccountURI 是这台机器的 ACME 账户地址（还没签过证书就是空）。
+//
+// 给 CAA 的 `accounturi` 用：钉住它之后，只有这台机器上那把账户私钥能给这个名字签证书 ——
+// 中继占着这个域名的 IP 也签不出来（docs/dev/RELAY.md §1.1）。
+func AccountURI(dataDir string) string {
+	var a account
+	b, err := os.ReadFile(filepath.Join(dataDir, "acme", "account.json"))
+	if err != nil || json.Unmarshal(b, &a) != nil || a.Reg == nil {
+		return ""
+	}
+	return a.Reg.URI
 }

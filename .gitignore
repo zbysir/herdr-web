@@ -31,3 +31,6 @@ __pycache__/
 # npm 包：根包（那个 JS 壳）是入库要维护的，平台子包和拷进去的 README 都是生成的
 /npm/herdr-web-*/
 /npm/herdr-web/README.md
+
+# 本机 / 私有的部署信息（服务器、线上怎么查），不入库
+agents.local.md

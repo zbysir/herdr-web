@@ -348,3 +348,26 @@ func fingerprint(der []byte) string {
 	}
 	return b.String()
 }
+
+// BySNI 按 ClientHello 里的 SNI 在两份配置之间挑证书：SNI 是 names 里的某个域名就用 named
+// （真证书），否则用 fallback（自签）。
+//
+// 给局域网直连口用（docs/dev/RELAY.md §4）：浏览器那条直连按 **IP** 连（不发 SNI），只能给
+// 自签；App 那条按**域名**连（WebView 走 App 的本地代理，代理把 herdr.bysir.top 拨到局域网
+// IP 上），给真证书 —— WebView 按域名验证真证书，origin、cookie、passkey 全不用变。
+// 两条路共用一个口，所以只能在握手时按 SNI 分。
+func BySNI(names []string, named, fallback *tls.Config) *tls.Config {
+	set := map[string]bool{}
+	for _, n := range names {
+		set[strings.ToLower(n)] = true
+	}
+	return &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		GetCertificate: func(h *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			if set[strings.ToLower(h.ServerName)] {
+				return named.GetCertificate(h)
+			}
+			return fallback.GetCertificate(h)
+		},
+	}
+}

@@ -168,8 +168,7 @@ function versionRow(){
 function render(){
   const c = S.cfg
   const warn = []
-  if(c.publicPort) warn.push('公网口开在 ' + c.publicPort + '（隧道该指它；主口只服务本地网络）')
-  if(c.exposed) warn.push('主口被声明成公网口了（EXPOSED=1 是老写法，新配置用 PUBLIC_PORT）')
+  if(c.relayHost) warn.push('公网经云端中继进来：https://' + c.relayHost + '/（TLS 在本机终止）')
   if(S.locked) warn.push('<span class=bad>限速熔断中：新设备配不进来</span> <button data-act=unlock>解开</button>')
 
   document.getElementById('app').innerHTML =

@@ -106,16 +106,17 @@ herdr-web                                       # 1. purely local (default), pla
 HERDR_WEB_HOST=0.0.0.0 herdr-web                # 2. phone/tablet on the LAN: self-signed TLS + QR
 HERDR_WEB_ONCONNECT= herdr-web                  # 3. stay in the shell, don't enter herdr
 
-# 4. exposed through frp / a tunnel: point the tunnel at the public port, never at the main one
-HERDR_WEB_PUBLIC_PORT=17788 HERDR_WEB_TLS=proxy \
-HERDR_WEB_PUBLIC_URL=https://herdr.example.com \
-HERDR_WEB_HOSTNAME=herdr.example.com herdr-web
+# 4. reachable from the internet: through the cloud relay (herdr-relay on a VPS forwards
+#    ciphertext only; TLS terminates on this machine). Register once with
+#    `herdr-web relay join https://relay.example.com mac.h.example.com <invite code>`
+HERDR_WEB_RELAY_URL=https://relay.example.com HERDR_WEB_RELAY_HOST=mac.h.example.com \
+HERDR_WEB_ACME_DNS=cloudflare HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN=... herdr-web
 ```
 
 The main port (7788 by default) **only serves the local network**: a peer that is not loopback or
-private gets a 403. To expose it, open `HERDR_WEB_PUBLIC_PORT` — what counts is *which listener the
-request landed on*, not a declaration, because on a machine with a tunnel running, `127.0.0.1:7788`
-may well be reachable from the whole internet with no local symptom at all.
+private gets a 403, and no switch opens it. The internet only comes in through the relay — the VPS
+sees ciphertext only, so a compromised VPS cannot read your terminal. The frp / TLS-terminating
+reverse-proxy path (`PUBLIC_PORT`, `TLS=proxy`) was retired on 2026-10-23; see [DEPLOY.md](DEPLOY.md).
 
 → The full table of 40-odd variables: [使用说明 · 配置](docs/USAGE.zh-CN.md#配置) (Chinese)
 

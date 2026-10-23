@@ -16,7 +16,8 @@ import { SoftkeysPanel } from './SoftkeysPanel'
 import { TopbarPanel } from './TopbarPanel'
 import { ProfilePicker } from './ProfilePicker'
 import { DevicesPanel } from './DevicesPanel'
-import { lanAuto, onLanNow, onLoopback, setLanAuto } from '@/hooks/useLanDirect'
+import { lanAuto, onLoopback, setLanAuto } from '@/hooks/useLanDirect'
+import { useRoute } from '@/hooks/useRoute'
 import { cn } from '@/lib/utils'
 
 /**
@@ -781,10 +782,14 @@ function TermSection({
  * 链接开新标签页：证书警告是**整页**的，在当前页跳过去就把这个终端会话的页面顶掉了。
  */
 function LanDirectRow({ origins }: { origins: string[] }) {
-  const here = onLanNow(origins)
-  // 本机开的页面上这一节说的不是「正走公网」（那是错的，它谁也没绕），而是
+  // 「现在走哪条」和顶栏那颗点**同一个出处**（useRoute）：原来这里自己按地址算，而 App 里
+  // 地址永远是域名，于是点是绿的、这儿却写「正走公网」（用户截图报的）。
+  const route = useRoute(origins)
+  const here = route.via === 'lan'
+  const app = isNative()
+  // 本机开的页面上这一节说的不是「正走中继」（那是错的，它谁也没绕），而是
   // 「下面这些地址是给别的设备用的」—— 见 useLanDirect 的 onLoopback。
-  const local = !here && onLoopback()
+  const local = !app && onLoopback()
   const [auto, setAuto] = useState(lanAuto)
   return (
     <div className="mt-3 border-t border-line pt-3">
@@ -793,37 +798,48 @@ function LanDirectRow({ origins }: { origins: string[] }) {
         <span
           className={cn(
             'rounded border px-1.5 py-px text-[11px]',
-            here ? 'border-brand/40 bg-brand/12 text-brand' : 'border-line text-muted',
+            // 和顶栏那颗点一个配色：绿 = 直连、蓝 = 中继
+            local ? 'border-line text-muted'
+              : here ? 'border-ok/40 bg-ok/12 text-ok' : 'border-relay/40 bg-relay/12 text-relay',
           )}
         >
-          {here ? '正走直连' : local ? '本机访问' : '正走公网'}
+          {local ? '本机访问' : here ? '正走直连' : '正走中继'}
         </span>
       </div>
 
       <p className="mt-1 text-xs/relaxed text-muted">
-        {here
-          ? '这个页面已经是直连的 —— 按键不再绕公网。'
-          : local
-            ? '这个页面是从本机开的，按键压根没出过这台机器 —— 下面的地址是给别的设备用的。'
-            : '在这台设备上先开一次下面的地址、点「继续访问」（自签证书），之后从公网地址进来就会自动切过去。'}
+        {app
+          // App 里换路是壳做的、不换地址（docs/dev/RELAY.md §4），没有「继续访问」这一步，
+          // 下面那个开关也管不着它 —— 照搬浏览器那套说法就是让人去点一个用不上的东西
+          ? (here
+            ? 'App 自动换路：现在走局域网直连，按键不绕公网。地址不变，登录状态也不变。'
+            : `App 自动换路：在家（和下面这个地址同一个网）时会自己切到直连，不用做任何事。${route.detail === '经云端中继' ? '' : route.detail}`)
+          : here
+            ? '这个页面已经是直连的 —— 按键不再绕公网。'
+            : local
+              ? '这个页面是从本机开的，按键压根没出过这台机器 —— 下面的地址是给别的设备用的。'
+              : '在这台设备上先开一次下面的地址、点「继续访问」（自签证书），之后从公网地址进来就会自动切过去。'}
       </p>
 
       <ul className="m-0 mt-1.5 list-none p-0">
         {origins.map((o) => (
           <li key={o} className="flex items-center gap-2 py-0.5">
-            <a
+            {app ? (
+              // App 里不给链接：点下去是 WebView 去开一个自签证书的 IP origin，只会撞上证书错误
+              <span className="truncate font-mono text-xs text-muted">{o}</span>
+            ) : <a
               href={o + '/'}
               target="_blank"
               rel="noreferrer"
               className="truncate font-mono text-xs text-brand underline decoration-brand/40 hover:decoration-brand"
             >
               {o}
-            </a>
+            </a>}
           </li>
         ))}
       </ul>
 
-      <label className="mt-1.5 flex cursor-pointer items-start gap-2.5 rounded-md py-1 transition-colors hover:text-fg">
+      {!app && <label className="mt-1.5 flex cursor-pointer items-start gap-2.5 rounded-md py-1 transition-colors hover:text-fg">
         <span className="pt-px">
           <Checkbox
             checked={auto}
@@ -833,10 +849,10 @@ function LanDirectRow({ origins }: { origins: string[] }) {
         <span className="text-[13px]/relaxed">
           探到局域网就自动切过去
           <span className="block text-xs text-faint">
-            关掉之后就一直走公网那条路，不再问也不再切。
+            关掉之后就一直走中继那条路，不再问也不再切。
           </span>
         </span>
-      </label>
+      </label>}
     </div>
   )
 }

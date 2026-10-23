@@ -190,7 +190,8 @@ func TestLoopbackTrustNotFooledByTunnel(t *testing.T) {
 	}
 }
 
-// 没有可信前置时不能读 XFF：否则攻击者自带一个头就能伪造源 IP，把按 IP 的限速绕干净。
+// 从不读 XFF：前面没有任何可信前置（TLS=proxy / TRUST_PROXY 下线了），这个头只可能是
+// 客户端自己写的 —— 读了它，谁都能伪造源 IP 把按 IP 的限速绕干净。
 func TestClientIPIgnoresUntrustedXFF(t *testing.T) {
 	s := newStore(t, Config{})
 	r := req("192.168.1.9", "")
@@ -198,44 +199,16 @@ func TestClientIPIgnoresUntrustedXFF(t *testing.T) {
 	if got := s.ClientIP(r); got != "192.168.1.9" {
 		t.Errorf("不信任前置时应该用真实源地址，得到 %q", got)
 	}
-	tp := newStore(t, Config{TrustProxy: true})
-	if got := tp.ClientIP(r); got != "1.2.3.4" {
-		t.Errorf("信任前置时才读 XFF，得到 %q", got)
-	}
 }
 
-func TestLegacyTokenModes(t *testing.T) {
-	withTok := func(mode string) *Store {
-		return newStore(t, Config{LegacyToken: mode, Token: "deadbeef"})
-	}
-	get := func(s *Store, from, tok string) *Ident {
-		r := httptest.NewRequest("GET", "/api/state?token="+tok, nil)
-		r.Host = "127.0.0.1:7788"
-		r.RemoteAddr = from + ":1234"
-		return s.Authenticate(r)
-	}
-
-	if id := get(withTok("on"), "192.168.1.9", "deadbeef"); id == nil || id.Kind != "legacy" {
-		t.Error("on：旧书签从局域网进来应该还能用")
-	}
-	if id := get(withTok("on"), "192.168.1.9", "deadbeef"); id != nil && id.Ambient {
-		t.Error("?token= 是显式凭据，不该按 Ambient 处理（否则老脚本会被 CSRF 检查挡住）")
-	}
-	if get(withTok("on"), "192.168.1.9", "wrong") != nil {
-		t.Error("token 不对就不该认")
-	}
-	if get(withTok("loopback"), "192.168.1.9", "deadbeef") != nil {
-		t.Error("loopback 档位：局域网上的旧 token 必须失效")
-	}
-	if get(withTok("loopback"), "127.0.0.1", "deadbeef") == nil {
-		t.Error("loopback 档位：本机上仍然要能用")
-	}
-	if get(withTok("off"), "127.0.0.1", "deadbeef") != nil {
-		t.Error("off：哪儿都不能用")
-	}
-	// 没有 token 文件时，随便传个空的不能蒙进来
-	if get(newStore(t, Config{LegacyToken: "on"}), "127.0.0.1", "") != nil {
-		t.Error("没有旧 token 时不能被空值蒙过去")
+// 旧 `?token=` 下线了：就算磁盘上还躺着那个文件、URL 里带的正好是它，也不能当凭据。
+func TestLegacyTokenIgnored(t *testing.T) {
+	s := newStore(t, Config{})
+	r := httptest.NewRequest("GET", "/api/state?token=deadbeef", nil)
+	r.Host = "127.0.0.1:7788"
+	r.RemoteAddr = "127.0.0.1:1234"
+	if s.Authenticate(r) != nil {
+		t.Error("?token= 已经不是凭据了")
 	}
 }
 
@@ -348,26 +321,6 @@ func TestPublicPortIgnoresLoopbackTrust(t *testing.T) {
 	pub := MarkPublicPort(req("127.0.0.1", ""))
 	if id := s.Authenticate(pub); id != nil {
 		t.Errorf("公网口上本机免配对必须不生效，得到 %+v —— 这就是一个公网免鉴权的 shell", id)
-	}
-}
-
-// 旧 token 的 loopback 档同理：它的理由是「泄露给已经能在你机器上跑代码的东西不算泄露」，
-// 而公网口上那个「本机」是 frpc，不是人。
-func TestPublicPortIgnoresLegacyLoopbackToken(t *testing.T) {
-	s := newStore(t, Config{LegacyToken: "loopback", Token: "tok123"})
-
-	r := httptest.NewRequest("GET", "/api/state?token=tok123", nil)
-	r.Host = "127.0.0.1:7788"
-	r.RemoteAddr = "127.0.0.1:54321"
-	if id := s.Authenticate(r); id == nil || id.Kind != "legacy" {
-		t.Fatalf("主口上旧 token 的 loopback 档应当生效，得到 %+v", id)
-	}
-
-	r2 := httptest.NewRequest("GET", "/api/state?token=tok123", nil)
-	r2.Host = "127.0.0.1:7788"
-	r2.RemoteAddr = "127.0.0.1:54321"
-	if id := s.Authenticate(MarkPublicPort(r2)); id != nil {
-		t.Errorf("公网口上不该认这把 token，得到 %+v", id)
 	}
 }
 

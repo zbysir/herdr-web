@@ -92,15 +92,9 @@ type Config struct {
 	// Secure 决定 cookie 要不要 Secure 属性。**http 下必须是 false**，否则浏览器压根
 	// 不发这个 cookie，表现是「一直跳回配对页」而不是报错。
 	Secure bool
-	// LegacyToken："on" | "loopback" | "off"，见 docs/dev/SECURITY.md 的迁移路径。
-	LegacyToken string
-	Token       string
-	// TrustLoopback：从 127.0.0.1 连上来的直接放行。**默认关，套 frp / 反代时必须关**
+	// TrustLoopback：从 127.0.0.1 连上来的直接放行。**默认关，机器上有穿透时必须关**
 	// —— 那时候 RemoteAddr 就是本机，等于公网上谁来都算「本机」。
 	TrustLoopback bool
-	// TrustProxy：信任 X-Forwarded-For 里的客户端 IP。没有可信前置时绝不能开，
-	// 否则攻击者自带一个 XFF 就能伪造源 IP。
-	TrustProxy bool
 }
 
 type Store struct {
@@ -424,9 +418,9 @@ func (s *Store) RevokeAll() int {
 /* ------------------------------------------------------------------ 认证 */
 
 // Ident 是「这个请求是谁」。Ambient 表示凭据是浏览器自动带上的（cookie / 源 IP），
-// 那种请求才需要防 CSRF；`?token=` 那种显式凭据外站猜不到，不需要。
+// 那种请求才需要防 CSRF；Bearer 那种显式凭据外站设不了，不需要。
 type Ident struct {
-	Kind    string // "device" | "legacy" | "loopback"
+	Kind    string // "device" | "loopback"
 	Label   string
 	Device  *Device
 	Ambient bool
@@ -449,17 +443,12 @@ func (s *Store) Authenticate(r *http.Request) *Ident {
 	// 为什么不让它也用 cookie：`/pty` 上「没有 Origin 的 cookie 请求」一律拒（SECURITY.md
 	// §7 那条 —— cookie 是浏览器替人带的，没 Origin 就说不清是谁发的）。换成这个头就没有
 	// 那个问题：跨站的页面设不了它（WebSocket 的 API 压根不让设头，fetch 设了会触发
-	// preflight，而本服务不答 preflight），所以它和 `?token=` 一样不是 Ambient，
+	// preflight，而本服务不答 preflight），所以它不是 Ambient，
 	// 不需要 CSRF 那几道。撤销、过期、重验走的全是同一张设备表。
 	if tok, ok := bearer(r); ok {
 		if d := s.lookup(tok, ip); d != nil {
 			return &Ident{Kind: "device", Label: d.Label, Device: d, VerifiedAt: d.VerifiedAt, PasskeyAt: d.PasskeyAt}
 		}
-	}
-	// 旧书签：只够换一次 cookie（handleRoot 里换），也允许直接调 /api（老脚本还能用）
-	if tok := r.URL.Query().Get("token"); tok != "" && s.legacyOK(r) &&
-		subtle.ConstantTimeCompare([]byte(tok), []byte(s.cfg.Token)) == 1 {
-		return &Ident{Kind: "legacy", Label: "旧 token"}
 	}
 	if s.trustLoopback(r) {
 		return &Ident{Kind: "loopback", Label: "本机", Ambient: true}
@@ -502,27 +491,11 @@ func (s *Store) lookup(token, ip string) *Device {
 	return nil
 }
 
-func (s *Store) legacyOK(r *http.Request) bool {
-	if s.cfg.Token == "" {
-		return false
-	}
-	switch s.cfg.LegacyToken {
-	case "off":
-		return false
-	case "loopback":
-		// 只在本机有效：泄露给「已经能在你机器上跑代码的东西」不算泄露，它早就有 shell 了。
-		// 公网口上那个「本机」是假的（frpc 从本机连过来），见 FromPublicPort。
-		return remoteIsLoopback(r) && !behindProxy(r) && !FromPublicPort(r)
-	default:
-		return true
-	}
-}
-
 // trustLoopback 四个条件全中才算「这是本机上的浏览器」：
 //
 //   - 明确打开了这个豁免（默认关）；
-//   - **请求不是从公网口进来的**。这条是结构性的那一道：公网口（HERDR_WEB_PUBLIC_PORT）
-//     上的请求源地址一样是 127.0.0.1，靠地址判断不出来，只能靠「落在哪个监听上」。
+//   - **请求不是从中继隧道进来的**。这条是结构性的那一道：隧道连接的源地址是中继说的，
+//     中继被拿下时它想填 127.0.0.1 就填 127.0.0.1，只能靠「落在哪个监听上」。
 //     开发时随手打开这个豁免、而机器上又有隧道，靠的就是这条不变成一个公网免鉴权的口。
 //   - 源地址是 loopback；
 //   - **Host 头也是 loopback 字面量**。这条是给前置反代兜底的：穿透进来的请求源地址
@@ -559,13 +532,10 @@ func behindProxy(r *http.Request) bool {
 		r.Header.Get("Forwarded") != ""
 }
 
+// ClientIP 就是对端地址，**不看 X-Forwarded-For**：本服务前面不再有任何可信的反代
+// （TLS=proxy 下线了），XFF 只可能是客户端自己写的 —— 信了它，谁都能换一个「源 IP」把限速绕干净。
+// 中继那条路上的真实 IP 是隧道带过来、填进 RemoteAddr 的（relay.srcConn）。
 func (s *Store) ClientIP(r *http.Request) string {
-	if v := r.Header.Get("X-Forwarded-For"); v != "" && s.cfg.TrustProxy {
-		if i := strings.IndexByte(v, ','); i > 0 {
-			return strings.TrimSpace(v[:i])
-		}
-		return strings.TrimSpace(v)
-	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

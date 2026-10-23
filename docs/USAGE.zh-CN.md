@@ -330,7 +330,7 @@ agent 说「图生成在 `/tmp/plot-3.png`」，**点那行路径就能看**。�
 
 **前提是「证书有效的 https」**，这条最容易卡住：
 
-- ✅ 有域名 + 真证书（上面配法 3 和 4，`HERDR_WEB_TLS=acme` 或 `proxy`）—— 正常出现。
+- ✅ 有域名 + 真证书（下面「配置」里的配法 3 和 4：中继 + ACME，或者自己给 `TLS_CERT/KEY`）—— 正常出现。
 - ✅ `http://localhost` / `http://127.0.0.1` —— 浏览器把本机当安全上下文，也能装。
 - ❌ **自签证书**（`HERDR_WEB_TLS=auto`，局域网直连那条）—— 点过「继续访问」也不行：
   能用、能存密码，但浏览器**不给装**，菜单里就只剩「创建快捷方式」。要在局域网里装，
@@ -377,7 +377,7 @@ herdr-web connect https://herdr.example.com --logout   # 撤销这台、删掉�
   （配对码只管第一次进来）—— 和浏览器设备一样：长期用靠的是 passkey。续在原来那台设备上。
 - 码**必须手输**，批准页不接受带码的链接；**只有你自己刚跑了 connect 才批准**，谁让你「帮忙输一下
   这个码」都别理。请求是从跑 herdr-web 的那台机器本身发起的时候，批准页会标出来。
-- 走的是**公网口那条 https**（和浏览器同一条路），公网地址不接受 `http://`：设备令牌就是一个
+- 走的是**和浏览器同一条 https**（中继那条，或局域网），公网地址不接受 `http://`：设备令牌就是一个
   登录 shell，不能明文走。
 - 断线（锁屏、换网）自己重连，重连就是新开一个 shell 再敲一次 `herdr`，屏幕和断之前一样。
   网络僵住时**行首按 `~.`** 断开（同 ssh；行首的 `~` 会晚一个键才发出去，`~/foo` 照常能敲）。
@@ -427,9 +427,8 @@ export HERDR_WEB_TLS=auto
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `HERDR_WEB_PORT` | `7788` | 主口。**只服务本地网络**：对端不是本机 / 私网 / 链路本地 / CGNAT 的连接一律 403。要从公网访问就另开一个显式端口，见 `HERDR_WEB_PUBLIC_PORT` |
+| `HERDR_WEB_PORT` | `7788` | 主口。**只服务本地网络**：对端不是本机 / 私网 / 链路本地 / CGNAT 的连接一律 403，没有任何开关能把它打开。要从公网访问走云端中继，见 `HERDR_WEB_RELAY_URL` |
 | `HERDR_WEB_HOST` | `127.0.0.1` | 监听地址，`0.0.0.0` 开局域网 |
-| `HERDR_WEB_TOKEN` | 读 `~/.herdr-web/token` | **旧机制**，只够引导一次（换成设备凭据）。新装不再自动生成 |
 | `HERDR_WEB_SHELL` | `$SHELL` | PTY 里跑的 shell |
 | `HERDR_WEB_ONCONNECT` | `herdr` | 连上就自动往 PTY 里敲这一行（自带回车）。**显式设成空串就不敲**（`HERDR_WEB_ONCONNECT=`）。**地址栏里带 session 的 URL 不看这一项**（`/work` 一律敲 `herdr --session work`，见[第一次跑](#第一次跑)）—— 想固定进某个 session 就把 URL 存书签，别写在这儿 |
 | `HERDR_WEB_ONCONNECT_MS` | `250` | 上面那行等多久再敲。等的是「shell 吐出第一批输出之后」再加这么多 —— rc 里动 `stty` 或者补全插件初始化会**静默吞掉**早敲的字符。自动敲的那行没进去就调大它 |
@@ -454,24 +453,37 @@ export HERDR_WEB_TLS=auto
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `HERDR_WEB_PUBLIC_PORT` | 关 | **要暴露就暴露这个口。** 在 `0.0.0.0:<端口>` 上另起一个监听（和主口同一个 handler），隧道 / 端口转发 / 反代指它，**别指主口**（主口只服务本地网络）。落在这个口上的请求按公网对待：本机免配对、旧 token 的 `loopback` 档都不生效（穿透进来的源地址也是 127.0.0.1，唯一靠得住的判据是「落在哪个监听上」）、限速的「本机永不封」豁免关掉、TLS 变成强制。为什么是多一个口而不是主口上加个开关：开关是**声明**，而声明会漏 —— 在这台机器上写代码的人（尤其是 agent）看到的是 `127.0.0.1:7788`，它没法知道机器上还有一条隧道正把这个口转出去，于是「反正只有本机能连」这个前提下做的每个决定都变成公网上的洞。换成独立端口之后，漏配的表现是隧道那头 connection refused |
-| `HERDR_WEB_EXPOSED` | 关 | **老写法，新配置用 `HERDR_WEB_PUBLIC_PORT`。** `=1` 声明**主口本身**能从公网碰到（frp / 端口转发 / 隧道）—— 这件事没法自动测，只能你自己说。声明之后：强制要求 TLS、关掉本机免配对，主口那道「只服务本地网络」的门也跟着让开（既然你说了它是公网口）。留着只为兼容已经这么配的机器 |
 | `HERDR_WEB_TLS_CERT` / `_KEY` | 空 | 用指定的证书。自己有域名、DNS-01 签了张真证书就走这条 —— 浏览器零警告、不用装描述文件，最省事 |
 | `HERDR_WEB_ACME_DNS` | 空 | 让 herdr-web **自己去签证书**，值是 DNS 服务商：`cloudflare` / `alidns` / `tencentcloud` / `route53` / `digitalocean` / `huaweicloud`。走 DNS-01，所以不需要外网能连进来 —— NAT 后面、甚至域名指到内网地址都能签。**各家 token 怎么拿、要给什么权限：[DNS.md](../DNS.md)** |
 | `HERDR_WEB_ACME_EMAIL` | 空 | ACME 账号邮箱。可以空着，但那样到期提醒也收不到 |
 | `HERDR_WEB_ACME_STAGING` | 关 | `=1` 用 Let's Encrypt 测试环境。**调试时一定先开**：正式环境同一组域名一周只给 5 张证书，试几次就把自己锁一周 |
-| `HERDR_WEB_TLS` | 见说明 | `auto` 自签（本地 CA + 397 天叶子，IP 变了自动重签）/ `off` 明文 / `proxy` 前置已经终止了 TLS。默认：暴露或听局域网 → `auto`，纯本机 → `off` |
+| `HERDR_WEB_TLS` | 见说明 | `auto` 自签（本地 CA + 397 天叶子，IP 变了自动重签）/ `off` 明文。默认：连中继或听局域网 → `auto`，纯本机 → `off`。给了 `TLS_CERT/KEY` 或 `ACME_DNS` 就按那两条走。**`proxy`（前面那层终止 TLS）2026-10-23 下线了**，配着它直接拒绝启动 —— 见下面「下线了的配置」 |
 | `HERDR_WEB_LAN_PORT` | 关 | 在 `0.0.0.0:<端口>` 上**另开一个监听**，自签证书、SAN 跟着当前局域网地址走。这样从隧道进来的页面能嗅探出「其实就在同一个局域网里」并切过去 —— 每个字的往返从两跳公网变成一跳交换机。每台设备有一步手动的、跳不过去：**先开一次它、点「继续访问」**；没点过的话嗅探会在 TLS 握手那里失败，页面就安静留在隧道那条路上。这个口**必须是 TLS**：https 页面对 `http://` 目标的 fetch 算 active mixed content，浏览器一律拦死，明文的口压根探不到。主口本来就在局域网上服务自签 TLS 的话不用配它。**直连那个 origin 上是一份独立凭据**（cookie 是 host-only 的），所以同一台平板在设备面板里会出现两条 —— 切过去那一下会带一个一次性配对码过去，不用你手配 —— 而且那一侧**用不了 passkey**：WebAuthn 的 RPID 只能是域名，裸 IP 不是，装了 CA 也一样。细节见 [DEPLOY.md](../DEPLOY.md) |
 | `HERDR_WEB_HOSTNAME` | 空 | 允许出现在 `Host` 头里的域名，逗号分隔。**IP 一律放行，域名必须在名单里** —— 这是 DNS rebinding 的唯一防线，不在名单里直接 421 |
-| `HERDR_WEB_PUBLIC_URL` | 空 | 你**实际访问**的地址（`https://herdr.example.com:17788`）。frp 的公网端口和本地端口经常不是一个，不给就横幅上的二维码是废的。里面的域名自动进白名单 |
+| `HERDR_WEB_PUBLIC_URL` | 见说明 | 你**实际访问**的地址，决定横幅上的二维码编哪个地址。连中继时默认就是 `https://<RELAY_HOST>`，一般不用给。里面的域名自动进白名单 |
+| `HERDR_WEB_RELAY_URL` | 空 | 云端中继（`herdr-relay`）的地址，`https://relay.example.com`。和下一项一起给，这台机器就主动连上去，手机打开 `https://<RELAY_HOST>/` 就能进。中继**只转密文**：TLS 在本机终止，所以必须配一张真证书（`HERDR_WEB_ACME_DNS`），`TLS=off` 时拒绝启动。**这是从公网进来的唯一一条路**，隧道进来的连接按公网的规则对待（不认本机免配对、限速不豁免）。先在 VPS 上 `herdr-relay invite <主机名>` 出邀请码、本机 `herdr-web relay join` 注册一次，见 [docs/dev/RELAY.md](dev/RELAY.md) |
+| `HERDR_WEB_RELAY_HOST` | 空 | 这台机器在中继上的名字（`mac.h.example.com`）。自动进白名单 / 证书 / passkey 的 Origin；没给 `PUBLIC_URL` 时它就是二维码上的地址 |
 | `HERDR_WEB_DEVICE_TTL_DAYS` | `90` | 设备凭据多久不活跃就失效（每次用都续期）。`0` = **永不过期** |
 | `HERDR_WEB_RPID` | 推导 | passkey 绑定的域名。默认取 `HERDR_WEB_HOSTNAME` 的第一个，纯本机时是 `localhost`。**裸 IP 不是合法值**，那种部署用不了 passkey |
 | `HERDR_WEB_REAUTH_HOURS` | `24` | 注册过 passkey 之后，一份会话凭据在「上次生物验证」之后还能用多久。`0` = 不要求重验（passkey 只当登录/换设备的入口）。**一把 passkey 都没注册时这条完全不生效** |
-| `HERDR_WEB_LEGACY_TOKEN` | `on` | `on` / `loopback`（旧 token 只在本机有效）/ `off`。迁移完建议直接删掉 token 文件 |
-| `HERDR_WEB_TRUST_LOOPBACK` | 关 | `=1` 让来自 127.0.0.1 的请求免配对。**套 frp / 反代时千万别开** —— 那时候公网请求的源地址就是 127.0.0.1，等于谁都是「本机」。开着时还额外要求 `Host` 也是 loopback 字面量 |
-| `HERDR_WEB_TRUST_PROXY` | 关 | `=1` 才读 `X-Forwarded-For`。没有可信前置时开着，攻击者自带一个头就能伪造源 IP、把按 IP 的限速绕干净 |
-| `HERDR_WEB_INSECURE` | 关 | `=1` 允许「暴露出去但没有 TLS」。除了临时调试没有正当用途 |
+| `HERDR_WEB_TRUST_LOOPBACK` | 关 | `=1` 让来自 127.0.0.1 的请求免配对，只在主口生效（中继隧道那条路不认）。**机器上有别的穿透（frp 之类）指着主口时千万别开** —— 那时候公网请求的源地址就是 127.0.0.1，等于谁都是「本机」。开着时还额外要求 `Host` 也是 loopback 字面量 |
 | `HERDR_WEB_UPDATE_CHECK` | 开 | `=0` 关掉自动查更新。关掉之后这个进程**不会有任何出站请求** —— 内网机器不该主动连外网那类环境的硬要求。只是不自动查，手动 `herdr-web update --check` 照样能查 |
+
+### 下线了的配置
+
+2026-10-23 下线。理由是同一个：frp + `TLS=proxy` 那条路上 TLS 在 VPS 上解密，VPS 被拿下就是整个终端
+（按键、cookie、还能往页面里塞 JS）。现在公网只有中继一条路，TLS 在本机终止，中继只见密文
+（[RELAY.md](dev/RELAY.md) §1）。除了 `TLS=proxy`，下面这些还配着的话**只打一行警告、照样忽略**
+（忽略之后行为只会更严，不至于升级之后服务拉不起来）。
+
+| 变量 | 现在怎么办 |
+|---|---|
+| `HERDR_WEB_TLS=proxy` | **拒绝启动**。公网改走中继（`HERDR_WEB_RELAY_URL` / `_HOST`），本机证书用 `HERDR_WEB_ACME_DNS` 或 `TLS_CERT/KEY` |
+| `HERDR_WEB_PUBLIC_PORT` | 公网口没了，改走中继；frp / 反代那条隧道拆掉 |
+| `HERDR_WEB_EXPOSED` | 主口永远只服务本地网络，公网走中继 |
+| `HERDR_WEB_INSECURE` | 没有替代：非本机监听又没有 TLS 一律拒绝启动 |
+| `HERDR_WEB_TRUST_PROXY` | 删掉。不再读 `X-Forwarded-For`；中继那条路上手机的真实 IP 由隧道带过来 |
+| `HERDR_WEB_LEGACY_TOKEN` / `HERDR_WEB_TOKEN` | 删掉。旧的 `?token=` 书签不再认（打开时只把它从 URL 里洗掉），用配对码配一次；`~/.herdr-web/token` 还在的话启动会提醒你删 |
 
 ### 排查
 
@@ -495,11 +507,13 @@ export HERDR_WEB_TLS=auto
 # 2. 局域网里的手机 / 平板：自签 TLS，扫横幅上的二维码配对
 HERDR_WEB_HOST=0.0.0.0 ./herdr-web
 
-# 3. 走 frp / 隧道暴露到公网：**隧道指公网口，别指主口**（主口只服务本地网络，
-#    它上面那些宽松默认都建立在「公网碰不到」上面），PUBLIC_URL 决定二维码编哪个地址
-HERDR_WEB_PUBLIC_PORT=17788 HERDR_WEB_TLS=proxy \
-HERDR_WEB_PUBLIC_URL=https://herdr.example.com \
-HERDR_WEB_HOSTNAME=herdr.example.com ./herdr-web
+# 3. 从公网连：走云端中继（VPS 上跑 herdr-relay，只转密文）。先注册一次：
+#    VPS 上 `herdr-relay invite mac.h.example.com` 出邀请码，本机
+#    `herdr-web relay join https://relay.example.com mac.h.example.com <邀请码>`。
+#    TLS 在本机终止，所以要一张真证书；二维码自动编 https://mac.h.example.com
+HERDR_WEB_RELAY_URL=https://relay.example.com \
+HERDR_WEB_RELAY_HOST=mac.h.example.com \
+HERDR_WEB_ACME_DNS=cloudflare HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN=xxx ./herdr-web
 
 # 4. 自己有域名 + 真证书（浏览器零警告，最省事）
 HERDR_WEB_HOST=0.0.0.0 HERDR_WEB_HOSTNAME=herdr.example.com \
@@ -525,7 +539,7 @@ herdr-web service uninstall   # 停掉并删掉（数据和日志不动）
 **配置是装的那一刻从当前 shell 抄进去的**，所以顺序是「先把环境配对，再 install」。**装完之后想改配置也走同一条路** —— 没有「改一项」的子命令，改配置 = 换个环境重新 `install`（幂等，就是覆盖 + 重启，装着的那份会被停掉再起来）：
 
 ```bash
-HERDR_WEB_PUBLIC_PORT=9000 herdr-web service install   # 改一项，其余照抄当前 shell
+HERDR_WEB_LAN_PORT=7790 herdr-web service install      # 改一项，其余照抄当前 shell
 herdr-web service install --env-file .env              # 或者让一个文件当唯一出处
 ```
 
@@ -609,13 +623,13 @@ herdr-web version           # 当前版本 + 当初是怎么装的
 - **URL 里没有秘密。** `?pair=` 进来就换成 cookie 再 302 洗掉，书签云同步和截图都不是泄露渠道。
 - **能撤销。** `herdr-web revoke`，或设置 →「设备」里踢掉，下一个请求立刻 401。
 - **配对码只能由坐在机器前的人产生**，网页上任何路径都不出码 —— 那是系统里唯一的带外因子。
-- **暴露出去又没 TLS 就拒绝启动。** Host 白名单挡 DNS rebinding，Origin + `SameSite=Strict` +
+- **非本机监听又没 TLS 就拒绝启动。** Host 白名单挡 DNS rebinding，Origin + `SameSite=Strict` +
   自定义头三道挡 CSRF，猜配对码指数退避 + 按 IP 封锁 + 全局熔断。
 - **passkey 是第二因子**（服务端只存公钥，泄露也没用）。加完之后换新设备不用回机器前，
   会话凭据的寿命能从三个月压到一天。
 
 → 威胁模型、每条为什么这么设计、还没做的：[SECURITY.md](dev/SECURITY.md)
-　从公网连（frp / 隧道）、TLS 四档：[DEPLOY.md](../DEPLOY.md)
+　从公网连（云端中继）、TLS 分档：[DEPLOY.md](../DEPLOY.md)
 
 ## 文档
 

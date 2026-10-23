@@ -102,15 +102,15 @@ herdr-web                                       # 1. 纯本机（默认），明
 HERDR_WEB_HOST=0.0.0.0 herdr-web                # 2. 局域网的手机 / 平板，自签 TLS + 二维码
 HERDR_WEB_ONCONNECT= herdr-web                  # 3. 别自动进 herdr，留在 shell 里
 
-# 4. 走 frp / 隧道暴露到公网：隧道指公网口，别指主口
-HERDR_WEB_PUBLIC_PORT=17788 HERDR_WEB_TLS=proxy \
-HERDR_WEB_PUBLIC_URL=https://herdr.example.com \
-HERDR_WEB_HOSTNAME=herdr.example.com herdr-web
+# 4. 从公网连：走云端中继（VPS 上跑 herdr-relay，只转密文，TLS 在本机终止）
+#    先 `herdr-web relay join https://relay.example.com mac.h.example.com <邀请码>` 注册一次
+HERDR_WEB_RELAY_URL=https://relay.example.com HERDR_WEB_RELAY_HOST=mac.h.example.com \
+HERDR_WEB_ACME_DNS=cloudflare HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN=... herdr-web
 ```
 
-主口（默认 7788）**只服务本地网络**：对端不是本机 / 私网一律 403。要暴露就另开
-`HERDR_WEB_PUBLIC_PORT`，判据是「请求落在哪个监听上」而不是一句声明 ——
-在一台挂着隧道的机器上，`127.0.0.1:7788` 有可能整个互联网都连得到，而本地一点症状都没有。
+主口（默认 7788）**只服务本地网络**：对端不是本机 / 私网一律 403，没有开关能打开。公网只走
+中继 —— VPS 上只见密文，被拿下也看不到终端。frp / 反代解密那条路（`PUBLIC_PORT`、`TLS=proxy`）
+2026-10-23 下线了，见 [DEPLOY.md](DEPLOY.md)。
 
 → 四十多个变量的完整表：[使用说明 · 配置](docs/USAGE.zh-CN.md#配置)
 

@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -36,7 +37,7 @@ func TestEnvMapping(t *testing.T) {
 	t.Setenv("HERDR_WEB_DIR", t.TempDir())
 
 	t.Setenv("HERDR_WEB_POLL_MS", "900")
-	t.Setenv("HERDR_WEB_INSECURE", "true") // 以前只认 "1"，现在 1/true/yes 都行
+	t.Setenv("HERDR_WEB_FILES", "false") // 以前只认 "1"，现在 1/true/yes/false 都行
 	t.Setenv("HERDR_WEB_HOSTNAME", "A.example.com, b.example.com")
 	c, err := Load()
 	if err != nil {
@@ -45,8 +46,8 @@ func TestEnvMapping(t *testing.T) {
 	if c.PollMS != 900 {
 		t.Errorf("PollMS = %d, want 900", c.PollMS)
 	}
-	if !c.Insecure {
-		t.Error("HERDR_WEB_INSECURE=true 应当算开")
+	if c.Files {
+		t.Error("HERDR_WEB_FILES=false 应当算关")
 	}
 	if len(c.Hostnames) != 2 || c.Hostnames[0] != "a.example.com" {
 		t.Errorf("域名白名单没按逗号拆 / 没转小写: %v", c.Hostnames)
@@ -175,33 +176,6 @@ func TestLanPortConflict(t *testing.T) {
 	}
 }
 
-// 公网口撞上本地那几个口比局域网口撞更严重：谁先监听成功谁说话，而两个口的认证宽严
-// 不一样 —— 撞了就等于把「公网」那套规则盖到主口上（或者反过来），所以直接拒绝启动。
-func TestPublicPortConflict(t *testing.T) {
-	t.Setenv("HERDR_WEB_DIR", t.TempDir())
-	t.Setenv("HERDR_WEB_PORT", "7788")
-	t.Setenv("HERDR_WEB_TLS", "off")
-	t.Setenv("HERDR_WEB_LAN_PORT", "7790")
-
-	for _, p := range []string{"7788", "7789", "7790"} {
-		t.Setenv("HERDR_WEB_PUBLIC_PORT", p)
-		if _, err := Load(); err == nil {
-			t.Errorf("PUBLIC_PORT=%s 和本地端口撞了，应当报错", p)
-		}
-	}
-	t.Setenv("HERDR_WEB_PUBLIC_PORT", "17788")
-	c, err := Load()
-	if err != nil || c.PublicPort != 17788 {
-		t.Fatalf("PublicPort = %d (%v)", c.PublicPort, err)
-	}
-	if c.MainIsPrivate() != true {
-		t.Error("开了公网口不影响主口 —— 主口照旧只服务本地网络")
-	}
-	if !c.PublicReachable() {
-		t.Error("开了公网口就算有公网入口（限速的本机豁免要跟着关）")
-	}
-}
-
 // 默认（什么都不配）必须是「主口只服务本地网络、没有任何公网入口」。
 // 这条是整套端口分工的地基：agent 在本机开发时看到的就是这个默认值。
 func TestDefaultIsPrivateOnly(t *testing.T) {
@@ -210,37 +184,79 @@ func TestDefaultIsPrivateOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Port != 7788 || c.PublicPort != 0 {
-		t.Errorf("默认应当是主口 7788 + 不开公网口，得到 %d / %d", c.Port, c.PublicPort)
-	}
-	if !c.MainIsPrivate() || c.PublicReachable() {
-		t.Error("默认必须是「只服务本地网络、没有公网入口」")
+	if c.Port != 7788 || c.PublicReachable() {
+		t.Errorf("默认应当是主口 7788 + 没有公网入口，得到 %d / %v", c.Port, c.PublicReachable())
 	}
 }
 
-// 开了公网口就等于「这个口后面的 shell 能从公网碰到」，TLS 的默认档位必须跟着变成自签
-// （而不是纯本机那档明文）。漏了这条的表现是明文挂在公网上，而本地看起来一切正常。
-func TestPublicPortImpliesTLS(t *testing.T) {
+// 下线了的那几个变量（2026-10-23）：留在老配置里时**照样能起**（被忽略之后只会更严），
+// 但要说出来；TLS=proxy 例外 —— 前面那层还在往这个口发明文，换哪一档都是「看着在跑、一个都
+// 打不开」，所以直接拒绝启动。
+func TestRetiredOptions(t *testing.T) {
 	t.Setenv("HERDR_WEB_DIR", t.TempDir())
 	t.Setenv("HERDR_WEB_PUBLIC_PORT", "17788")
+	t.Setenv("HERDR_WEB_EXPOSED", "1")
+	t.Setenv("HERDR_WEB_TRUST_PROXY", "1")
 	c, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.TLSMode != "auto" || !c.BrowserHTTPS() {
-		t.Errorf("TLSMode = %q，想要 auto", c.TLSMode)
+	if len(c.Retired) != 3 {
+		t.Errorf("该说出三个下线的变量，得到 %v", c.Retired)
+	}
+	if c.PublicReachable() || c.TLSMode != "off" {
+		t.Error("下线的变量必须被忽略：没有公网入口、纯本机照旧明文")
+	}
+
+	t.Setenv("HERDR_WEB_TLS", "proxy")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "下线") {
+		t.Errorf("TLS=proxy 该拒绝启动并说明原因：%v", err)
 	}
 }
 
-// 公网口的端口号和主口不是一个，而 WebAuthn 的 Origin 必须**完全一致**。
-// 少了这条的表现是「公网上 passkey 登录点了报错」，本机怎么测都测不出来。
-func TestPasskeyOriginsIncludePublicPort(t *testing.T) {
-	c := Config{Hostnames: []string{"h.example.com"}, Port: 7788, PublicPort: 17788}
-	want := "https://h.example.com:17788"
+// 连中继 = 这台机器能从公网碰到：TLS 默认档位要变成本进程终止、限速的本机豁免要关，
+// 主机名要进白名单 / passkey 的 Origin，二维码要指到中继那个地址。
+func TestRelayIsPublic(t *testing.T) {
+	t.Setenv("HERDR_WEB_DIR", t.TempDir())
+	t.Setenv("HERDR_WEB_RELAY_URL", "https://relay.example.com/")
+	t.Setenv("HERDR_WEB_RELAY_HOST", "Mac.H.Example.com")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.RelayHost != "mac.h.example.com" || c.RelayURL != "https://relay.example.com" {
+		t.Errorf("没规整：%q %q", c.RelayHost, c.RelayURL)
+	}
+	if !c.PublicReachable() || !c.ServesTLS() {
+		t.Error("连中继必须按公网对待，而且 TLS 在本进程终止")
+	}
+	if c.PublicURL != "https://mac.h.example.com" {
+		t.Errorf("PublicURL = %q", c.PublicURL)
+	}
+	found := false
 	for _, o := range c.PasskeyOrigins() {
-		if o == want {
-			return
+		found = found || o == "https://mac.h.example.com"
+	}
+	if !found {
+		t.Errorf("passkey 的 Origin 里没有中继那个地址：%v", c.PasskeyOrigins())
+	}
+}
+
+// 中继只转 TLS 密文、按 SNI 认路：本进程不终止 TLS 的配置在这条路上是「隧道连上了、
+// 手机一个都打不开」，所以直接拒绝启动。
+func TestRelayRequiresLocalTLS(t *testing.T) {
+	for _, mode := range []string{"proxy", "off"} {
+		t.Setenv("HERDR_WEB_DIR", t.TempDir())
+		t.Setenv("HERDR_WEB_RELAY_URL", "https://relay.example.com")
+		t.Setenv("HERDR_WEB_RELAY_HOST", "mac.h.example.com")
+		t.Setenv("HERDR_WEB_TLS", mode)
+		if _, err := Load(); err == nil {
+			t.Errorf("TLS=%s 连中继该拒绝", mode)
 		}
 	}
-	t.Errorf("origins 里得有 %s，得到 %v", want, c.PasskeyOrigins())
+	t.Setenv("HERDR_WEB_TLS", "")
+	t.Setenv("HERDR_WEB_RELAY_HOST", "")
+	if _, err := Load(); err == nil {
+		t.Error("只给 URL 不给主机名该报错")
+	}
 }

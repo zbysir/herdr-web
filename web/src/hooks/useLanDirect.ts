@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, INSTALL, SESSION, type State } from '@/lib/api'
+import { isNative, postNative } from '@/lib/native'
 
 /**
  * 局域网直连：页面是从公网那条路（隧道 / 反代）加载的，但如果此刻就在同一个局域网里，
@@ -123,6 +124,15 @@ export function useLanDirect(lan: State['lan'], enabled: boolean) {
     // 本机开的页面直接收工：见 onLoopback。放在最前面而不是塞进下面那串判断里 ——
     // 后面每一条都会写 localStorage，而这条的意思是「这个页面跟直连没关系」。
     if (!enabled || !origins.length || onLoopback()) return
+
+    // 在 App 里：换路是壳的事，**不换 origin**（docs/dev/RELAY.md §4）。壳拿这几个地址按
+    // 本页的域名做 TLS 握手探测（真证书、验域名），通了就让 WebView 的连接从那儿走 ——
+    // 地址栏、cookie、passkey 全不变，用不着下面那套「交接令牌 + 跳到 IP origin」。
+    // 老版本的壳不认这条消息，等于没有直连（它本来就因为自签证书连不上直连口）。
+    if (isNative()) {
+      postNative({ t: 'lan', origins })
+      return
+    }
 
     // 已经在直连这条路上了：把「走通过」记下来（IP 变了要靠它认），然后什么都不做。
     if (onLanNow(origins)) {

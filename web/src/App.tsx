@@ -15,6 +15,7 @@ import { useCompose } from '@/hooks/useCompose'
 import { useNotices } from '@/hooks/useNotices'
 import { useGitDirty } from '@/hooks/useGitDirty'
 import { useLanDirect } from '@/hooks/useLanDirect'
+import { useRoute } from '@/hooks/useRoute'
 import { away, onNotifyClick, showNotify } from '@/lib/notify'
 import { isStandalone } from '@/lib/install'
 import { isNative, onNative, postNative, syncNativeTheme } from '@/lib/native'
@@ -651,6 +652,11 @@ export default function App() {
   /* 局域网直连：探得通就换到直连那个 origin 上去（见 hooks/useLanDirect.ts）。
      等 gate === 'ok' 才开始 —— 配对页上跳走没有意义，凭据还没有。 */
   const lanDirect = useLanDirect(state?.lan, gate === 'ok')
+  /* 走的是直连还是中继：左上角那个状态点「连上了」时的颜色（绿 = 直连、蓝 = 中继） */
+  const route = useRoute(state?.lan?.origins)
+  /* 切到局域网时终端怎么跟过去：不在这儿管。壳在探通的那一刻把走中继的连接全部掐掉（LanRoute 的
+     closeRelay），终端那条一断，Session 自己的自动重连就走局域网了 —— 在页面上「切的那一下重连终端」
+     是第一版，撞上过时机问题（见 RELAY.md） */
 
   const notices = useNotices(
     state?.notice?.pollMs ?? 0,
@@ -2157,6 +2163,11 @@ export default function App() {
     )
   }
 
+  // 「连上了」的那颗点：绿 = 直连、蓝 = 中继。两个 class 写全（Tailwind 只认字面量）
+  const routeDot = route.via === 'lan'
+    ? 'bg-ok shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-ok)_22%,transparent)]'
+    : 'bg-relay shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-relay)_22%,transparent)]'
+
   return (
     <div className="flex h-full flex-col">
       {/* 批准命令行登录：全屏、盖在一切上面（fixed z-50），和配对页同一个分量 */}
@@ -2235,18 +2246,21 @@ export default function App() {
 
           现在：**chat 模式下这个点说 chat**（那是你正在看的东西），终端的状态并到 title 里
           一起说；不在 chat 模式时照旧说终端。文字也一律带上「终端」两个字，免得再有歧义。
+
+          「连上了」那一档**按路分两种颜色**：绿 = 局域网直连，蓝 = 经云端中继（useRoute）。
+          用户点名的：不另加标签，就用这一个点。断开（灰）/ 出错（红）照旧。
         */}
         <div className="flex min-w-0 flex-1 items-center gap-[7px] max-phone:flex-none">
           <span
-            title={chatOpen
+            title={(chatOpen
               ? `${chatOK === false ? '对话读不到' : '对话正常（每 3 秒一拍，走 HTTP）'} · 终端：${status.text}`
-              : `终端：${status.text}`}
+              : `终端：${status.text}`) + ` · ${route.detail}`}
             className={cn(
               'size-2 shrink-0 rounded-full',
               chatOpen
-                ? (chatOK === false ? 'bg-bad' : 'bg-ok shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-ok)_22%,transparent)]')
+                ? (chatOK === false ? 'bg-bad' : routeDot)
                 : cn(
-                  status.cls === 'on' && 'bg-ok shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-ok)_22%,transparent)]',
+                  status.cls === 'on' && routeDot,
                   status.cls === 'err' && 'bg-bad',
                   status.cls === '' && 'bg-muted',
                 ),

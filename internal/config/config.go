@@ -13,42 +13,46 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/spf13/viper"
+
+	"github.com/zbysir/herdr-web/internal/relay"
 )
 
 type Config struct {
 	Host string
-	// Port 是**主口**（默认 7788）：只服务本地网络。没声明 Exposed 时，对端不是私网 /
-	// 本机 / 链路本地 / CGNAT 的连接一个字节都不服务（见 server.PrivateListener）。
+	// Port 是**主口**（默认 7788）：只服务本地网络。对端不是私网 / 本机 / 链路本地 /
+	// CGNAT 的连接一个字节都不服务（见 server.PrivateListener），**没有开关能让开**。
 	//
 	// 「默认那个口只是本地的」必须是代码强制的，不能是习惯：在这台机器上开发的人
-	// （尤其是 agent）看到的是 `127.0.0.1:7788`，不会知道机器上还有一条隧道正把这个口
+	// （尤其是 agent）看到的是 `127.0.0.1:7788`，不会知道机器上有没有一条隧道正把这个口
 	// 转到公网上 —— 于是「反正只有本机能连」这个前提下做的每个决定（本机免配对、
-	// 不配 TLS）都变成一个公网上的洞。要暴露就显式配 PublicPort，见那一条。
-	Port int
-	// PublicPort 是**公网口**（默认 0 = 不开）：隧道 / 端口转发 / 反代该指的那个口。
-	// 听 0.0.0.0，和主口同一个 handler，但认证上按「公网」对待：本机免配对和旧 token
-	// 的 loopback 档在它上面一律不生效（见 auth.FromPublicPort），限速的「本机永不封」
-	// 豁免也跟着关掉。
+	// 不配 TLS）都变成一个公网上的洞。从公网进来的唯一一条路是中继（RelayURL）。
 	//
-	// 为什么不是「给主口加一个 EXPOSED=1 开关」（那个还留着，兼容老配置）：开关是
-	// **声明**，声明会漏 —— 漏了的表现是一个公网上的免鉴权 shell，而本地看起来一切正常。
-	// 换成「公网要另开一个口」之后，漏配的表现变成隧道那头连不上（connection refused），
-	// 一个可用性问题换掉一个送 shell 的问题。
-	PublicPort int
+	// 以前还有一个「公网口」（PUBLIC_PORT，给 frp / 反代指）和一个「主口就是公网口」的
+	// 声明（EXPOSED），2026-10-23 一起下线：那两条路上 TLS 常常在前面那层（VPS）解密，
+	// VPS 被拿下就是整个终端（docs/dev/RELAY.md §1）。中继是 TLS 在本机终止的替代。
+	Port int
 	// LanPort：局域网直连口（自签 TLS，听 0.0.0.0）。0 = 不开。
 	//
-	// 为什么要单独一个口：走隧道 / 反代那档，主口收的是明文（`TLS=proxy`），而
-	// **https 页面对 http 目标的 fetch 一律算 active mixed content 被浏览器拦死**
-	// （`mode:'no-cors'` 也拦）—— 所以嗅探不到，「自动发现局域网」这条路整个不成立。
-	// 拿真证书的那档也一样要另开：Let's Encrypt 不给私网 IP 签，照 IP 直连必然
-	// SAN 不匹配。只有「主口本身就是自签 TLS 且听着局域网」那档不用多开一个，
+	// 为什么要单独一个口：**https 页面对 http 目标的 fetch 一律算 active mixed content
+	// 被浏览器拦死**（`mode:'no-cors'` 也拦），所以这个口必须是 TLS；而拿真证书的那档
+	// 主口证书只对域名有效，Let's Encrypt 不给私网 IP 签，照 IP 直连必然 SAN 不匹配。只有「主口本身就是自签 TLS 且听着局域网」那档不用多开一个，
 	// 见 LanDirectPort。
 	LanPort int
-	Dir     string // ~/.herdr-web：配置和文件（softkeys.json / tls / uploads）
+
+	// RelayURL / RelayHost：连云端中继（`herdr-relay`）。主机主动连出去，手机打开
+	// https://<RelayHost>/，中继按 SNI 把整条 TLS 原样转过来（docs/dev/RELAY.md）。
+	// 两个要么都给要么都不给；身份私钥在 Dir/relay 下，由 `herdr-web relay join` 生成。
+	//
+	// 隧道里冒出来的连接是**第五个口**，规则和公网口完全一样（server.PublicListener）。
+	// 不接到主口上：主口那道「只服务本地网络」看对端地址，而隧道连接的对端地址是中继说的。
+	RelayURL  string
+	RelayHost string
+	Dir       string // ~/.herdr-web：配置和文件（softkeys.json / tls / uploads）
 	// DataDir 是**内部数据**：设备凭据、passkey 公钥。用户不该手改，所以和配置分开放。
 	// （为什么不上 SQLite：这点数据量换 +5MB 二进制和「cat 不了」不划算，而它唯一
 	//   能解决的跨进程写，用锁文件就够了 —— 见 internal/runlock。）
@@ -117,36 +121,19 @@ type Config struct {
 	ACMEDNS     string
 	ACMEEmail   string
 	ACMEStaging bool
-	// Insecure=true 才允许「暴露出去 + 没有 TLS」这种裸奔配置。
-	Insecure bool
-
-	// Exposed：**声明主口能从公网碰到**（frp / 端口转发 / 隧道）。
-	//
-	// 为什么必须手动声明：走 frp 的时候 herdr-web 往往只监听 127.0.0.1（frpc 从本机连
-	// 过来），于是「监听地址是不是 loopback」这个判据完全失效 —— 看起来最安全的配置
-	// 实际上暴露在整个互联网上。没有任何办法自动测出来，只能让人自己说。
-	//
-	// 声明之后：强制要求 TLS、关掉本机免配对、限速封锁默认打开，主口那道「只服务本地
-	// 网络」的检查也跟着让开（既然你说了它是公网口）。
-	//
-	// **新部署别用它，用 PublicPort。** 留着只为兼容已经这么配的机器：它是一个「说了才
-	// 生效」的声明，而漏声明的代价是一个公网上的免鉴权 shell。公网走独立端口之后，
-	// 漏配就只是隧道那头连不上。
-	Exposed bool
-
-	// TrustProxy：信任 X-Forwarded-For。**只有确实有个自己的可信前置时才能开** ——
-	// 否则攻击者自己发一个 XFF 头就能换一个「源 IP」，把按 IP 的限速和封锁绕干净。
-	TrustProxy bool
 
 	// TrustLoopback：从 127.0.0.1 连上来的免配对。**默认关**。
 	//
 	// 默认关是被 frp 逼出来的：穿透进来的请求源地址就是 127.0.0.1，开着的话公网上
-	// 任何人都直接算「本机」，等于把 shell 挂在外网上。纯本机玩的人可以手动打开。
+	// 任何人都直接算「本机」。frp 那条路已经下线，但机器上照样可能有别的穿透（这台开发机
+	// 上就有），所以还是默认关。中继那条路上它一律不生效（auth.FromPublicPort）。
 	TrustLoopback bool
-	// PublicURL 是**用户实际访问的**地址（比如 https://herdr.example.com:17788）。
-	// 走 frp 这类穿透时，公网端口和本地监听端口经常不是一个，本进程自己猜不出来 ——
-	// 猜错了横幅上的二维码就是废的。
+	// PublicURL 是**用户实际访问的**地址。连中继时默认就是 https://<RelayHost>，一般不用给。
 	PublicURL string
+
+	// Retired 是配置里还留着、但已经下线的那几个变量（启动时打一行警告，不拒绝启动 ——
+	// 它们被忽略之后行为只会更严，不会更松）。TLS=proxy 例外，那个直接拒绝启动。
+	Retired []string
 
 	// 允许的 Host 头里的**域名**（IP 一律放行，理由见 server/guard.go）。
 	// 不在名单里的域名直接 421 —— 这是 DNS rebinding 的唯一防线。
@@ -162,12 +149,20 @@ type Config struct {
 	// 注册过 passkey 之后，一份会话凭据在「上次生物验证」之后还能用多久。
 	// 0 = 不要求重验（passkey 只当登录/换设备的入口）。
 	ReauthHours int
+}
 
-	// 旧 token 的兼容档位："on" | "loopback" | "off"。
-	// 见 docs/dev/SECURITY.md 的「迁移路径」：这把 token 是明文落盘的长期秘密，只留着换一次
-	// 设备凭据，换完就该删。
-	LegacyToken string
-	Token       string // 旧 token 的明文；没有这个文件就是空
+// retired 是下线了的环境变量（2026-10-23）。看到就警告一句、照样忽略。
+//
+// 为什么不直接拒绝启动：这些变量被忽略之后行为只会更严（公网口不开、不信 XFF、
+// 不认旧 token、没 TLS 照样拒绝启动），而 npm 上的用户升级之后 launchd 拉不起来的话，
+// 他人在外面，连「去看一眼日志」的路都没有。
+var retired = map[string]string{
+	"HERDR_WEB_PUBLIC_PORT":  "公网口下线了，从公网进来改走云端中继（HERDR_WEB_RELAY_*，见 docs/dev/RELAY.md）",
+	"HERDR_WEB_EXPOSED":      "「主口就是公网口」的声明下线了，主口永远只服务本地网络；公网走中继",
+	"HERDR_WEB_INSECURE":     "裸奔开关下线了：非本机监听又没有 TLS 一律拒绝启动",
+	"HERDR_WEB_TRUST_PROXY":  "不再信任 X-Forwarded-For：中继那条路上真实 IP 由隧道带过来，用不着它",
+	"HERDR_WEB_LEGACY_TOKEN": "旧 ?token= 兼容下线了，~/.herdr-web/token 可以删掉",
+	"HERDR_WEB_TOKEN":        "旧 ?token= 兼容下线了",
 }
 
 // cleanRoots 解析 HERDR_WEB_FILE_ROOTS（逗号分隔）。
@@ -282,7 +277,6 @@ func Load() (*Config, error) {
 	c := &Config{
 		Host:        v.GetString("host"),
 		Port:        intOf(v, "port", 7788, 1),
-		PublicPort:  intOf(v, "public_port", 0, 0),
 		LanPort:     intOf(v, "lan_port", 0, 0),
 		Dir:         v.GetString("dir"),
 		Shell:       v.GetString("shell"),
@@ -312,19 +306,16 @@ func Load() (*Config, error) {
 		ACMEEmail:   v.GetString("acme_email"),
 		ACMEStaging: v.GetBool("acme_staging"),
 		// 这几个开关 1 / true / yes 都认（viper 的 GetBool），比只认 "1" 宽容
-		Insecure:      v.GetBool("insecure"),
-		Exposed:       v.GetBool("exposed"),
-		TrustProxy:    v.GetBool("trust_proxy"),
 		TrustLoopback: v.GetBool("trust_loopback"),
 		// 90 天滑动过期；设 0 就是永不过期（撤销改成纯手动）。目标是「一台设备配一次」，
 		// 所以这个值宁可长不要短 —— 过期一次就等于逼用户回到机器前重配一次。
 		DeviceTTLDays: intOf(v, "device_ttl_days", 90, 0),
-		LegacyToken:   v.GetString("legacy_token"),
 		RPID:          strings.ToLower(strings.TrimSpace(v.GetString("rpid"))),
 		// 24 小时：一天过一次 Face ID 是能接受的摩擦，而它把「cookie 被偷」的
 		// 可用窗口从三个月压到一天。调大就是拿这个窗口换省事。
 		ReauthHours: intOf(v, "reauth_hours", 24, 0),
 		PublicURL:   strings.TrimRight(v.GetString("public_url"), "/"),
+		RelayURL:    strings.TrimRight(strings.TrimSpace(v.GetString("relay_url")), "/"),
 	}
 	for _, h := range strings.Split(v.GetString("hostname"), ",") {
 		if h = strings.TrimSpace(h); h != "" {
@@ -332,6 +323,33 @@ func Load() (*Config, error) {
 		}
 	}
 	c.FileRoots = cleanRoots(v.GetString("file_roots"))
+
+	for name, why := range retired {
+		if _, ok := os.LookupEnv(name); ok {
+			c.Retired = append(c.Retired, name+"："+why)
+		}
+	}
+	sort.Strings(c.Retired)
+	if _, err := os.Stat(filepath.Join(c.Dir, "token")); err == nil {
+		c.Retired = append(c.Retired, filepath.Join(c.Dir, "token")+" 还在：旧 token 已经不认了，这个明文文件留着只是多一个能被读走的秘密，删掉")
+	}
+
+	if rh := strings.TrimSpace(v.GetString("relay_host")); rh != "" || c.RelayURL != "" {
+		if rh == "" || c.RelayURL == "" {
+			return nil, errors.New("HERDR_WEB_RELAY_URL 和 HERDR_WEB_RELAY_HOST 要么都给，要么都不给")
+		}
+		h, err := relay.CleanHost(rh)
+		if err != nil {
+			return nil, fmt.Errorf("HERDR_WEB_RELAY_HOST: %w", err)
+		}
+		c.RelayHost = h
+		// 进 Host 白名单 / 证书的域名 / passkey 的 Origin。追加在后面而不是插到最前：
+		// PasskeyRPID 默认取第一个，已经配着 HOSTNAME 的人换了 RPID 会让注册过的 passkey 全部失效
+		c.Hostnames = append(c.Hostnames, h)
+		if c.PublicURL == "" {
+			c.PublicURL = "https://" + h // 横幅上的二维码就该是这个地址
+		}
+	}
 
 	if (c.TLSCert == "") != (c.TLSKey == "") {
 		return nil, errors.New("HERDR_WEB_TLS_CERT 和 HERDR_WEB_TLS_KEY 要么都给，要么都不给")
@@ -349,13 +367,24 @@ func Load() (*Config, error) {
 	}
 	c.Hostnames = dedupe(c.Hostnames) // 两个变量指同一个域名时别往证书里塞两遍
 	if c.TLSMode == "" {
-		// 没说的话：开了公网口、暴露出去、或者听着局域网就自签，纯本机就明文
+		// 没说的话：连中继、或者听着局域网就自签，纯本机就明文
 		// （loopback 上 http 本来就是 secure context，没必要给自己找证书麻烦）
-		if c.PublicPort > 0 || c.Exposed || !c.Loopback {
+		if !c.Loopback || c.RelayURL != "" {
 			c.TLSMode = "auto"
 		} else {
 			c.TLSMode = "off"
 		}
+	}
+	switch c.TLSMode {
+	case "auto", "off":
+	case "proxy":
+		// 「前面那层终止 TLS」意味着那一层（多半是一台 VPS）看得到整个终端的明文，
+		// 还能改页面里的 JS。2026-10-23 下线，换成 TLS 在本机终止的中继。不能静默退回别的
+		// 档位：前面那层还在往这个口发明文，换成哪一档都是「看着在跑、一个都打不开」。
+		return nil, errors.New("HERDR_WEB_TLS=proxy 下线了：TLS 必须在本进程终止（前面那层解密 = 它被拿下就是整个终端）。" +
+			"从公网进来改走云端中继（HERDR_WEB_RELAY_*，见 docs/dev/RELAY.md），本机证书用 HERDR_WEB_ACME_DNS 或 HERDR_WEB_TLS_CERT/KEY")
+	default:
+		return nil, fmt.Errorf("HERDR_WEB_TLS=%q 不认识（auto / off）", c.TLSMode)
 	}
 	if c.TLSCert != "" {
 		c.TLSMode = "files"
@@ -369,26 +398,16 @@ func Load() (*Config, error) {
 			return nil, errors.New("配了 HERDR_WEB_ACME_DNS 就得给 HERDR_WEB_HOSTNAME —— 证书总得签给某个域名")
 		}
 	}
-	if c.Exposed {
-		c.TrustLoopback = false // 声明暴露之后这个豁免只会是个洞
+	// 中继只转 TLS 密文、靠 ClientHello 里的 SNI 认路，所以 TLS **必须在本进程终止**：
+	// 明文在这条路上是「隧道连上了、手机一个都打不开」
+	if c.RelayURL != "" && !c.ServesTLS() {
+		return nil, fmt.Errorf("连中继要求 TLS 在本进程终止（现在是 HERDR_WEB_TLS=%s）："+
+			"配 HERDR_WEB_ACME_DNS 签一张 %s 的真证书，或者给 HERDR_WEB_TLS_CERT/KEY", c.TLSMode, c.RelayHost)
 	}
 	// 撞口的表现是「第二个监听起不来」，而那条日志夹在启动横幅里很容易看漏，
 	// 所以在这儿直接拒绝启动。Port+1 是管理口（见 serve）。
 	if c.LanPort > 0 && (c.LanPort == c.Port || c.LanPort == c.Port+1) {
 		return nil, fmt.Errorf("HERDR_WEB_LAN_PORT=%d 和主口 %d（或管理口 %d）撞了，换一个", c.LanPort, c.Port, c.Port+1)
-	}
-	// 公网口撞上主口那更严重：那等于把「公网」这套规则盖到主口上，或者反过来 ——
-	// 谁先监听成功谁说话，而两个口的认证宽严不一样。宁可不让它起。
-	if c.PublicPort > 0 {
-		switch c.PublicPort {
-		case c.Port, c.Port + 1, c.LanPort:
-			return nil, fmt.Errorf("HERDR_WEB_PUBLIC_PORT=%d 和主口 %d / 管理口 %d / 局域网直连口 %d 里的某一个撞了，换一个"+
-				"（公网口存在的意义就是和本地那几个口分开）", c.PublicPort, c.Port, c.Port+1, c.LanPort)
-		}
-	}
-
-	if c.LegacyToken != "off" {
-		c.Token = legacyToken(v, c.Dir)
 	}
 	return c, nil
 }
@@ -435,25 +454,16 @@ func (c *Config) PasskeyOrigins() []string {
 	} else {
 		add("https://" + rpid)
 		add(fmt.Sprintf("https://%s:%d", rpid, c.Port))
-		// 公网口的端口号和主口不是一个，而 Origin 必须**完全一致**才算数。
-		// 少了这一条的表现是「公网上 passkey 登录按钮点了报错」，本机测不出来。
-		if c.PublicPort > 0 {
-			add(fmt.Sprintf("https://%s:%d", rpid, c.PublicPort))
-		}
 	}
 	return out
 }
 
-// MainIsPrivate 主口要不要那道「只服务本地网络」的门（server.PrivateListener）。
-//
-// 只有一种情况让开：明确声明了主口就是公网口（Exposed，老写法）。开着公网口不影响
-// 主口 —— 那正是这套端口分工要的效果：本地那个口继续按「本地」的宽松规则跑，公网那条
-// 路走另一个口、另一套规则。
-func (c *Config) MainIsPrivate() bool { return !c.Exposed }
-
 // PublicReachable：这个部署有没有一条公网进来的路（用来决定限速的「本机永不封」豁免
-// 该不该关、启动时要不要强制 TLS）。
-func (c *Config) PublicReachable() bool { return c.Exposed || c.PublicPort > 0 }
+// 该不该关、启动时要不要强制 TLS）。现在只剩中继这一条。
+func (c *Config) PublicReachable() bool { return c.RelayURL != "" }
+
+// RelayDir 放这台主机连中继用的身份私钥。
+func (c *Config) RelayDir() string { return filepath.Join(c.Dir, "relay") }
 
 // ServesTLS：本进程自己终止 TLS 吗。
 func (c *Config) ServesTLS() bool {
@@ -480,29 +490,10 @@ func (c *Config) LanDirectPort() int {
 // LanNeedsListener 局域网直连要不要另起一个监听（false = 直接用主口那个）。
 func (c *Config) LanNeedsListener() bool { return c.LanPort > 0 }
 
-// BrowserHTTPS：**浏览器眼里**是不是 https。cookie 的 Secure 属性要跟着这个走，
-// 而不是跟着本进程有没有 TLS —— 前置终止 TLS 时本进程收的是 http，但浏览器是 https。
-func (c *Config) BrowserHTTPS() bool { return c.ServesTLS() || c.TLSMode == "proxy" }
+// BrowserHTTPS：**浏览器眼里**是不是 https（cookie 的 Secure 属性跟着它）。
+// proxy 档下线之后它和 ServesTLS 是一回事；留着这个名字，是因为调用点问的就是「浏览器眼里」。
+func (c *Config) BrowserHTTPS() bool { return c.ServesTLS() }
 
 // LegacyDataFile 是分层之前那个位置（~/.herdr-web/xxx.json）。
 // auth 那边发现新位置没文件、旧位置有，就搬过去。
 func (c *Config) LegacyDataFile(name string) string { return filepath.Join(c.Dir, name) }
-
-// TokenFile 是旧 token 的落盘位置。迁移完就该删掉它（见 docs/dev/SECURITY.md）。
-func (c *Config) TokenFile() string { return filepath.Join(c.Dir, "token") }
-
-// legacyToken 只**读**不生成。
-//
-// 以前这里会在首启时生成一把永不过期的明文 token 落盘，那把 token 同时充当引导凭据和
-// 长期会话凭据。现在长期凭据是每台设备自己的（哈希落盘，见 internal/auth），这把明文
-// token 只剩「让旧书签还能进来换一次 cookie」这一个用途，所以**新装不再生成**它 ——
-// 磁盘上少一个能直接登录的明文，就少一条被同机 agent 读走的路。
-func legacyToken(v *viper.Viper, dir string) string {
-	if t := v.GetString("token"); t != "" {
-		return t
-	}
-	if b, err := os.ReadFile(filepath.Join(dir, "token")); err == nil {
-		return strings.TrimSpace(string(b))
-	}
-	return ""
-}

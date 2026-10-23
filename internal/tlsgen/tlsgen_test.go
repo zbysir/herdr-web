@@ -169,3 +169,20 @@ func hasIP(c *x509.Certificate, ip net.IP) bool {
 	}
 	return false
 }
+
+// 局域网直连口：按域名来的（App 走本地代理）给真证书，按 IP 来的（浏览器直连，不发 SNI）给自签。
+func TestBySNI(t *testing.T) {
+	named := &tls.Config{GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+		return &tls.Certificate{Certificate: [][]byte{[]byte("named")}}, nil
+	}}
+	fallback := &tls.Config{GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+		return &tls.Certificate{Certificate: [][]byte{[]byte("self")}}, nil
+	}}
+	c := BySNI([]string{"Herdr.Example.com"}, named, fallback)
+	for sni, want := range map[string]string{"herdr.example.com": "named", "": "self", "other.example.com": "self"} {
+		got, err := c.GetCertificate(&tls.ClientHelloInfo{ServerName: sni})
+		if err != nil || string(got.Certificate[0]) != want {
+			t.Errorf("SNI %q 该拿 %s，拿到 %q (%v)", sni, want, got.Certificate[0], err)
+		}
+	}
+}

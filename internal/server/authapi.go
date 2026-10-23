@@ -18,7 +18,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		q := r.URL.Query()
 		if code := q.Get("pair"); code != "" {
-			s.enter(w, r, code, "")
+			s.enter(w, r, code)
 			return
 		}
 		// 局域网直连的交接令牌。**只在从直连那个监听进来的请求上认** —— 判据是请求落在
@@ -28,8 +28,10 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 			s.enterLan(w, r, tok)
 			return
 		}
-		if tok := q.Get("token"); tok != "" {
-			s.enter(w, r, "", tok)
+		// 旧书签上的 `?token=`：那条兼容 2026-10-23 下线了，不认。但还是洗掉再渲染 ——
+		// 别让一个（哪怕已经作废的）秘密留在地址栏、历史记录和截图里。
+		if q.Get("token") != "" {
+			s.clean(w, r)
 			return
 		}
 	}
@@ -58,8 +60,8 @@ func (s *Server) enterLan(w http.ResponseWriter, r *http.Request, tok string) {
 	s.clean(w, r)
 }
 
-func (s *Server) enter(w http.ResponseWriter, r *http.Request, code, legacy string) {
-	// 已经有设备凭据了就什么都不做，只把 URL 洗干净 —— 否则旧书签每打开一次就多一台设备
+func (s *Server) enter(w http.ResponseWriter, r *http.Request, code string) {
+	// 已经有设备凭据了就什么都不做，只把 URL 洗干净 —— 否则同一个链接每打开一次就多一台设备
 	if id := s.Auth.Authenticate(r); id != nil && id.Kind == "device" {
 		s.clean(w, r)
 		return
@@ -69,27 +71,13 @@ func (s *Server) enter(w http.ResponseWriter, r *http.Request, code, legacy stri
 	}
 	ua, ip := r.UserAgent(), s.Auth.ClientIP(r)
 
-	if code != "" {
-		_, token, err := s.Auth.Redeem(code, ua, ip)
-		if err != nil {
-			s.Gate.Fail(ip)
-			s.clean(w, r, "e", "code")
-			return
-		}
-		s.Gate.Reset(ip)
-		s.Auth.IssueCookie(w, token)
-		s.clean(w, r)
-		return
-	}
-
-	// 旧 `?token=`：只够换一次设备凭据。换完就该把 ~/.herdr-web/token 删掉。
-	if id := s.Auth.Authenticate(r); id == nil || id.Kind != "legacy" {
+	_, token, err := s.Auth.Redeem(code, ua, ip)
+	if err != nil {
 		s.Gate.Fail(ip)
-		s.clean(w, r, "e", "token")
+		s.clean(w, r, "e", "code")
 		return
 	}
 	s.Gate.Reset(ip)
-	_, token := s.Auth.NewDevice(ua, ip, "旧 token 迁移")
 	s.Auth.IssueCookie(w, token)
 	s.clean(w, r)
 }
@@ -148,8 +136,6 @@ func (s *Server) apiAuth(w http.ResponseWriter, r *http.Request, seg []string) {
 		out := map[string]any{
 			"authed": id != nil, "tls": s.TLS,
 			"ttlDays": s.Cfg.DeviceTTLDays,
-			// 有没有旧 token 文件：配对页要据此提示「你也可以用旧链接进来」
-			"legacy": s.Cfg.Token != "" && s.Cfg.LegacyToken != "off",
 			// 配对页据此决定要不要显示「用 passkey 登录」。**按当前 origin 算** ——
 			// 裸 IP 上那个按钮按下去只会抛 SecurityError，见 Server.passkeyOK
 			"passkeys":         s.Passkeys.Count(),

@@ -68,11 +68,11 @@ func TestConnectSrcIncludesLan(t *testing.T) {
 	}
 }
 
-// 局域网口不在前置后面，转发头一定是客户端塞的。配了 TRUST_PROXY=1 的部署（前置只在
-// 公网那条路上）如果照信，同一个 Wi-Fi 上的人用一串假 XFF 就能把按 IP 的限速绕干净。
+// 局域网口不在前置后面，转发头一定是客户端塞的。ClientIP 已经不看 XFF 了，这里盯的是
+// 「局域网口上认的只有 RemoteAddr」这条性质别因为谁把 XFF 加回来而悄悄破掉。
 func TestLanListenerStripsForwarded(t *testing.T) {
 	dir := t.TempDir()
-	store, err := auth.New(auth.Config{Dir: dir, TrustProxy: true})
+	store, err := auth.New(auth.Config{Dir: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,14 +90,6 @@ func TestLanListenerStripsForwarded(t *testing.T) {
 	h.ServeHTTP(httptest.NewRecorder(), r)
 	if seen != "192.168.1.42" {
 		t.Errorf("局域网口上应当只认 RemoteAddr，得到 %q —— 限速能被一个头绕过去", seen)
-	}
-
-	// 对照：不套这层的话（公网那条路，前置是可信的）XFF 照旧生效
-	r2 := httptest.NewRequest(http.MethodGet, "/", nil)
-	r2.RemoteAddr = "127.0.0.1:5000"
-	r2.Header.Set("X-Forwarded-For", "1.2.3.4")
-	if got := store.ClientIP(r2); got != "1.2.3.4" {
-		t.Errorf("公网那条路上 TRUST_PROXY 的行为不该被改动，得到 %q", got)
 	}
 }
 

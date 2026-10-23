@@ -46,6 +46,7 @@ class Bridge(private val act: MainActivity, web: WebView, origin: String) {
                 page = reply
                 act.hideLoading()
                 send(JSONObject().put("t", "hello").put("platform", "android").put("version", BuildInfo.version(act)))
+                send(LanRoute.snapshot()) // 顶栏那个「直连 / 中继」标签的初值
             }
             "back" -> {
                 val cb = backCb ?: return
@@ -61,12 +62,20 @@ class Bridge(private val act: MainActivity, web: WebView, origin: String) {
             "setup" -> act.showSetup(null)
             "login" -> act.startLogin(m.optBoolean("reauth"))
             "loginCancel" -> act.cancelLogin()
+            // 局域网直连口的候选（`https://192.168.x.x:7790`），换路由壳做，不换 origin（LanRoute）
+            "lan" -> {
+                val a = m.optJSONArray("origins") ?: return
+                LanRoute.setCandidates((0 until a.length()).map { a.optString(it) })
+            }
             "notify" -> {
                 val op = m.optString("op")
                 if (op == "get") send(act.notifyState()) else act.notifyOp(op, m.optBoolean("on"))
             }
         }
     }
+
+    /** 「直连 / 中继」变了（LanRoute.onChange，已经节流过） */
+    fun route() = send(LanRoute.snapshot())
 
     /** 后台通知那一块的状态（开没开 / 有没有通知权限 / 是否免电池优化），设置页照它画 */
     fun notifyState(m: JSONObject) = send(m)

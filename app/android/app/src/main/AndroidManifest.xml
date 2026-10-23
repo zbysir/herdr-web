@@ -2,6 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 局域网换路（LanRoute）：网络一变就把局域网那条路作废、重新探。普通权限，不弹框 -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- LanRoute 要「申请」Wi-Fi（requestNetwork）：默认网络切到蜂窝时 Wi-Fi 被标成 EXITING，没人要就会被拆，
+         而局域网那几条连接正绑在它上面。普通权限，不弹框 -->
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <!-- 后台通知（NoticeService）：前台服务 + 弹通知 + 请求不受电池优化限制 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

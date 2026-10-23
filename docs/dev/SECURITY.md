@@ -5,6 +5,11 @@
 > 部署形态已定：**frp + 自己的域名 + 真证书**，不用 Tailscale，见 §8。
 > **公网暴露已从「声明 `EXPOSED=1`」改成端口分工**：主口只服务本地网络，公网另开
 > `HERDR_WEB_PUBLIC_PORT`。理由和判据见 §8「「暴露」从声明改成端口分工」。
+> **2026-10-23：`PUBLIC_PORT` / `EXPOSED` / `TLS=proxy` / `TRUST_PROXY` / 旧 token（`?token=`、
+> `LEGACY_TOKEN`）/ `INSECURE` 一起下线**，公网入口只剩云端中继（[RELAY.md](RELAY.md)）。
+> 理由：frp + `TLS=proxy` 时 TLS 在 VPS 上解密，VPS 被拿下就是整个终端；中继那条路 TLS 在本机
+> 终止、VPS 只见密文。主口永远只服务本地网络、不读 `X-Forwarded-For`。`TLS=proxy` 配着拒绝启动，
+> 其余几个只警告、照样忽略。下面讲 frp / 公网口 / 旧 token 的几节留着当历史，标了「（已下线）」。
 
 这个口后面是**一个登录 shell**，以及一个**能替你执行命令的 agent**（发件箱那条路即使
 不开 PTY 也一样能让 agent 跑命令）。现在挡在前面的只有一层：一个永不过期、明文
@@ -91,7 +96,7 @@ A6 值得单独说：**这个项目的存在意义就是驱动 agent**，而 age
 剪贴板就恢复了。
 
 **默认策略**（这条比机制本身重要）：`Host` 不是 loopback 且没有 TLS 时**拒绝启动**，
-错误信息里给出上面几条路和一个逃生口（`HERDR_WEB_INSECURE=1`）。现在的做法是打一行
+错误信息里给出上面几条路和一个逃生口（`HERDR_WEB_INSECURE=1`，2026-10-23 已下线，现在没有逃生口）。现在的做法是打一行
 警告然后照样起 —— 警告没人看。
 
 ### 域名和 443 都不是必须的
@@ -187,7 +192,7 @@ SHA-256 哈希**外加元数据：设备 id、标签（从 UA 猜，可改名）
 - **令牌走 `Authorization: Bearer`，不走 cookie。** `/pty` 上「没有 Origin 的 cookie 请求」一律
   拒（§7 那条），而命令行客户端不是浏览器、没有 Origin。换成这个头就不需要那条：跨站页面
   设不了它（WebSocket API 不让设头；fetch 设了触发 preflight，本服务不答），所以它和
-  `?token=` 一样**不是 Ambient**、不走 CSRF 那几道。撤销 / 过期 / 重验和浏览器设备一模一样。
+  旧的 `?token=`（已下线）一样**不是 Ambient**、不走 CSRF 那几道。撤销 / 过期 / 重验和浏览器设备一模一样。
 - **令牌只在 `client:"cli"` 时进响应体**，浏览器那条照旧只发 HttpOnly cookie —— 令牌进了
   响应体 JS 就读得到，HttpOnly 等于白设。
 - **passkey 那一步借浏览器做**（device flow，`auth/cliapprove.go` + `server/cliapi.go`）：命令行
@@ -203,7 +208,10 @@ SHA-256 哈希**外加元数据：设备 id、标签（从 UA 猜，可改名）
   发起方是本机时显式警告（`auth.FromThisMachine`）。「全部踢掉」连还挂着的请求一起清（已批准
   未领走的那种，领的那一下会新签一台）。客户端这边公网地址**只认 https**。
 
-### 迁移路径（旧书签不能一夜作废）
+### 迁移路径（旧书签不能一夜作废）（已下线）
+
+> 2026-10-23 起旧 `?token=` 不再认（URL 里带着只会被 302 洗掉），`~/.herdr-web/token` 不再读，
+> 文件还在的话启动时提醒删掉；`HERDR_WEB_LEGACY_TOKEN` / `HERDR_WEB_TOKEN` 被忽略。下面是当时的设计。
 
 `?token=<旧 token>` 保留，但**降级成只能引导**：命中就当一次配对，发 cookie，然后
 302 到 `/` 把 URL 里的 token 抹掉。旧书签第一次打开自动升级成设备会话，之后那个 token
@@ -310,7 +318,7 @@ NotAllowedError 都吞掉」的话，表现就是**点一下什么都不发生�
 判错的代价是不对称的：把一次手速极快的取消报成一行字，代价是多看一行；把「浏览器不让做」
 吞成静默，代价是点了没反应而且查不出原因。
 
-**顺带一条部署上的**：`HERDR_WEB_TLS=proxy` 时证书是**前面那一层**的事，而 passkey 要求
+**顺带一条部署上的**（`TLS=proxy` 2026-10-23 已下线，留着当历史）：`HERDR_WEB_TLS=proxy` 时证书是**前面那一层**的事，而 passkey 要求
 这个页面没有证书错误 —— 前面那层用自签 / 过期证书的话，域名、RP ID、secure context 全对，
 passkey 照样按不动。这时能进的路是配对码。
 
@@ -538,7 +546,11 @@ socket 是同一个套路。服务没在跑时这些子命令直接改文件。
 
 ---
 
-## 8. 部署形态：frp + 自己的域名（已定）
+## 8. 部署形态：frp + 自己的域名（已定）（已下线）
+
+> 2026-10-23 起公网只走云端中继（[RELAY.md](RELAY.md)），frp / 公网口 / `EXPOSED` / `TRUST_PROXY`
+> 都下线了。本节和下面几小节留着当历史：「落在哪个监听上」这个判据、frp 打穿默认策略的那几条，
+> 中继隧道照样继承（隧道连接在规则上就是原来的公网口，`auth.FromPublicPort` 这个名字也留着）。
 
 不用 Tailscale。实际形态是 **frpc 在本机、frps 在公网 VPS**，域名是自己的。
 
@@ -562,7 +574,7 @@ HERDR_WEB_PUBLIC_URL=https://herdr.example.com:17788 \
 4. **公网走一个独立端口，主口只服务本地网络**（`HERDR_WEB_PUBLIC_PORT`，2026-08-24 定）。
    下面单独一节。
 
-### 「暴露」从声明改成端口分工
+### 「暴露」从声明改成端口分工（已下线，判据保留）
 
 原来的设计是一个声明：`HERDR_WEB_EXPOSED=1`。它对着一半问题 —— 程序确实测不出来自己有没有
 被谁转发出去，只能人说。但**声明的失败模式是错的**：
@@ -592,7 +604,7 @@ HERDR_WEB_PUBLIC_URL=https://herdr.example.com:17788 \
 `HERDR_WEB_EXPOSED=1` 保留：意思变成「主口本身就是公网口」（那时候主口那道门让开）。
 留它只为兼容已经这么配的机器，新部署一律用 `PUBLIC_PORT`。
 
-### frp 把两个默认策略打穿了
+### frp 把两个默认策略打穿了（已下线）
 
 这是这次设计里最容易送掉 shell 的地方，单独记：
 
@@ -609,7 +621,8 @@ HERDR_WEB_PUBLIC_URL=https://herdr.example.com:17788 \
   所以 `Exposed`（或 `TrustProxy`）时自动关掉 loopback 豁免；代价是有人猛试的时候你自己
   也配不了新设备，用 `herdr-web unlock` 解。要真实 IP 就在 frpc 上开
   `transport.proxyProtocolVersion = "v2"`（herdr-web 还得会解 PROXY 头，现在不会），
-  或者用 http 模式让 frps 加 XFF（那时候才配 `HERDR_WEB_TRUST_PROXY=1`）。
+  或者用 http 模式让 frps 加 XFF（那时候才配 `HERDR_WEB_TRUST_PROXY=1`，2026-10-23 已下线：
+  现在一律不读 XFF，中继那条路的真实 IP 由隧道的子流头带过来）。
 - **`X-Forwarded-For` 默认不信。** 没有可信前置时读它，等于让攻击者自带一个头就换个源 IP，
   把限速和封锁绕干净。
 
@@ -745,7 +758,7 @@ POST   /api/security/panic                          # 要 step-up
    重签；设备信任的是 CA，所以重签不用重新点「继续访问」）。暴露出去没 TLS **拒绝启动**，
    横幅打 CA 指纹。
 3. ✅ 一次性配对码 + 设备 cookie（只存哈希、滑动续期、可设永不过期）+ 旧 `?token=` 一次性
-   迁移 + `pair` / `devices` / `revoke` / `unlock` 四个子命令（走 ctl.sock，认证靠文件权限）。
+   迁移（2026-10-23 下线）+ `pair` / `devices` / `revoke` / `unlock` 四个子命令（走 ctl.sock，认证靠文件权限）。
 4. ✅ L3 限速 + 按 IP 封锁 + 全局熔断 + 终端告警（公网暴露之后这条不能留到 P1）。
 
 *已验收*：`?pair=` 进来后地址栏里没有秘密（302 洗掉）；`devices.json` 里 grep 不到令牌
@@ -795,10 +808,11 @@ Origin → 403；`/pty` 缺 Origin 的 cookie 请求 → 403；暴露无 TLS →
 - **审计日志别记投稿内容**：那是口述的原始文本，可能包含任何东西，落盘还是 0600 的
   明文。要记就单独开关，默认关。
 - **走 frp 时「监听 127.0.0.1」不等于安全**，反而是最危险的组合：暴露检测和本机豁免
-  两个判据同时失效。所以公网走独立端口（`HERDR_WEB_PUBLIC_PORT`），主口只服务本地网络 ——
+  两个判据同时失效。所以公网走独立端口（当时是 `HERDR_WEB_PUBLIC_PORT`，2026-10-23 起换成中继隧道），主口只服务本地网络 ——
   判据换成「落在哪个监听上」，那是唯一伪造不了的东西。**别退回成一个布尔开关**：漏声明
   的代价是公网上一个免鉴权的 shell，而在本机上开发的人（agent 更是）根本不知道有隧道。
-- **`HERDR_WEB_PUBLIC_URL` 不给，横幅上的二维码就是废的**：frp 的公网端口和本地监听端口
+- **`HERDR_WEB_PUBLIC_URL` 不给，横幅上的二维码就是废的**（frp 时代的；连中继时它默认就是
+  `https://<RELAY_HOST>`）：frp 的公网端口和本地监听端口
   经常不一样，进程自己猜不出来，扫了会连到一个不存在的地址上。
 - **设备凭据别放 localStorage。** iOS 的 ITP 会把「脚本能写的存储」（localStorage、
   IndexedDB、`document.cookie` 写的 cookie）在**站点 7 天没交互后清掉** —— 表现就是

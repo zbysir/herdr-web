@@ -64,6 +64,7 @@ class MainActivity : ComponentActivity() {
     private var webUA: String = ""
 
     private val main = Handler(Looper.getMainLooper())
+    private val pushRoute = Runnable { bridge?.route() }
     private val io = Executors.newSingleThreadExecutor()
     /** 正在进行的那次 passkey 登录；null = 没有 */
     private var login: LoginRun? = null
@@ -118,6 +119,8 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         visible = true
         web?.onResume()
+        // 回前台：人可能已经从公司回到家了，重新探一次局域网
+        LanRoute.reprobe()
         // 每次回前台都确认一下服务在跑：Android 12+ 不许从后台起前台服务，被系统杀过之后
         // 只有这一刻能再起。已经在跑的话这一下是空操作
         NoticeService.start(this)
@@ -252,7 +255,14 @@ class MainActivity : ComponentActivity() {
         bridge = Bridge(this, w, o)
         root.addView(w, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         showLoading(server.host ?: o)
-        w.loadUrl(start.toString())
+        // 「直连 / 中继」一变就告诉页面（顶栏那个标签）。连接开开关关很密（一个页面加载就是
+        // 十几条），攒 150ms 发一次
+        LanRoute.onChange = {
+            main.removeCallbacks(pushRoute)
+            main.postDelayed(pushRoute, 150)
+        }
+        // 先装好局域网换路的代理再加载：装之前发出去的请求不走代理（LanRoute 的注释）
+        LanRoute.install(this, server) { if (web === w) w.loadUrl(start.toString()) }
     }
 
     // ---- 加载中 ----

@@ -9,9 +9,8 @@ import type { KeyAct } from '@/capabilities'
 // 凭据放 cookie 而不是 localStorage 是硬要求：iOS 的 ITP 会把「脚本能写的存储」在站点
 // 七天没交互之后清掉，那就变成「隔一周回来又要重新配对」。
 //
-// `?token=` 只在两种情况下还会用到：旧书签第一次打开（服务端会把它换成 cookie 再
-// 302 掉），以及 `make dev` 时前端跑在 vite 上、进不了服务端那条 302。
-const TOKEN = new URLSearchParams(location.search).get('token') ?? ''
+// 以前还有一条 `?token=`（旧书签的长期明文 token），2026-10-23 下线，服务端已经不认。
+// `make dev` 要免配对就给后端开 HERDR_WEB_TRUST_LOOPBACK=1。
 
 /**
  * 地址栏里的 herdr session：`https://host/work` → `work`，`https://host/` → `''`（默认）。
@@ -96,7 +95,6 @@ export const deviceKind = (): DeviceKind => {
 // 就一律给默认那一套 —— 漏了的表现是「平板上打开是手机那套排布」。
 function url(path: string) {
   const extra = new URLSearchParams()
-  if (TOKEN) extra.set('token', TOKEN)
   if (SESSION) extra.set('session', SESSION)
   extra.set('install', INSTALL)
   const q = extra.toString()
@@ -260,7 +258,6 @@ export const api = {
 /** PTY 的 WebSocket 地址。cookie 会在同源握手时自动带上，不用挂在 query 里。 */
 export function ptyURL(cols: number, rows: number) {
   const q = new URLSearchParams({ cols: String(cols), rows: String(rows) })
-  if (TOKEN) q.set('token', TOKEN)
   if (SESSION) q.set('session', SESSION) // 服务端据此敲 `herdr --session <name>`
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
   return `${proto}://${location.host}/pty?${q}`
@@ -272,13 +269,12 @@ export const FOLLOW = '__focused'
 
 export interface WhoAmI {
   authed: boolean
-  kind?: 'device' | 'legacy' | 'loopback'
+  kind?: 'device' | 'loopback'
   label?: string
   deviceId?: string
   expires?: string
   ttlDays: number
   tls: boolean
-  legacy: boolean // 服务端还留着旧 token 文件
   passkeys: number // 注册过几把
   passkeyAvailable: boolean // **当前这个 origin** 能不能用（裸 IP 访问时为 false，见 auth.UsableOn）
   /**

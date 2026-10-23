@@ -158,6 +158,8 @@ App 启动时探测有没有 GMS、有没有装分发器，登记时告诉服务
 | `setup` | 页 → 壳 | | 回到「填服务器地址」那一屏 |
 | `login` | 页 → 壳 → 页 | `reauth`；回 `state`（done / error / cancel）+ `msg` | 配对页上「用 passkey 登录 / 验证」：壳走 device flow（§3），done 之后页面自己翻进去 |
 | `notify` | 页 → 壳 → 页 | `op`（get / set / battery / test）+ `on`；回 `on` / `perm` / `battery` | 后台通知那块设置（§4a） |
+| `lan` | 页 → 壳 | `origins`（局域网直连口，`https://192.168.x.x:7790`） | 局域网换路的候选（`LanRoute.kt`）：壳按本页域名做 TLS 握手探测，通了就让 WebView 的连接从那儿走，**不换 origin**。网页那边在 App 里不再跑「跳到 IP origin」那一套（RELAY.md §4） |
+| `route` | 壳 → 页 | `lan` / `relay`（此刻开着的隧道各几条）、`next`（新连接往哪儿拨）、`proxied` | 顶栏左上角那个状态点的颜色：绿 = 直连、蓝 = 中继（`hooks/useRoute.ts`）。按**开着的**连接算，不按 `next`：终端是条长连接，刚切过去时它还在中继上 |
 
 ## 5. 仓库布局
 

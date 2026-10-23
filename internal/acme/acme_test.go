@@ -123,3 +123,19 @@ func writeTestCert(t *testing.T, certFile, keyFile, dnsName string, valid time.D
 		t.Fatal(err)
 	}
 }
+
+// staging 和正式环境的注册信息不能共用一份：先 staging 试一次再上正式，是文档推荐的顺序。
+func TestStagingAccountSeparate(t *testing.T) {
+	dir := t.TempDir()
+	st, err := (Config{Dir: dir, Staging: true}).account()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prod, err := (Config{Dir: dir}).account()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.regPath == prod.regPath {
+		t.Fatalf("staging 和正式环境写的是同一个注册文件：%s", st.regPath)
+	}
+}

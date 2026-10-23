@@ -28,6 +28,7 @@
 | **chat 模式**（对话流代替那一屏 TUI） | [CHAT.md](docs/dev/CHAT.md) |
 | **要不要在网页这边新做一块界面**（还是留在 TUI / 去扩 herdr） | [TUI-VS-GUI.md](docs/dev/TUI-VS-GUI.md) |
 | **原生 App 用什么做**（为什么是原生壳 + WebView、不用 nsh） | [WHY-NOT-NSH.md](docs/dev/WHY-NOT-NSH.md) |
+| **云端中继**（`cmd/herdr-relay`、`internal/relay`、`HERDR_WEB_RELAY_*`） | [RELAY.md](docs/dev/RELAY.md) |
 
 ## ⚠️ 起服务之前：本机的端口不一定只有本机能连
 
@@ -38,6 +39,9 @@
 - **本地一点症状都没有。** 监听地址是 `127.0.0.1`、每个请求的源地址也是 `127.0.0.1`
   （frpc 从本机连过来），从进程里看不出任何区别。
 - **`lsof` 也看不出来。** 转发关系在 frpc 的配置里，不在这个进程里。
+
+（herdr-web 的公网入口 2026-10-23 已经换成云端中继，frpc 里给 herdr-web 的那条还指着原来
+公网口的 27788 —— 那个口现在没人听，**别在 27788 上起任何东西**。ssh 等别的转发照旧在。）
 
 所以下面这几条是硬规矩，不是建议：
 
@@ -56,28 +60,43 @@
    「跑的是新版」，`herdr-web version` 报的是**文件**的版本，不是那个进程的；
    ② `KeepAlive=true` 意味着 `kill` 掉它 launchd 立刻拉起来。用户**明确要求**更新版本时才重启，
    用 `launchctl kickstart -k gui/$(id -u)/io.github.zbysir.herdr-web`（原地重启，配对设备和
-   passkey 都在 `~/.herdr-web/` 里，不会丢）。
+   passkey 都在 `~/.herdr-web/` 里，不会丢）；
+   ③ **改了 plist 里的环境变量，`kickstart` 不生效** —— 它不重读 plist，进程还是带着旧环境起来的。
+   要 `launchctl bootout gui/$(id -u)/io.github.zbysir.herdr-web` 再
+   `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.zbysir.herdr-web.plist`
+   （或者重新 `herdr-web service install`，它就是这么做的）。
 2. **不要为了省事关掉鉴权。** 一个「反正只有本机能连，先把鉴权关了调一下」的临时状态，
    在这台机器上等于把一个登录 shell 挂在公网上，只要那段时间有人扫到就完了。
-   要免配对就 `HERDR_WEB_TRUST_LOOPBACK=1`（它只在主口生效，公网口不认），
+   要免配对就 `HERDR_WEB_TRUST_LOOPBACK=1`（它只在主口生效，中继那条路不认），
    **别改代码去绕认证**，也别把这个变量写进要提交的 `.env`。
 3. **起本地实例要给自己一套独立的端口和目录**，别抢默认口：
    ```bash
+   env -u HERDR_WEB_RELAY_URL -u HERDR_WEB_RELAY_HOST -u HERDR_WEB_ACME_DNS \
+       -u HERDR_WEB_HOSTNAME -u HERDR_WEB_PUBLIC_URL -u HERDR_WEB_PUBLIC_PORT -u HERDR_WEB_TRUST_PROXY \
    HERDR_WEB_PORT=7811 HERDR_WEB_DIR=/tmp/herdr-web-dev HERDR_WEB_UPDATE_CHECK=false \
-   HERDR_WEB_TRUST_LOOPBACK=1 HERDR_WEB_PUBLIC_PORT=0 HERDR_WEB_LAN_PORT=0 \
+   HERDR_WEB_TRUST_LOOPBACK=1 HERDR_WEB_LAN_PORT=0 \
    HERDR_WEB_TLS=off go run ./cmd/herdr-web
    ```
-   （`HERDR_WEB_DIR` 另给一个的理由：设备凭据和锁文件不要和常驻服务那份打架。后面那三个
-   得**显式关掉**：`.env` 里配着公网口 27788 和局域网口 7790，而常驻那份正占着它们 ——
-   不关的话调试实例在「端口已被占用」上直接起不来，而报错里说的是那两个口，跟你改的东西
-   看着毫无关系。）
-4. **公网只走公网口。** 主口（`HERDR_WEB_PORT`，默认 7788）在代码里就只服务本地网络：
-   对端不是本机 / 私网 / 链路本地 / CGNAT 一律 403（`server.PrivateListener`）。要暴露就
-   配 `HERDR_WEB_PUBLIC_PORT`，隧道的 `localPort` 指那个口。**不要把隧道改回指主口**，
-   也不要为了「让外面能连上」去掉主口那道检查。
+   （`HERDR_WEB_DIR` 另给一个的理由：设备凭据和锁文件不要和常驻服务那份打架。
+   `LAN_PORT=0` 得**显式关掉**：`.env` 里配着局域网口 7790，而常驻那份正占着它 —— 不关的话
+   调试实例在「端口已被占用」上直接起不来，而报错里说的是那个口，跟你改的东西看着毫无关系。
+   前面那串 `env -u` 是因为 **agent 所在的 shell 常常带着一份常驻服务的 `HERDR_WEB_*`**
+   （2026-10-23 在一个 pane 里实测：`TLS=proxy` / `PUBLIC_PORT` / `TRUST_PROXY` / `HOSTNAME` /
+   `PUBLIC_URL` 都在，是下线前那套旧配置）。带着 `RELAY_*` 起的调试实例会去连中继、和常驻那份
+   抢同一个名字（新隧道顶掉旧的 —— 用户的公网入口当场被你接走）；带着 `ACME_DNS` 会无视
+   `TLS=off` 自己去签证书；带着 `HOSTNAME` / `PUBLIC_URL` 二维码和白名单都是常驻那份的。
+   先 `env | grep HERDR_WEB_` 看一眼还继承了什么，没列在这儿的也一并 `-u` 掉。
+   别再**设** `HERDR_WEB_PUBLIC_PORT=0`：那个变量 2026-10-23 下线了，带着只会多一行警告。）
+4. **公网只走中继。** 主口（`HERDR_WEB_PORT`，默认 7788）在代码里就只服务本地网络：
+   对端不是本机 / 私网 / 链路本地 / CGNAT 一律 403（`server.PrivateListener`），没有开关能打开。
+   从公网进来的唯一一条路是云端中继（`HERDR_WEB_RELAY_*`，[RELAY.md](docs/dev/RELAY.md)），
+   TLS 在本机终止。**公网口已经没有了**（`PUBLIC_PORT` / `EXPOSED` / `TLS=proxy` / `TRUST_PROXY`
+   2026-10-23 下线），**别把任何隧道指到主口上**，也别为了「让外面能连上」去掉主口那道检查、
+   或者把那几个下线的开关加回来。
 5. **动认证 / 端口 / 暴露形态之前先读**
-   [DEPLOY.md](DEPLOY.md) 的「四个口，规则不一样」和
-   [SECURITY.md](docs/dev/SECURITY.md) §8「「暴露」从声明改成端口分工」。
+   [DEPLOY.md](DEPLOY.md) 的「四个口，规则不一样」、
+   [SECURITY.md](docs/dev/SECURITY.md) §8「「暴露」从声明改成端口分工」（公网口那部分已下线，
+   判据保留）和 [RELAY.md](docs/dev/RELAY.md) §1、§2.3。
    那里写着为什么判据只能是「请求落在哪个监听上」，而不能是源 IP 或 `Host` 头 ——
    那两个在隧道后面都是伪造得出来的。
 
@@ -372,8 +391,8 @@
   「取消不弹红字」写成「凡是 NotAllowedError 都吞」的表现就是**点了什么都不发生、一个字
   都不报**（用户报的）。唯一分得开的是**时间**：弹了面板再让人划掉最少大半秒，被策略挡掉
   是当场就回，所以 700ms 内回来的不当取消（`web/src/lib/passkey.ts` 的 `ask()`）。另外
-  `HERDR_WEB_TLS=proxy` 时证书是前面那一层的事，前面那层证书不对的话域名 / RP ID / secure
-  context 全对也按不动 —— 那时能进的路是配对码。详见 [SECURITY.md](docs/dev/SECURITY.md) §L2(c)。
+  证书本身不对（过期、自签被跳过过）的话域名 / RP ID / secure context 全对也按不动 —— 那时能进的路
+  是配对码（原来 `HERDR_WEB_TLS=proxy` 时这条最常见，那一档 2026-10-23 已下线）。详见 [SECURITY.md](docs/dev/SECURITY.md) §L2(c)。
 - 键上的图标（`internal/softkeys/icons.go` ↔ `web/src/keyicons.tsx`，两边一字不差有测试）
   和**按键样式**（`keyStyle` pref，`solid` / `plain`）、**弹窗透明度**（`popupClear` pref，
   存的是**透明度**、0 = 不透明、出厂 60；CSS 那边取 `100 - clear`，反过来就和界面上写的
@@ -498,6 +517,13 @@
   Go 对 `0.0.0.0` 开的是**双栈**套接字，有全局 IPv6 的机器上那个口公网可能直接可达。
   另外「探不通」有两种原因，**必须分开报**：在外面（安静走公网）和地址变了（旧 origin 上那一下
   「继续访问」作废了，要提示人去新地址再点一次）—— 混成一种的话这条路会永久静默失效且查不出原因。
+- **云端中继**（`internal/relay` + `cmd/herdr-relay`，[RELAY.md](docs/dev/RELAY.md)）：按「中继那台 VPS
+  已经被拿下」设计。三条别破：① **中继不终止主机的 TLS**，只读 SNI 原样转 —— 页面一旦由中继发，
+  它改一行 JS 就能读终端、替你按 passkey；② 隧道连接是**唯一的公网入口**，规则就是原来公网口那套
+  （`server.PublicListener` / `auth.FromPublicPort`，公网口 2026-10-23 下线、名字留着），别接到主口上：主口看对端地址，而这里的对端地址（子流头里的 `src`）
+  是中继**说的**，只能拿来限速；③ 本进程必须自己终止 TLS（`TLS=off` 配中继拒绝启动；`TLS=proxy` 已下线，配着就拒绝启动）。
+  部署上一条**静默**的：CAA 只能挂在 zone（`h.example.com`）上，挂在主机名自己身上会让通配 A 记录
+  对它失效，机器当场连不上。
 - 触屏那一层（`web/src/term/touch.ts`、`web/src/lib/tap.ts`、面板里的行）有两条**方法上**的
   硬规矩，都是用真机报的 bug 换来的：
   ① **别用合成事件验「浏览器补发的兼容鼠标事件」那一类问题** —— 合成的 `dispatchEvent` 不会派生
@@ -583,6 +609,7 @@
 
 ```
 cmd/herdr-web/        main：flag、子命令、监听、启动横幅、网卡打分
+cmd/herdr-relay/      云端中继（跑在 VPS 上）：serve / invite / hosts / remove，配置走 HERDR_RELAY_*
 internal/
   config/             环境变量（viper，只认 env）、路径、部署形态（TLS 档位 / 暴露声明 / 白名单）
   auth/               配对码 + 设备凭据（只存哈希）+ 限速封锁（gate.go）
@@ -619,6 +646,9 @@ internal/
                       `agent_session`（`herdr integration install` 装的 hook 报的），
                       id → 路径这一步自己做。**边界自己钉**（不借文件浏览那一处，理由见
                       包注释）。为什么不读屏、两家格式的坑，在 docs/dev/CHAT.md
+  relay/              云端中继的两头：中继（server.go，按 SNI 原样转 TLS、邀请码、Ed25519 握手）
+                      和主机侧（host.go，主动连出去、隧道当成一个监听）。**中继手里不许有任何
+                      能登录 / 解密的东西**（不终止主机的 TLS、只存公钥和邀请码哈希），见 RELAY.md
   remote/             `herdr-web connect`：在另一台电脑的原生终端里连 /pty（配对码 → Bearer
                       令牌、raw 模式转发、断线重连、行首 `~.` 断开、断开时复位本地终端模式）
   clip/               读这台机器的剪贴板（pbpaste / wl-paste / xclip）—— herdr 的复制

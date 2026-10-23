@@ -38,6 +38,7 @@ import (
 	"github.com/zbysir/herdr-web/internal/ctl"
 	"github.com/zbysir/herdr-web/internal/lan"
 	"github.com/zbysir/herdr-web/internal/qr"
+	"github.com/zbysir/herdr-web/internal/relay"
 	"github.com/zbysir/herdr-web/internal/runlock"
 	"github.com/zbysir/herdr-web/internal/selfupdate"
 	"github.com/zbysir/herdr-web/internal/server"
@@ -72,7 +73,7 @@ func rootCmd() *cobra.Command {
 	}
 	root.Flags().StringVarP(&webDir, "web", "w", "", "从这个目录伺候前端（开发用；留空则用嵌进二进制的那份）")
 	root.AddCommand(pairCmd(), devicesCmd(), revokeCmd(), unlockCmd(),
-		passkeysCmd(), versionCmd(), updateCmd(), serviceCmd(), connectCmd())
+		passkeysCmd(), versionCmd(), updateCmd(), serviceCmd(), connectCmd(), relayCmd())
 	return root
 }
 
@@ -96,22 +97,24 @@ func serve(webDir string) error {
 
 	// 这个口后面是一个登录 shell。**能从公网碰到又没有 TLS** 的组合直接拒绝启动 ——
 	// 以前这里只打一行警告，警告没人看。
-	if (cfg.PublicReachable() || !cfg.Loopback) && !cfg.BrowserHTTPS() && !cfg.Insecure {
+	// 下线了的配置还留着：说一句、照样忽略（它们被忽略之后只会更严，见 config.retired）
+	for _, r := range cfg.Retired {
+		log.Printf("  ⚠️  已下线、忽略：%s", r)
+	}
+
+	// 这个口后面是一个登录 shell。**能从公网 / 局域网碰到又没有 TLS** 的组合直接拒绝启动，
+	// 没有逃生口（HERDR_WEB_INSECURE 那个裸奔开关 2026-10-23 下线了）。
+	if (cfg.PublicReachable() || !cfg.Loopback) && !cfg.ServesTLS() {
 		why := "监听的是 " + cfg.Host + "，不是本机地址"
-		if cfg.Exposed {
-			why = "声明了 HERDR_WEB_EXPOSED=1（这个口能从公网碰到）"
-		}
-		if cfg.PublicPort > 0 {
-			why = fmt.Sprintf("开了公网口 HERDR_WEB_PUBLIC_PORT=%d", cfg.PublicPort)
+		if cfg.RelayURL != "" {
+			why = "连着云端中继"
 		}
 		return fmt.Errorf("拒绝启动：%s，但没有配 TLS。\n\n"+
 			"  这个口后面是一个登录 shell，明文传输等于把它挂在网上（抓包就能拿到 cookie 和整个终端画面）。\n"+
-			"  三条路挑一条：\n"+
-			"    1. 有自己的域名（最省事，浏览器零警告）：用 DNS-01 签一张真证书，然后\n"+
-			"       HERDR_WEB_TLS_CERT=…/fullchain.pem HERDR_WEB_TLS_KEY=…/privkey.pem\n"+
-			"    2. 自签：HERDR_WEB_TLS=auto（每台设备第一次要点一下「继续访问」，或者装一次 CA）\n"+
-			"    3. 前置已经终止了 TLS（frp 的 https 模式 / nginx）：HERDR_WEB_TLS=proxy\n\n"+
-			"  真要裸奔：HERDR_WEB_INSECURE=1\n", why)
+			"  两条路挑一条：\n"+
+			"    1. 有自己的域名（最省事，浏览器零警告）：HERDR_WEB_ACME_DNS 自己签一张，\n"+
+			"       或者 HERDR_WEB_TLS_CERT=…/fullchain.pem HERDR_WEB_TLS_KEY=…/privkey.pem\n"+
+			"    2. 自签：HERDR_WEB_TLS=auto（每台设备第一次要点一下「继续访问」，或者装一次 CA）\n", why)
 	}
 
 	store, err := auth.New(auth.Config{
@@ -119,10 +122,7 @@ func serve(webDir string) error {
 		LegacyFile:    cfg.LegacyDataFile("devices.json"),
 		TTL:           time.Duration(cfg.DeviceTTLDays) * 24 * time.Hour,
 		Secure:        cfg.BrowserHTTPS(),
-		LegacyToken:   cfg.LegacyToken,
-		Token:         cfg.Token,
 		TrustLoopback: cfg.TrustLoopback,
-		TrustProxy:    cfg.TrustProxy,
 	})
 	if err != nil {
 		return fmt.Errorf("读设备列表失败: %w", err)
@@ -142,12 +142,10 @@ func serve(webDir string) error {
 	gate := auth.NewGate()
 	gate.Alert = alert
 
-	// 「本机永不封」这个豁免只有在**拿到的 IP 确实是客户端的**时候才成立：
-	//   - 信任前置（XFF 给的是真实 IP）→ loopback 只会出现在真本机，豁免安全；
-	//   - 有公网入口但没有可信前置 → 可能是 frp 这类穿透，所有请求的源 IP 都是
-	//     127.0.0.1 且不可信，留着豁免等于整层限速空转；
-	//   - 纯本地部署 → 本机 / 局域网，照常豁免。
-	gate.ExemptLoopback = cfg.TrustProxy || !cfg.PublicReachable()
+	// 「本机永不封」这个豁免只有在**本机地址确实代表人在机器前**时才成立。连着中继时
+	// 限速按隧道带过来的真实 IP 算，用不着这个豁免；更要紧的是中继说的地址可以是任何值
+	// （被拿下时它想填 127.0.0.1 就填 127.0.0.1），留着豁免就是给它一个绕过限速的口。
+	gate.ExemptLoopback = !cfg.PublicReachable()
 
 	// ACME 要在 tlsgen 之前：签完把路径交给它，后面就当成「用户指定的证书」走。
 	var acmeMgr *acme.Manager
@@ -285,6 +283,11 @@ func serve(webDir string) error {
 			conf := mainTLS
 			if lanCert != cert {
 				conf = lanCert.TLSConfig()
+				// 主口是真证书时，按域名来的（App 走本地代理拨到这儿）给真证书，按 IP 来的
+				// （浏览器那条直连）照旧给自签 —— 见 tlsgen.BySNI
+				if mainTLS != nil {
+					conf = tlsgen.BySNI(cfg.Hostnames, mainTLS, conf)
+				}
 			}
 			// 摘转发头 + 盖「从直连口进来」的章（交接令牌只在这种请求上兑得动）——
 			// 见 server.LanListener
@@ -297,30 +300,23 @@ func serve(webDir string) error {
 		}
 	}
 
-	// 公网口：隧道 / 端口转发 / 反代该指的那个口。和主口同一个 handler，区别在认证上
-	// 按「公网」对待（本机免配对之类的豁免一律不生效，见 server.PublicListener）。
+	// 中继：主机主动连出去，隧道里冒出来的连接当成**第五个口**，规则和公网口一模一样
+	// （PublicListener）。不接到主口上：主口那道「只服务本地网络」看的是对端地址，
+	// 而这里的对端地址是中继说的（docs/dev/RELAY.md §2.3）。
 	//
-	// 听 0.0.0.0 是必须的：隧道从本机连过来只需要 127.0.0.1，但路由器端口转发那条路
-	// 要的是通配地址，两者只能取宽的那个。
-	//
-	// **起不来就拒绝启动**（局域网口和管理口是软失败）：这个口是远程访问的唯一入口，
-	// 软失败的表现是「服务好像起来了，就是外面连不上」，而人在外面，看不到日志。
-	if cfg.PublicPort > 0 {
-		pubAddr := fmt.Sprintf("0.0.0.0:%d", cfg.PublicPort)
-		pubLn, err := net.Listen("tcp", pubAddr)
+	// 没注册过（没有身份私钥）就拒绝启动 —— 和公网口起不来同一个理由：人在外面，看不到日志。
+	// 连不上中继是软失败，隧道自己一直重连。
+	if cfg.RelayURL != "" {
+		tn, err := relay.Start(relay.HostConfig{URL: cfg.RelayURL, Host: cfg.RelayHost, Dir: cfg.RelayDir()})
 		if err != nil {
-			return fmt.Errorf("公网口 %s 起不来: %w", pubAddr, err)
+			return fmt.Errorf("中继：%w", err)
 		}
-		defer pubLn.Close()
-		if mainTLS != nil {
-			// 和主口同一张证书就复用同一份 tls.Config：在一个 Result 上调两次
-			// TLSConfig() 会不上锁地改它的内部状态，和另一个监听的握手抢。
-			pubLn = tls.NewListener(pubLn, mainTLS)
-		}
+		defer tn.Close()
 		h := server.PublicListener(srv.Handler())
 		go func() {
-			if err := http.Serve(pubLn, h); err != nil {
-				log.Printf("公网口挂了: %v", err)
+			// Load 里已经保证了 TLS 在本进程终止，mainTLS 一定有
+			if err := http.Serve(tls.NewListener(tn, mainTLS), h); err != nil {
+				log.Printf("中继那个口挂了: %v", err)
 			}
 		}()
 	}
@@ -353,13 +349,8 @@ func serve(webDir string) error {
 
 	banner(cfg, store, passkeys, cert, web == nil, adminAddr, updates)
 	defer store.Flush() // 把攒着的 LastSeen 落盘
-	// 主口默认**只服务本地网络**（见 server.PrivateListener）。声明了 EXPOSED=1 才让开
-	// 那道门 —— 那是「主口就是公网口」的老写法，新配置该用 HERDR_WEB_PUBLIC_PORT。
-	mainHandler := srv.Handler()
-	if cfg.MainIsPrivate() {
-		mainHandler = server.PrivateListener(mainHandler)
-	}
-	return http.Serve(ln, mainHandler)
+	// 主口**只服务本地网络**（见 server.PrivateListener），没有开关能让开：公网走中继。
+	return http.Serve(ln, server.PrivateListener(srv.Handler()))
 }
 
 /* ------------------------------------------------------------------ 子命令 */
@@ -761,9 +752,6 @@ type entry struct {
 // localURL 是「直连本进程这个口」的地址。**不能用 base()** —— 那个一旦配了
 // HERDR_WEB_PUBLIC_URL 就对任何 host 都返回同一个公网地址，而横幅上这三行恰恰是
 // 人用来回答「我现在该开哪个」的：全打成同一个公网地址等于这三行都没了。
-//
-// scheme 跟 ServesTLS 走而不是 BrowserHTTPS：proxy 档的 TLS 在前面那层，直连本进程
-// 这个口收的是明文 http，写成 https 的话本机那行点开是连不上的。
 func localURL(cfg *config.Config, host string, port int) string {
 	s := "http"
 	if cfg.ServesTLS() {
@@ -821,23 +809,12 @@ func entries(cfg *config.Config) []entry {
 
 	// 远程那条路的地址**只能由人给**（HERDR_WEB_PUBLIC_URL）：隧道那头是什么域名、
 	// 什么端口，本进程这边一点信息都没有。所以配了就照原样印，没配就说清楚缺哪一样。
-	switch {
-	case cfg.PublicURL != "":
-		note := "⚠️ 配了地址但公网口没开，外面连不进来（HERDR_WEB_PUBLIC_PORT）"
-		if cfg.PublicPort > 0 {
-			note = fmt.Sprintf("← 隧道 / 端口转发 / 反代指公网口 %d", cfg.PublicPort)
-		} else if cfg.Exposed {
-			note = fmt.Sprintf("← 隧道 / 端口转发 / 反代指主口 %d（老写法）", cfg.Port)
-		}
-		out = append(out, entry{label: "远程", url: cfg.PublicURL + "/", note: note})
-	case cfg.PublicPort > 0:
-		out = append(out, entry{label: "远程",
-			note: fmt.Sprintf("公网口 %d 开着，但没给 HERDR_WEB_PUBLIC_URL —— 隧道那头是什么地址本进程猜不出来", cfg.PublicPort)})
-	case cfg.Exposed:
-		out = append(out, entry{label: "远程",
-			note: fmt.Sprintf("主口 %d 被声明成公网口了（HERDR_WEB_EXPOSED=1），地址取决于隧道那头", cfg.Port)})
-	default:
-		out = append(out, entry{label: "远程", note: "没开（要暴露就 HERDR_WEB_PUBLIC_PORT=<另一个端口> + 隧道指过去）"})
+	if cfg.RelayURL != "" {
+		out = append(out, entry{label: "中继", url: "https://" + cfg.RelayHost + "/",
+			note: "经 " + strings.TrimPrefix(cfg.RelayURL, "https://") + " 转发（只转密文，TLS 在本机终止）"})
+	}
+	if cfg.RelayURL == "" {
+		out = append(out, entry{label: "远程", note: "没开（从公网进来走云端中继：HERDR_WEB_RELAY_*，见 docs/dev/RELAY.md）"})
 	}
 	return out
 }
@@ -897,15 +874,7 @@ func banner(cfg *config.Config, store *auth.Store, passkeys *auth.Passkeys, cert
 	}
 
 	fmt.Println()
-	if cfg.PublicPort > 0 {
-		fmt.Printf("  主口 %d 只服务本地网络（公网连过来会被拒），它上面的本机免配对在公网口 %d 上不生效。\n", cfg.Port, cfg.PublicPort)
-	} else if cfg.Exposed {
-		fmt.Printf("  主口 %d 被声明成公网口了（HERDR_WEB_EXPOSED=1，老写法）。\n", cfg.Port)
-		fmt.Printf("    建议改成 HERDR_WEB_PUBLIC_PORT=<另一个端口> 并让隧道指过去：\n")
-		fmt.Printf("    那样漏配的后果是「外面连不上」，而不是「本地那些宽松默认全暴露在公网」。\n")
-	} else {
-		fmt.Printf("  主口 %d 只服务本地网络（公网要另开 HERDR_WEB_PUBLIC_PORT）。\n", cfg.Port)
-	}
+	fmt.Printf("  主口 %d 只服务本地网络（公网连过来会被拒；从公网进来走中继）。\n", cfg.Port)
 	fmt.Printf("  管理页（只本机能开）：http://%s/\n", adminAddr)
 	fmt.Printf("  shell：%s   数据目录：%s\n", cfg.Shell, cfg.Dir)
 	fmt.Printf("  herdr socket：%s\n", cfg.Socket)
@@ -969,30 +938,15 @@ func banner(cfg *config.Config, store *auth.Store, passkeys *auth.Passkeys, cert
 	}
 
 	fmt.Println()
-	if cfg.Exposed {
-		fmt.Println("  ⚠️  声明了 HERDR_WEB_EXPOSED=1：这个口能从公网碰到。")
-		fmt.Println("     已关闭「本机免配对」（穿透进来的请求源地址也是 127.0.0.1），限速和封锁生效。")
-	} else if !cfg.Loopback {
+	if !cfg.Loopback {
 		fmt.Println("  ⚠️  正在监听 " + cfg.Host + "：局域网里的人能碰到这个口。")
-	}
-	if cfg.PublicPort > 0 && cfg.PublicURL == "" {
-		fmt.Println("  ⚠️  开了公网口但没给 HERDR_WEB_PUBLIC_URL：上面那个配对链接和二维码指的是本机地址，")
-		fmt.Println("     从公网扫它进不来（公网端口和本地端口通常不是一个，本进程猜不出来）。")
 	}
 	if cfg.TrustLoopback {
 		fmt.Println("  ⚠️  本机免配对是开着的（HERDR_WEB_TRUST_LOOPBACK=1）。")
-		if cfg.PublicPort > 0 {
-			fmt.Printf("     它只在主口 %d 上生效，公网口 %d 不认这个豁免。\n", cfg.Port, cfg.PublicPort)
-		} else {
-			fmt.Println("     主口只服务本地网络，所以这个豁免够不到公网 —— 但别把隧道指到主口上。")
-		}
+		fmt.Println("     它只在主口上生效、中继那条路不认 —— 但别把任何隧道指到主口上。")
 	}
-	if cfg.Token != "" && cfg.LegacyToken == "on" {
-		fmt.Println("  ⚠️  " + cfg.TokenFile() + " 还在，旧链接仍然能进来换凭据。")
-		fmt.Println("     设备都迁完就删掉它（或者 HERDR_WEB_LEGACY_TOKEN=loopback 只留本机可用）。")
-	}
-	if !cfg.BrowserHTTPS() && !cfg.Loopback {
-		fmt.Println("  ⚠️  明文 http：抓包就能拿到 cookie 和整个终端画面。")
+	for _, r := range cfg.Retired {
+		fmt.Println("  ⚠️  已下线、忽略：" + r)
 	}
 	// 有新版本就在这儿说一句。用缓存，不在启动路径上发请求 —— 网络慢的时候
 	// 那会变成「启动卡住十秒」，而这条提示不值那个代价。
