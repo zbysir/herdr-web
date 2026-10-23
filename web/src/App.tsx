@@ -577,6 +577,26 @@ export default function App() {
   }, [own, compose.panes, myPane, setMyPane])
 
   /*
+    「各看各的」时**在这台设备上新开了 tab / 工作空间，chat 就跟过去**（用户点名的）。
+    herdr 那边建完已经把焦点挪过去了（focus:true），但这一档下 chat 认的是 `myPane`
+    不是 herdr 的焦点 —— 不跟的话人点了「新开」，chat 还停在原来那个 pane 上，看着像没建成。
+    认「新的那个」靠建之前那批 pane 的 id（`tab.create` 只回 tab id，pane 列表里没有 tab id）：
+    优先 herdr 焦点所在的新 pane，没有就随便一个新的。10 秒还没等到（列表没刷上来）就作罢，
+    别让一次早就过去的新开在之后哪次刷新里把 chat 拽走。
+  */
+  const newPanesFrom = useRef<{ ids: Set<string>; at: number } | null>(null)
+  useEffect(() => {
+    const w = newPanesFrom.current
+    if (!w) return
+    if (!own || Date.now() - w.at > 10_000) { newPanesFrom.current = null; return }
+    const fresh = compose.panes.filter((p) => !w.ids.has(p.id))
+    const hit = fresh.find((p) => p.focused) ?? fresh[0]
+    if (!hit) return
+    newPanesFrom.current = null
+    setMyPane(hit.id)
+  }, [own, compose.panes, setMyPane])
+
+  /*
     「各看各的」时在 chat 里看着一个**跑完了**的 pane = 这次完成有人看过了，让服务端去
     herdr 那边清掉（outbox.MarkRead：借焦点一来一回）。herdr 的 done 只有聚焦才清，而这一档
     不动焦点 —— 不清的话点过去看完了，herdr 侧栏和面板一览里还是一片「完成」（用户报的）。
@@ -1630,6 +1650,8 @@ export default function App() {
    * 留着面板盖住的正是刚开出来的那一屏。
    */
   const newSpace = async (b: { new: 'tab' | 'workspace'; workspace?: string; cwd?: string; label?: string }) => {
+    // 建之前记下已有的那批 pane：建完要认出「新冒出来的那个」，chat 跟过去（见 newPanesFrom）
+    if (ownRef.current) newPanesFrom.current = { ids: new Set(compose.panes.map((p) => p.id)), at: Date.now() }
     try {
       const r = await spaceApi.create(b)
       setPanel(null)
@@ -1637,6 +1659,7 @@ export default function App() {
       // 起过名字就报名字（那是人刚敲进去的东西），没起就报 herdr 给的 id
       toast(`已新开${b.new === 'tab' ? ' tab' : '工作空间'}「${b.label || r.id}」`)
     } catch (e) {
+      newPanesFrom.current = null
       toast(`新开不了：${(e as Error).message}`)
     }
   }
