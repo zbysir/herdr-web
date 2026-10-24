@@ -93,6 +93,8 @@ is also a passkey approval in a browser; if the network stalls, type `~.` at the
 | **Diff** | `git diff` is unreadable in a phone terminal: this wraps lines, highlights the changed words, and streams every file of one change continuously. **Read-only** |
 | **Phones and tablets** | Touch gestures are fully taken over (drag = wheel reporting, long press = drag a pane border), the bottom dock can move to the right edge, portrait and landscape keep separate layouts |
 | **Install as an app** | PWA: its own window, no address bar or toolbar — several free terminal rows |
+| **Android app** (beta) | Same UI as the web page, plus what a web page can't do: **system notifications** when an agent finishes or waits for you, a status list in the notification shade and a home-screen widget; **automatic LAN direct connection** at home with the same address, falling back to the relay outside (top-left dot: green = direct, blue = relay) |
+| **Local ports** | A dev server an agent starts on `http://localhost:7830` opens at `https://7830.your-domain` after you log in; such links in the terminal and chat go there directly |
 
 → How each one works: [使用说明 · 能干什么](docs/USAGE.zh-CN.md#能干什么) (Chinese)
 
@@ -111,6 +113,10 @@ HERDR_WEB_ONCONNECT= herdr-web                  # 3. stay in the shell, don't en
 #    `herdr-web relay join https://relay.example.com mac.h.example.com <invite code>`
 HERDR_WEB_RELAY_URL=https://relay.example.com HERDR_WEB_RELAY_HOST=mac.h.example.com \
 HERDR_WEB_ACME_DNS=cloudflare HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN=... herdr-web
+
+# 5. On top of 4, proxy local ports: http://127.0.0.1:7830 → https://7830.mac.h.example.com
+#    Add a *.mac.h.example.com wildcard DNS record; the certificate gains *.mac.h.example.com
+HERDR_WEB_PORT_DOMAIN=mac.h.example.com
 ```
 
 The main port (7788 by default) **only serves the local network**: a peer that is not loopback or
@@ -140,7 +146,12 @@ This is effectively a shell over HTTP, and the door is built on that assumption:
 - **Credentials bind to the device, not the IP**, so changing networks never logs you out; **no secrets in URLs** (`?pair=` becomes a cookie and is 302'd away);
 - **Only someone sitting at the machine can mint a pairing code** — no path in the web UI produces one; that is the single out-of-band factor;
 - **Exposed without TLS refuses to start**; a Host allow-list stops DNS rebinding, three mechanisms stop CSRF, code guessing gets exponential backoff plus lockout;
-- **Passkeys are a second factor**; the server stores only public keys.
+- **Passkeys are a second factor**; the server stores only public keys;
+- **The internet only comes in through your own relay, which forwards ciphertext only**: TLS terminates on
+  your machine, the VPS holds no certificate key, device table or passkey, and a DNS CAA record pins
+  "only this machine can get a certificate" — a fully compromised relay can only cut you off;
+- **Local ports live on their own subdomains**: the proxied page is the agent's, so it never sees the main
+  site's credentials; you must log in first, and revoking a device takes effect immediately.
 
 → Threat model and the reasoning behind each line: [SECURITY.md](docs/dev/SECURITY.md) (Chinese)
 

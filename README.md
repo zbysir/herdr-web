@@ -90,6 +90,8 @@ herdr-web connect https://你的域名        # 第一次：浏览器里刷 pass
 | **改动** | `git diff` 在手机终端里基本读不了：这儿能折行、按词高亮，一次改动的全部文件是一条连续的流。**只读** |
 | **手机和平板** | 触屏手势整套接管（滑动 = 滚轮上报、长按 = 拖 pane 边框），底部面板能挪到右边，横竖屏各一套排布 |
 | **装成 app** | PWA：独立窗口、没有地址栏和工具条，白送好几行终端 |
+| **安卓 App**（测试版） | 界面同网页，补上网页做不到的：agent 跑完 / 等你回答弹**系统通知**、通知栏和桌面小部件一览；**局域网自动直连**，地址不变，出门自动走中继（左上角点：绿 = 直连、蓝 = 中继） |
+| **本地端口** | agent 起的 `http://localhost:7830`，在 `https://7830.你的域名` 上打开，先过登录；终端和对话里这种链接点了直接过去 |
 
 → 每一件具体怎么用：[使用说明 · 能干什么](docs/USAGE.zh-CN.md#能干什么)
 
@@ -106,6 +108,10 @@ HERDR_WEB_ONCONNECT= herdr-web                  # 3. 别自动进 herdr，留在
 #    先 `herdr-web relay join https://relay.example.com mac.h.example.com <邀请码>` 注册一次
 HERDR_WEB_RELAY_URL=https://relay.example.com HERDR_WEB_RELAY_HOST=mac.h.example.com \
 HERDR_WEB_ACME_DNS=cloudflare HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN=... herdr-web
+
+# 5. 在 4 的基础上，把本地端口代理出来：http://127.0.0.1:7830 → https://7830.mac.h.example.com
+#    DNS 上加一条 *.mac.h.example.com 通配记录，证书会多签一个 *.mac.h.example.com
+HERDR_WEB_PORT_DOMAIN=mac.h.example.com
 ```
 
 主口（默认 7788）**只服务本地网络**：对端不是本机 / 私网一律 403，没有开关能打开。公网只走
@@ -133,7 +139,10 @@ herdr-web update             # 查 + 升（怎么升看当初是怎么装的）
 - **凭据绑设备不绑 IP**，换网不掉线；**URL 里没有秘密**（`?pair=` 进来就换成 cookie 再 302 洗掉）；
 - **配对码只能由坐在机器前的人产生** —— 网页上任何路径都不出码，那是唯一的带外因子；
 - **暴露出去又没 TLS 就拒绝启动**；Host 白名单挡 DNS rebinding，三道挡 CSRF，猜码指数退避 + 封锁；
-- **passkey 是第二因子**，服务端只存公钥。
+- **passkey 是第二因子**，服务端只存公钥；
+- **公网只走自己的中继，中继只转密文**：TLS 在本机解开，VPS 上没有证书私钥、设备表和 passkey，
+  DNS 上的 CAA 记录锁死「证书只有本机能签」—— 中继整台被拿下也只能断网；
+- **本地端口在单独的子域名上**：被代理的是 agent 的页面，拿不到主站凭据；要先过登录，设备撤销当场失效。
 
 → 威胁模型、每条为什么这么设计：[SECURITY.md](docs/dev/SECURITY.md)
 
