@@ -585,6 +585,18 @@ export default function App() {
     优先 herdr 焦点所在的新 pane，没有就随便一个新的。10 秒还没等到（列表没刷上来）就作罢，
     别让一次早就过去的新开在之后哪次刷新里把 chat 拽走。
   */
+  /*
+    从终端切进 chat 时「接过 herdr 的焦点」那一下的第二拍：openChat 当场按手上的列表认了一次，
+    这儿等刷回来的列表再认一次。只认 3 秒 —— 之后列表里的焦点是别的设备挪的，跟这台无关。
+  */
+  const adoptFocus = useRef(0)
+  useEffect(() => {
+    if (!adoptFocus.current) return
+    if (!own || Date.now() - adoptFocus.current > 3000) { adoptFocus.current = 0; return }
+    const f = compose.panes.find((p) => p.focused)
+    if (f) setMyPane(f.id)
+  }, [own, compose.panes, setMyPane])
+
   const newPanesFrom = useRef<{ ids: Set<string>; at: number } | null>(null)
   useEffect(() => {
     const w = newPanesFrom.current
@@ -793,8 +805,15 @@ export default function App() {
   const openChat = useCallback(() => {
     blurInput()
     setChatMode(true)
+    if (chatOwnOn) {
+      // 「各看各的」：从终端切进来 = 接着看终端里正对着的那个 pane（用户点名的），
+      // 别回到上次在 chat 里挑的那个。手上这份列表可能是旧的，刷回来再认一次（adoptFocus）
+      const f = compose.panes.find((p) => p.focused)
+      if (f) setMyPane(f.id)
+      adoptFocus.current = Date.now()
+    }
     void compose.loadPanes(true)
-  }, [compose.loadPanes])
+  }, [compose.loadPanes, compose.panes, chatOwnOn, setMyPane])
 
   /**
    * 打开一条路径 —— 终端里点的、面板里点的，都走这儿。
