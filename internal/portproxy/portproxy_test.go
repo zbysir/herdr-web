@@ -151,3 +151,33 @@ func TestPortAndSafePath(t *testing.T) {
 		}
 	}
 }
+
+// 别的站（哪怕同站，bysir.top 下别的子域名）发来的跨源请求一律拒：开发服务器常常对任意
+// Origin 回带凭据的 CORS，Lax cookie 在同站请求上又会带着 —— 不拦就是「同站任何页面都能读」。
+func TestForeignOriginRejected(t *testing.T) {
+	g := newRig(t)
+	d, _ := g.store.NewDevice("test", "1.2.3.4", "")
+	ck := g.login(t, d.ID)
+	try := func(origin string) int {
+		r := httptest.NewRequest(http.MethodGet, "https://"+g.host+"/page", nil)
+		r.AddCookie(&http.Cookie{Name: CookieName, Value: ck})
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		w := httptest.NewRecorder()
+		g.p.ServeHTTP(w, r)
+		return w.Code
+	}
+	for origin, want := range map[string]int{
+		"":                     200, // 地址栏打开
+		"https://" + g.host:    200, // 自己
+		"https://7831.h.test":  200, // 别的端口（前端调后端）
+		"https://blog.h.test":  403, // 同站别的站
+		"https://evil.example": 403,
+		"http://" + g.host:     403, // 不是 https
+	} {
+		if got := try(origin); got != want {
+			t.Errorf("Origin %q：%d，想要 %d", origin, got, want)
+		}
+	}
+}

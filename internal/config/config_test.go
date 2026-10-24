@@ -260,3 +260,23 @@ func TestRelayRequiresLocalTLS(t *testing.T) {
 		t.Error("只给 URL 不给主机名该报错")
 	}
 }
+
+// 端口代理的子域名是 agent 的页面，和主站同一个 RP ID 后缀 —— 它能让浏览器对 herdr.example.com
+// 那把 passkey 出一份签名（RP ID 可以是自己域名的后缀）。挡它的是服务端核 clientData 里的 origin：
+// 允许的 origin 里**绝不能**有任何端口子域名，有了就是「agent 的页面骗你按一下 Face ID，拿走一台
+// passkey 认证过的设备」。
+func TestPasskeyOriginsExcludePortSubdomains(t *testing.T) {
+	t.Setenv("HERDR_WEB_DIR", t.TempDir())
+	t.Setenv("HERDR_WEB_RELAY_URL", "https://relay.example.com")
+	t.Setenv("HERDR_WEB_RELAY_HOST", "herdr.example.com")
+	t.Setenv("HERDR_WEB_PORT_DOMAIN", "herdr.example.com")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range c.PasskeyOrigins() {
+		if strings.HasSuffix(o, ".herdr.example.com") || strings.Contains(o, "*") {
+			t.Errorf("passkey 允许的 origin 里出现了子域名：%s", o)
+		}
+	}
+}

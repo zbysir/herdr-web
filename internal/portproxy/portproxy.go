@@ -217,6 +217,18 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 别的站发来的跨源请求一律拒（带 Origin、又不是我们自己的端口子域名）。
+	//
+	// 为什么要这一道：开发服务器常常对任意 Origin 回 `Access-Control-Allow-Origin: <你>` +
+	// `Allow-Credentials: true`（图省事的 CORS 配置），而子域名那张 cookie 是 Lax —— 同站
+	// （bysir.top 下别的站，比如托管在第三方平台上的博客）发来的请求会带上它。两样凑一起就是
+	// 「bysir.top 下任何一个页面都能读你本机开发服务的内容」。端口之间互相调（前端 7830 调
+	// 后端 7831）照样放行。没有 Origin 的（地址栏打开、普通 GET 子资源）不受影响
+	if o := r.Header.Get("Origin"); o != "" && !p.ownOrigin(o) {
+		http.Error(w, "跨站请求被拒", http.StatusForbidden)
+		return
+	}
+
 	if !p.authed(r, port) {
 		w.Header().Set("Cache-Control", "no-store")
 		if r.Method == http.MethodGet && r.Header.Get("Upgrade") == "" {
@@ -228,6 +240,16 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.proxy(port).ServeHTTP(w, r)
+}
+
+// ownOrigin：Origin 是不是我们自己的某个端口子域名（https://<端口>.<Domain>）。
+func (p *Proxy) ownOrigin(o string) bool {
+	u, err := url.Parse(o)
+	if err != nil || u.Scheme != "https" {
+		return false
+	}
+	_, ok := p.Port(u.Host)
+	return ok
 }
 
 // entry 是主站上「给这个端口签票」的那条路。

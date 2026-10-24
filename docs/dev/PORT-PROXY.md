@@ -102,3 +102,14 @@ https://5312.p.herdr.bysir.top/  ──VPS Traefik──frp──▶  herdr-web 
 - 被代理的页面和主站**同站不同源**（都在 bysir.top 下）：同站请求会带上主站的 SameSite=Strict cookie，
   挡它的是主站那几道 —— 写接口要自定义头（跨源触发 preflight，本服务不答）、`/pty` 核 Origin。
   这两道是**承重的**，别为了别的需求松掉。
+- **passkey 钓鱼**：子域名的 origin 可以拿 `herdr.bysir.top` 当 RP ID 向浏览器要签名（RP ID 可以是自己
+  域名的后缀），系统弹的 Face ID 框上写的还是 herdr.bysir.top，看着完全正常。agent 的后端去主站要一个
+  登录挑战、让页面骗你按一下，就能换走一台 passkey 认证过的设备 —— 一份能从公网随时连回来的凭据，比它
+  「此刻在你机器上跑着」值钱得多。挡它的是服务端核 clientData 里的 origin（go-webauthn 的 RPOrigins）：
+  允许的 origin 里**绝不能**有端口子域名（`TestPasskeyOriginsExcludePortSubdomains` 盯着）。所以别为了
+  「子域名上也能用 passkey」去放宽它。
+- **同站的别的站读你的开发服务**：开发服务器常对任意 Origin 回带凭据的 CORS，子域名 cookie 又是 Lax
+  （同站请求会带）。所以代理拒掉「带 Origin、又不是我们自己端口子域名」的请求（`ownOrigin`）。
+- **还没堵的一条（cookie 覆盖）**：子域名上的 JS 能写一个 `Domain=herdr.bysir.top` 的 `hw_dev`，盖过主站
+  那张 —— 结果是主站被登出 / 认成别的设备（只能捣乱，拿不到东西）。根治是主站 cookie 改名 `__Host-` 前缀
+  （子域名设不了），要连着 App 那边一起迁移。
