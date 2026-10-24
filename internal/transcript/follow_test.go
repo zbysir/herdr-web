@@ -45,3 +45,23 @@ func TestFollowContinuedIn(t *testing.T) {
 		t.Fatalf("没搬走的不该动：%+v", got)
 	}
 }
+
+// 同一个前台会话里换了一个后台会话：herdr 报的 id 不变，缓存也不能把 chat 卡在旧的那份上。
+func TestFollowNotCached(t *testing.T) {
+	s := store(t)
+	dir := filepath.Join(s.ClaudeRoot, "-p")
+	os.MkdirAll(dir, 0o700)
+	a, b, c := "aaaaaaaa-0000-0000-0000-000000000000", "bbbbbbbb-0000-0000-0000-000000000000", "cccccccc-0000-0000-0000-000000000000"
+	front := filepath.Join(dir, a+".jsonl")
+	os.WriteFile(front, []byte(`{"type":"continued-in","continuedInSessionId":"`+b+`"}`+"\n"), 0o600)
+	os.WriteFile(filepath.Join(dir, b+".jsonl"), []byte(`{"type":"user"}`+"\n"), 0o600)
+	os.WriteFile(filepath.Join(dir, c+".jsonl"), []byte(`{"type":"user"}`+"\n"), 0o600)
+	ref := Ref{Agent: "claude", Kind: "id", Value: a}
+	if got, _ := s.Find(ref); got.Sig != b {
+		t.Fatalf("第一次该跟到 b：%+v", got)
+	}
+	os.WriteFile(front, []byte(`{"type":"continued-in","continuedInSessionId":"`+c+`"}`+"\n"), 0o600)
+	if got, _ := s.Find(ref); got.Sig != c {
+		t.Fatalf("换了后台会话还卡在缓存里：%+v", got)
+	}
+}

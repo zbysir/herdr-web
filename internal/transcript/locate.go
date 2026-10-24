@@ -123,7 +123,7 @@ func (s *Store) Find(ref Ref) (Source, error) {
 		s.mu.Unlock()
 		// 缓存里那份文件可能已经没了（会话被删 / 目录被清），所以还要看一眼。
 		if _, err := os.Stat(e.src.Path); err == nil {
-			return e.src, nil
+			return s.follow(ref, e.src), nil
 		}
 		s.mu.Lock()
 		delete(s.cache, key)
@@ -134,14 +134,16 @@ func (s *Store) Find(ref Ref) (Source, error) {
 	if err != nil {
 		return Source{}, err
 	}
-	src = s.follow(ref, src) // `/resume` 进后台会话之后，对话写在另一份里（见 follow.go）
 	s.mu.Lock()
 	if s.cache == nil {
 		s.cache = map[string]cacheEnt{}
 	}
 	s.cache[key] = cacheEnt{src: src, at: time.Now()}
 	s.mu.Unlock()
-	return src, nil
+	// `/resume` 进后台会话之后，对话写在另一份里（见 follow.go）。**在缓存外面跟**：
+	// 同一个前台进程里换一个后台会话，herdr 报的 id 不变、缓存 key 也不变，跟的结果
+	// 进了缓存就要卡到 TTL 过期才换过去。跟这一步只读尾巴 4KB，每拍做得起
+	return s.follow(ref, src), nil
 }
 
 func (s *Store) rootFor(agent string) (string, error) {

@@ -26,7 +26,7 @@ import (
 
 var bgJobRe = regexp.MustCompile(`running in the background \(([0-9a-f]{6,16})\)`)
 
-// followTail 读多少尾巴来找那两条线索。continued-in 是最后一行，那句 stdout 就在前面几行。
+// followTail 确认是搬走的之后，读多少尾巴来找那句 stdout（就在 continued-in 前面几行）。
 const followTail = 64 << 10
 
 // follow 顺着「搬走了」找到真在写的那份。不是搬走的会话原样返回。
@@ -60,19 +60,26 @@ func continuedIn(path string) (string, string) {
 	if err != nil {
 		return "", ""
 	}
-	off := max(st.Size()-followTail, 0)
-	buf := make([]byte, st.Size()-off)
-	if _, err := f.ReadAt(buf, off); err != nil && err != io.EOF {
-		return "", ""
+	tail := func(n int64) []string {
+		off := max(st.Size()-n, 0)
+		buf := make([]byte, st.Size()-off)
+		if _, err := f.ReadAt(buf, off); err != nil && err != io.EOF {
+			return nil
+		}
+		return strings.Split(strings.TrimRight(string(buf), "\n"), "\n")
 	}
-	lines := strings.Split(strings.TrimRight(string(buf), "\n"), "\n")
+	// 每拍都要问一次（在缓存外面，见 Find），所以先只读 4KB 看最后一行：绝大多数会话
+	// 不是搬走的，到这儿就结束了。最后一行比 4KB 长时解不开 JSON —— 那也说明它不是
+	// continued-in（那条很短），照样当没搬走
 	var last struct {
 		Type string `json:"type"`
 		Next string `json:"continuedInSessionId"`
 	}
+	lines := tail(4 << 10)
 	if len(lines) == 0 || json.Unmarshal([]byte(lines[len(lines)-1]), &last) != nil || last.Type != "continued-in" {
 		return "", ""
 	}
+	lines = tail(followTail)
 	dir := filepath.Dir(path)
 	if idRe.MatchString(last.Next) {
 		if p := filepath.Join(dir, last.Next+".jsonl"); p != path {
