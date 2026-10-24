@@ -178,8 +178,12 @@ func TestBySNI(t *testing.T) {
 	fallback := &tls.Config{GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 		return &tls.Certificate{Certificate: [][]byte{[]byte("self")}}, nil
 	}}
-	c := BySNI([]string{"Herdr.Example.com"}, named, fallback)
-	for sni, want := range map[string]string{"herdr.example.com": "named", "": "self", "other.example.com": "self"} {
+	c := BySNI([]string{"Herdr.Example.com", "*.herdr.example.com"}, named, fallback)
+	for sni, want := range map[string]string{
+		"herdr.example.com": "named", "": "self", "other.example.com": "self",
+		"7830.herdr.example.com": "named", // 通配：端口代理的子域名
+		"a.b.herdr.example.com":  "self",  // 通配只管一层
+	} {
 		got, err := c.GetCertificate(&tls.ClientHelloInfo{ServerName: sni})
 		if err != nil || string(got.Certificate[0]) != want {
 			t.Errorf("SNI %q 该拿 %s，拿到 %q (%v)", sni, want, got.Certificate[0], err)

@@ -462,6 +462,7 @@ export HERDR_WEB_TLS=auto
 | `HERDR_WEB_HOSTNAME` | 空 | 允许出现在 `Host` 头里的域名，逗号分隔。**IP 一律放行，域名必须在名单里** —— 这是 DNS rebinding 的唯一防线，不在名单里直接 421 |
 | `HERDR_WEB_PUBLIC_URL` | 见说明 | 你**实际访问**的地址，决定横幅上的二维码编哪个地址。连中继时默认就是 `https://<RELAY_HOST>`，一般不用给。里面的域名自动进白名单 |
 | `HERDR_WEB_RELAY_URL` | 空 | 云端中继（`herdr-relay`）的地址，`https://relay.example.com`。和下一项一起给，这台机器就主动连上去，手机打开 `https://<RELAY_HOST>/` 就能进。中继**只转密文**：TLS 在本机终止，所以必须配一张真证书（`HERDR_WEB_ACME_DNS`），`TLS=off` 时拒绝启动。**这是从公网进来的唯一一条路**，隧道进来的连接按公网的规则对待（不认本机免配对、限速不豁免）。先在 VPS 上 `herdr-relay invite <主机名>` 出邀请码、本机 `herdr-web relay join` 注册一次，见 [docs/dev/RELAY.md](dev/RELAY.md) |
+| `HERDR_WEB_PORT_DOMAIN` | 空 | **端口代理**：设成主机名（如 `herdr.bysir.top`）之后，这台机器上 `http://127.0.0.1:7830` 在 `https://7830.herdr.bysir.top/` 上能看，**先过 herdr-web 的认证**（没登录就绕主站登一次，passkey 重验照旧生效）。终端和 chat 里 `http://localhost:<端口>` 的链接点下去自动走这儿。要 DNS 上一条 `*.<域名>` 通配记录、CAA 放开通配（`issuewild`），证书会多签一个 `*.<域名>`。只代理 1024 以上、不是 herdr-web 自己的端口。见 [docs/dev/PORT-PROXY.md](dev/PORT-PROXY.md) |
 | `HERDR_WEB_RELAY_HOST` | 空 | 这台机器在中继上的名字（`mac.h.example.com`）。自动进白名单 / 证书 / passkey 的 Origin；没给 `PUBLIC_URL` 时它就是二维码上的地址 |
 | `HERDR_WEB_DEVICE_TTL_DAYS` | `90` | 设备凭据多久不活跃就失效（每次用都续期）。`0` = **永不过期** |
 | `HERDR_WEB_RPID` | 推导 | passkey 绑定的域名。默认取 `HERDR_WEB_HOSTNAME` 的第一个，纯本机时是 `localhost`。**裸 IP 不是合法值**，那种部署用不了 passkey |

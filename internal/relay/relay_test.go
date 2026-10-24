@@ -385,3 +385,48 @@ func TestWebSocketThroughTunnel(t *testing.T) {
 		}
 	}
 }
+
+// 端口代理的子域名（`7830.mac.h.test`）跟着主机 `mac.h.test` 走，不单独注册；别的子域名不认。
+func TestPortSubdomainRoutesToHost(t *testing.T) {
+	g := newRig(t)
+	hc := g.host(t, "mac.h.test")
+	code, _ := g.relay.Store.NewInvite("mac.h.test")
+	if err := Join(context.Background(), hc, code); err != nil {
+		t.Fatal(err)
+	}
+	tn, err := Start(hc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, pool := testCertNames(t, "mac.h.test", "*.mac.h.test")
+	g.pool = pool
+	serveHost(t, tn, cert, "mac")
+	waitUp(t, tn)
+
+	body, err := g.get("7830.mac.h.test")
+	if err != nil || !strings.HasSuffix(body, " 7830.mac.h.test") {
+		t.Fatalf("端口子域名该路由到主机：%q %v", body, err)
+	}
+	if _, err := g.get("www.mac.h.test"); err == nil {
+		t.Fatal("不是纯数字的子域名不该被路由")
+	}
+}
+
+func testCertNames(t *testing.T, names ...string) (tls.Certificate, *x509.CertPool) {
+	t.Helper()
+	k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tpl := &x509.Certificate{
+		SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "test"}, DNSNames: names,
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign, IsCA: true,
+		BasicConstraintsValid: true, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, &k.PublicKey, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, _ := x509.ParseCertificate(der)
+	pool := x509.NewCertPool()
+	pool.AddCert(leaf)
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: k, Leaf: leaf}, pool
+}

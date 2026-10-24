@@ -712,3 +712,24 @@ func LabelFromUA(ua string) string {
 	}
 	return dev + " · " + br
 }
+
+// IdentByID 按设备 ID 拿到和 Authenticate 同一个形状的身份（设备不在 / 过期了就是 nil）。
+//
+// 给「凭据不在这个 origin 上」的地方用 —— 端口代理的子域名（internal/portproxy）那张会话
+// 只记着它是哪台设备换来的，每个请求都回到这儿核一遍：设备被撤销了、该重验 passkey 了，
+// 子域名上当场一起失效，而不是等它自己那张会话过期。
+func (s *Store) IdentByID(id string) *Ident {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	for _, d := range s.devs {
+		if d.ID == id {
+			if d.Expired(now) {
+				return nil
+			}
+			c := *d
+			return &Ident{Kind: "device", Label: c.Label, Device: &c, VerifiedAt: c.VerifiedAt, PasskeyAt: c.PasskeyAt}
+		}
+	}
+	return nil
+}

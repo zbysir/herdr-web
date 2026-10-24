@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm'
 import remarkCjkFriendly from 'remark-cjk-friendly'
 import { PATH_SCHEME, rehypePaths } from '@/lib/mdpaths'
 import { remarkCjkAutolink } from '@/lib/mdautolink'
+import { portLink } from '@/lib/portlink'
 import { cn } from '@/lib/utils'
 
 /**
@@ -123,7 +124,8 @@ function Anchor({ children, href, node: _node, ...p }: ComponentPropsWithoutRef<
   if (onPath && h && LOCAL.test(h)) {
     return <PathSpan path={localPath(h)}>{children}</PathSpan>
   }
-  return <a {...p} href={h || undefined} target="_blank" rel="noopener noreferrer">{children}</a>
+  // http://localhost:7830 这种换成端口代理的子域名（lib/portlink），别的原样
+  return <a {...p} href={h ? portLink(h) : undefined} target="_blank" rel="noopener noreferrer">{children}</a>
 }
 
 /**

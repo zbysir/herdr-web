@@ -16,6 +16,7 @@ import { useNotices } from '@/hooks/useNotices'
 import { useGitDirty } from '@/hooks/useGitDirty'
 import { useLanDirect } from '@/hooks/useLanDirect'
 import { useRoute } from '@/hooks/useRoute'
+import { setPortDomain } from '@/lib/portlink'
 import { away, onNotifyClick, showNotify } from '@/lib/notify'
 import { isStandalone } from '@/lib/install'
 import { isNative, onNative, postNative, syncNativeTheme } from '@/lib/native'
@@ -672,6 +673,20 @@ export default function App() {
   /* 局域网直连：探得通就换到直连那个 origin 上去（见 hooks/useLanDirect.ts）。
      等 gate === 'ok' 才开始 —— 配对页上跳走没有意义，凭据还没有。 */
   const lanDirect = useLanDirect(state?.lan, gate === 'ok')
+  /* 端口代理：终端 / chat 里 http://localhost:7830 的链接换成子域名（lib/portlink） */
+  useEffect(() => setPortDomain(state?.portDomain), [state?.portDomain])
+  /* 端口子域名那边没登录 → 主站 `/_port/<端口>` 发现这台也没登录 → 带着 `?port=&to=` 落到这儿
+     的登录页。登录完（gate 变成 ok）自己跳回 `/_port/…` 接着签票，人不用再去点一次那个链接。
+     只认纯数字端口、`to` 只认本站路径（服务端那边照样会再核一遍，这里先挡掉明显不对的） */
+  useEffect(() => {
+    if (gate !== 'ok') return
+    const q = new URLSearchParams(location.search)
+    const port = q.get('port') ?? ''
+    if (!/^\d{4,5}$/.test(port)) return
+    const to = q.get('to') ?? '/'
+    location.replace(`/_port/${port}?to=${encodeURIComponent(to.startsWith('/') && !to.startsWith('//') ? to : '/')}`)
+  }, [gate])
+
   /* 走的是直连还是中继：左上角那个状态点「连上了」时的颜色（绿 = 直连、蓝 = 中继） */
   const route = useRoute(state?.lan?.origins)
   /* 切到局域网时终端怎么跟过去：不在这儿管。壳在探通的那一刻把走中继的连接全部掐掉（LanRoute 的

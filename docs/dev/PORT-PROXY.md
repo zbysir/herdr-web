@@ -1,11 +1,8 @@
-# 把 agent 起的本地服务代理出来（方案，未开发）
+# 把 agent 起的本地服务代理出来
 
-> **状态：只有方案，没写代码**（2026-09-24）。搁置的原因是要在域名那一层配不少东西
-> （通配 DNS + 通配证书 + 共用 Traefik 上的一条路由），用户觉得眼下不值当。
-> 真要做时从这里接着来，别从「路径前缀代理」重新想一遍 —— 那条路下面第 1 节已经排除了。
-> **2026-10-23 补**：下面画的「VPS Traefik → frp → 公网口」那条路已经下线（公网只走云端中继，
-> [RELAY.md](RELAY.md)）。真做时子域名要走中继：VPS 上只按 SNI 透传，证书在主机上签，
-> 而不是让 Traefik 拿通配证书解密 —— 后者正是下线 frp 那一档的理由。
+> **状态（2026-10-24）：已实现并上线**（`internal/portproxy`，`HERDR_WEB_PORT_DOMAIN`）。
+> `http://127.0.0.1:7830` 在 `https://7830.herdr.bysir.top/` 上能看，先过 herdr-web 的认证。
+> 下面第 1、2 节是原方案（2026-09-24），思路没变；和原方案不一样的地方、实测踩的坑在最后一节。
 
 ## 要解决的事
 
@@ -68,3 +65,40 @@ https://5312.p.herdr.bysir.top/  ──VPS Traefik──frp──▶  herdr-web 
   前提是开发服务器监听 `0.0.0.0` 而不是 `127.0.0.1`（Vite 要 `--host`）。不需要 herdr-web 做
   任何事，但公网下没用。
 - **让 agent 自己把服务发到预览环境**：比如 Creght 那种有预览域名的平台，本来就是给人看的。
+
+
+## 4. 实际做成的样子（2026-10-24）
+
+和第 2 节的差别：
+
+- **子域名是 `<端口>.<主机名>`**（`7830.herdr.bysir.top`），不是 `<端口>.p.<主机名>`：少一层名字，
+  而主站那张 cookie 本来就是 host-only 的，子域名拿不到。
+- **走中继，证书在主机上签**：DNS 上一条 `*.herdr.bysir.top` 指 VPS；中继按 SNI 认出「第一段是纯数字」
+  的子域名就路由给它上一级那台主机（`relay.portParent`）；Traefik 那条透传路由加一个
+  `HostSNIRegexp(^[0-9]+\.herdr\.bysir\.top$)`。主机的 ACME 多签一个 `*.<域名>`（`Config.CertDomains`）。
+- **认人不用交接令牌**：交接令牌会兑出一台设备，每开一个端口设备表里就多一行。这里换成 portproxy 自己的
+  票（60 秒、一次性、绑死端口）→ 子域名上一张**只在内存里**的会话（cookie `__Host-hw_port`），会话只记
+  「哪台设备换来的」，**每个请求都回设备表核一遍**（`auth.IdentByID`）：设备撤销、该重验 passkey 了，
+  子域名当场一起失效。没登录：子域名 → 主站 `/_port/<端口>` → 主站也没登录就落到登录页带着
+  `?port=&to=`，登录完前端自己跳回来（App.tsx）。
+- **端口白名单**：1024–65535、排除 herdr-web 自己的几个口（主口 / 管理口 / 直连口）。没收窄到「有 pane 在
+  监听的端口」：能走到这一步的人已经过了主站认证，而主站后面就是一个 shell。
+- **链接改写**：终端（`term/session.ts` 的 openLink）和 chat（`ChatMarkdown` 的 `<a>`）里
+  `http://localhost:<端口>` / `127.0.0.1` / `0.0.0.0` 换成子域名（`lib/portlink.ts`）。在跑 herdr-web
+  的那台机器上开的页面不换。
+
+几条会静默出错的：
+
+- **CAA 要放开通配**：主机名上原来有 `issuewild ";"`（不许签通配），签 `*.<域名>` 必须改成
+  `issuewild "letsencrypt.org; accounturi=<主机的账户>; validationmethods=dns-01"`。不改的表现是签发失败，
+  而服务启动时签不下来会**拒绝启动** —— 所以先在命令行把证书签好再改配置。
+- **证书「够不够用」的检查要认通配**：`x509.VerifyHostname` 不收带 `*` 的输入，拿 `*.x` 直接去问永远是
+  「不覆盖」，于是每次启动都重签一张（`acme.validFor` 换成拿一个样例子域名去问）。
+- **Host 要写成 `localhost:<端口>` 再转**：Vite 5 起会拦不认识的 Host（「Blocked request. This host is not
+  allowed」），HMR 的 WebSocket 还核 Origin（我们这个子域名的 Origin 一并换掉）。开发服务器跳转写的是它自己
+  眼里的 `http://localhost:<端口>/…`，`Location` 要换回子域名。
+- **子域名那张 cookie 绝不转给被代理的服务**（`stripCookie`）：它是一份能进这个子域名的凭据，而那个服务
+  是 agent 的。主站那张不用管 —— host-only，压根不会发到子域名上。
+- 被代理的页面和主站**同站不同源**（都在 bysir.top 下）：同站请求会带上主站的 SameSite=Strict cookie，
+  挡它的是主站那几道 —— 写接口要自定义头（跨源触发 preflight，本服务不答）、`/pty` 核 Origin。
+  这两道是**承重的**，别为了别的需求松掉。

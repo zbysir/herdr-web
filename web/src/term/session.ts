@@ -39,9 +39,10 @@ function openLink(uri: string) {
     console.warn('[herdr-web] 拒绝打开这个 scheme 的链接：', uri)
     return
   }
-  window.open(u.href, '_blank', 'noopener,noreferrer')
+  window.open(portLink(u.href), '_blank', 'noopener,noreferrer')
 }
 import { linkAtCell, pathLinkProvider } from './paths'
+import { portLink } from '@/lib/portlink'
 import { THEMES, termTheme, type Scheme } from './themes'
 import { attachTouch } from './touch'
 import { hitsSwitchButton } from './mobilebar'

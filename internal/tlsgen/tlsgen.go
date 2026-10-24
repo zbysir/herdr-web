@@ -358,13 +358,31 @@ func fingerprint(der []byte) string {
 // 两条路共用一个口，所以只能在握手时按 SNI 分。
 func BySNI(names []string, named, fallback *tls.Config) *tls.Config {
 	set := map[string]bool{}
+	var wild []string // `*.x` → 认 `<一段>.x`（端口代理的子域名，见 internal/portproxy）
 	for _, n := range names {
-		set[strings.ToLower(n)] = true
+		n = strings.ToLower(n)
+		if rest, ok := strings.CutPrefix(n, "*."); ok {
+			wild = append(wild, "."+rest)
+			continue
+		}
+		set[n] = true
+	}
+	match := func(sni string) bool {
+		sni = strings.ToLower(sni)
+		if set[sni] {
+			return true
+		}
+		for _, w := range wild {
+			if label, ok := strings.CutSuffix(sni, w); ok && label != "" && !strings.Contains(label, ".") {
+				return true
+			}
+		}
+		return false
 	}
 	return &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		GetCertificate: func(h *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			if set[strings.ToLower(h.ServerName)] {
+			if match(h.ServerName) {
 				return named.GetCertificate(h)
 			}
 			return fallback.GetCertificate(h)

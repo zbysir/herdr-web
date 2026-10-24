@@ -315,6 +315,8 @@ export interface State {
    * origins 是**服务端每次现报**的 —— 局域网 IP 会变，前端不能缓存它。
    */
   lan?: { port: number; origins: string[] }
+  /** 端口代理的域名（`http://localhost:7830` → `https://7830.<它>/`），空 = 没开。见 lib/portlink */
+  portDomain?: string
   /** 版本信息。outdated 为真时才有 latest / how —— 后端只在有新版本时才带这两个，
       前端不用自己比版本号（比法在 Go 那边，只有一份）。 */
   version?: { current: string; latest?: string; outdated?: boolean; how?: string }

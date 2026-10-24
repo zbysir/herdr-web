@@ -151,13 +151,13 @@ func serve(webDir string) error {
 	var acmeMgr *acme.Manager
 	if cfg.ACMEDNS != "" {
 		acmeMgr = acme.NewManager(acme.Config{
-			Dir: cfg.DataDir, Domains: cfg.Hostnames, Email: cfg.ACMEEmail,
+			Dir: cfg.DataDir, Domains: cfg.CertDomains(), Email: cfg.ACMEEmail,
 			DNS: cfg.ACMEDNS, Staging: cfg.ACMEStaging,
 		})
 		if a := acmeMgr.Ensure(false); a.Err != "" {
 			return fmt.Errorf("ACME 签证书失败: %s", a.Err)
 		} else if a.Renewed {
-			log.Printf("已签下 %s 的证书", strings.Join(cfg.Hostnames, " "))
+			log.Printf("已签下 %s 的证书", strings.Join(cfg.CertDomains(), " "))
 		}
 		certFile, keyFile := acmeMgr.Config().Files()
 		cfg.TLSCert, cfg.TLSKey, cfg.TLSMode = certFile, keyFile, "files"
@@ -286,7 +286,7 @@ func serve(webDir string) error {
 				// 主口是真证书时，按域名来的（App 走本地代理拨到这儿）给真证书，按 IP 来的
 				// （浏览器那条直连）照旧给自签 —— 见 tlsgen.BySNI
 				if mainTLS != nil {
-					conf = tlsgen.BySNI(cfg.Hostnames, mainTLS, conf)
+					conf = tlsgen.BySNI(cfg.CertDomains(), mainTLS, conf)
 				}
 			}
 			// 摘转发头 + 盖「从直连口进来」的章（交接令牌只在这种请求上兑得动）——
@@ -905,7 +905,7 @@ func banner(cfg *config.Config, store *auth.Store, passkeys *auth.Passkeys, cert
 			fmt.Println("    想彻底去掉浏览器警告：把 " + cert.CAPath + " 装到设备上并信任")
 		} else if cfg.ACMEDNS != "" {
 			left := "?"
-			if d, ok := (acme.Config{Dir: cfg.DataDir, Domains: cfg.Hostnames}).ValidFor(); ok {
+			if d, ok := (acme.Config{Dir: cfg.DataDir, Domains: cfg.CertDomains()}).ValidFor(); ok {
 				left = fmt.Sprintf("%.0f 天后到期", d.Hours()/24)
 			}
 			env := "正式"

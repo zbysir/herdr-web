@@ -286,6 +286,11 @@ func validFor(certFile string, domains []string) (time.Duration, bool) {
 		return 0, false
 	}
 	for _, d := range domains {
+		// 通配那一个拿一个样例子域名去核：VerifyHostname 不收带 `*` 的输入，直接拿
+		// `*.x` 去问会永远「不覆盖」，于是每次启动都重签一张（正式环境一周只给几张）
+		if rest, ok := strings.CutPrefix(d, "*."); ok {
+			d = "wildcard-check." + rest
+		}
 		if cert.VerifyHostname(d) != nil {
 			return 0, false
 		}

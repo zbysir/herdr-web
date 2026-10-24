@@ -52,6 +52,11 @@ type Config struct {
 	// 不接到主口上：主口那道「只服务本地网络」看对端地址，而隧道连接的对端地址是中继说的。
 	RelayURL  string
 	RelayHost string
+
+	// PortDomain：端口代理（internal/portproxy）挂在它下面 —— `http://127.0.0.1:7830` 在
+	// `https://7830.<PortDomain>/` 上能看，先过 herdr-web 的认证。空 = 功能关。
+	// 要一张 `*.<PortDomain>` 的通配证书（ACME 那边自动加上），所以必须本进程终止 TLS。
+	PortDomain string
 	Dir       string // ~/.herdr-web：配置和文件（softkeys.json / tls / uploads）
 	// DataDir 是**内部数据**：设备凭据、passkey 公钥。用户不该手改，所以和配置分开放。
 	// （为什么不上 SQLite：这点数据量换 +5MB 二进制和「cat 不了」不划算，而它唯一
@@ -316,6 +321,7 @@ func Load() (*Config, error) {
 		ReauthHours: intOf(v, "reauth_hours", 24, 0),
 		PublicURL:   strings.TrimRight(v.GetString("public_url"), "/"),
 		RelayURL:    strings.TrimRight(strings.TrimSpace(v.GetString("relay_url")), "/"),
+		PortDomain:  strings.Trim(strings.ToLower(strings.TrimSpace(v.GetString("port_domain"))), "."),
 	}
 	for _, h := range strings.Split(v.GetString("hostname"), ",") {
 		if h = strings.TrimSpace(h); h != "" {
@@ -404,6 +410,16 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("连中继要求 TLS 在本进程终止（现在是 HERDR_WEB_TLS=%s）："+
 			"配 HERDR_WEB_ACME_DNS 签一张 %s 的真证书，或者给 HERDR_WEB_TLS_CERT/KEY", c.TLSMode, c.RelayHost)
 	}
+	// 端口代理：子域名那张 cookie 是 `__Host-` 前缀（必须 Secure），而且要通配证书 ——
+	// 本进程不终止 TLS 的话两样都没有，表现是「跳来跳去就是进不去」
+	if c.PortDomain != "" {
+		if _, err := relay.CleanHost(c.PortDomain); err != nil {
+			return nil, fmt.Errorf("HERDR_WEB_PORT_DOMAIN: %w", err)
+		}
+		if !c.ServesTLS() {
+			return nil, errors.New("HERDR_WEB_PORT_DOMAIN 要求 TLS 在本进程终止（子域名要一张 *.<域名> 的证书）")
+		}
+	}
 	// 撞口的表现是「第二个监听起不来」，而那条日志夹在启动横幅里很容易看漏，
 	// 所以在这儿直接拒绝启动。Port+1 是管理口（见 serve）。
 	if c.LanPort > 0 && (c.LanPort == c.Port || c.LanPort == c.Port+1) {
@@ -461,6 +477,16 @@ func (c *Config) PasskeyOrigins() []string {
 // PublicReachable：这个部署有没有一条公网进来的路（用来决定限速的「本机永不封」豁免
 // 该不该关、启动时要不要强制 TLS）。现在只剩中继这一条。
 func (c *Config) PublicReachable() bool { return c.RelayURL != "" }
+
+// CertDomains 是证书要覆盖的名字：HOSTNAME 那些，开了端口代理再加一个 `*.<PortDomain>`。
+// ACME 签的就是这一组（通配证书只能走 DNS-01，正好是我们用的那条）。
+func (c *Config) CertDomains() []string {
+	out := append([]string{}, c.Hostnames...)
+	if c.PortDomain != "" {
+		out = append(out, "*."+c.PortDomain)
+	}
+	return out
+}
 
 // RelayDir 放这台主机连中继用的身份私钥。
 func (c *Config) RelayDir() string { return filepath.Join(c.Dir, "relay") }

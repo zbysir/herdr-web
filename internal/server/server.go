@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -29,6 +30,7 @@ import (
 	"github.com/zbysir/herdr-web/internal/gitdiff"
 	"github.com/zbysir/herdr-web/internal/herdr"
 	"github.com/zbysir/herdr-web/internal/outbox"
+	"github.com/zbysir/herdr-web/internal/portproxy"
 	"github.com/zbysir/herdr-web/internal/profiles"
 	"github.com/zbysir/herdr-web/internal/selfupdate"
 	"github.com/zbysir/herdr-web/internal/softkeys"
@@ -63,6 +65,9 @@ type Server struct {
 	// HERDR_WEB_CHAT=0 关掉了。**它不借 Files 当鉴权点**（转录在 ~/.claude、~/.codex 下，
 	// 而 FILE_ROOTS 一配就把它们挡在外面）—— 边界由 transcript 自己钉，见那边的包注释。
 	Chat *transcript.Store
+
+	// Ports 端口代理（internal/portproxy）。nil = 没配 HERDR_WEB_PORT_DOMAIN，功能关。
+	Ports *portproxy.Proxy
 
 	Passkeys *auth.Passkeys
 	// ReauthAfter：注册过 passkey 之后，一份会话在「上次生物验证」之后还能用多久。
@@ -189,6 +194,17 @@ func New(cfg *config.Config, web fs.FS, a *auth.Store, g *auth.Gate, opt Options
 			s.names[n] = true
 		}
 	}
+	if cfg.PortDomain != "" {
+		main := cfg.PublicURL
+		if main == "" {
+			main = "https://" + cfg.PortDomain
+		}
+		s.Ports = &portproxy.Proxy{
+			Domain: cfg.PortDomain, Main: main, Auth: a,
+			Deny:   map[int]bool{cfg.Port: true, cfg.Port + 1: true, cfg.LanPort: true},
+			Reauth: s.reauthNeeded,
+		}
+	}
 	return s
 }
 
@@ -202,8 +218,54 @@ func (s *Server) Handler() http.Handler {
 	// 地址栏第一段是 herdr session 名，而 session 名的首字符只能是字母数字
 	// （config.ValidSessionName），所以 `_f` 永远不可能和某个 session 撞上。
 	mux.HandleFunc("/_f/", s.handleFileRaw)
+	// /_port/<端口>：给端口子域名签票（internal/portproxy）。下划线开头同上，撞不上 session 名
+	mux.HandleFunc("/_port/", s.handlePortEntry)
 	mux.HandleFunc("/", s.handleRoot)
-	return s.guard(mux)
+	main := s.guard(mux)
+	if s.Ports == nil {
+		return main
+	}
+	// 端口子域名（`7830.<域名>`）**在 guard 外面**分流：那是被代理的别人的页面，主站那套 CSP /
+	// Host 白名单 / 安全头一条都不该套上去；认人由 portproxy 自己做（子域名自己的 cookie）。
+	// 判据是 Host —— 只决定「路由到哪」，不决定「放不放行」。
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := s.Ports.Port(r.Host); ok {
+			s.Ports.ServeHTTP(w, r)
+			return
+		}
+		main.ServeHTTP(w, r)
+	})
+}
+
+// handlePortEntry 主站上那一跳：`/_port/7830?to=/x`。
+//
+// 已认证（cookie + passkey 重验，同 requireAuth）→ 签一张绑死端口的票，跳到
+// `https://7830.<域名>/_herdr/auth?t=…`；没认证 → 跳回主站首页带着 `?port=&to=`，
+// 前端登录完自己再跳回这儿（App.tsx 的 portBack）。
+//
+// 这是一个 GET 就签票的口：跨站页面把人导航过来时，SameSite=Strict 的设备 cookie 不会跟着来，
+// 落到「没认证」那一支；同站（bysir.top 下别的子域名）导航过来能签成，但签出来的只是让**这个
+// 浏览器**看自己机器上的一个端口，发起方读不到（跨 origin）。
+func (s *Server) handlePortEntry(w http.ResponseWriter, r *http.Request) {
+	if s.Ports == nil {
+		http.NotFound(w, r)
+		return
+	}
+	port, err := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/_port/"))
+	if err != nil || !s.Ports.Allowed(port) {
+		http.Error(w, "这个端口不代理（只代理 1024 以上、不是 herdr-web 自己的口）", http.StatusBadRequest)
+		return
+	}
+	to := portproxy.SafePath(r.URL.Query().Get("to"))
+	w.Header().Set("Cache-Control", "no-store")
+	id := s.Auth.Authenticate(r)
+	if id == nil || id.Kind != "device" || s.reauthNeeded(id) {
+		q := url.Values{"port": {strconv.Itoa(port)}, "to": {to}}
+		http.Redirect(w, r, "/?"+q.Encode(), http.StatusFound)
+		return
+	}
+	t := s.Ports.Mint(id.Device.ID, port)
+	http.Redirect(w, r, s.Ports.URL(port, portproxy.AuthPath+"?"+url.Values{"t": {t}, "to": {to}}.Encode()), http.StatusFound)
 }
 
 // gateCheck 拦在每一次「猜得到的凭据」前面（配对码、旧 token）。
@@ -361,6 +423,8 @@ func (s *Server) apiState(w http.ResponseWriter, r *http.Request) {
 		"version":     s.versionInfo(),
 		// 局域网直连的候选（没开这条路时是 nil，前端据此什么都不做）
 		"lan": s.lanInfo(),
+		// 端口代理的域名（空 = 没开）：前端据此把 http://localhost:7830 的链接换成子域名
+		"portDomain": s.Cfg.PortDomain,
 	})
 }
 

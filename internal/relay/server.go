@@ -101,6 +101,9 @@ func (r *Relay) route(c net.Conn) {
 	}
 	sess := r.session(sni)
 	if sess == nil {
+		sess = r.session(portParent(sni))
+	}
+	if sess == nil {
 		c.Close() // 没注册 / 主机不在线：一律安静地断开
 		return
 	}
@@ -317,4 +320,20 @@ func (r *Relay) handshake(ws *websocket.Conn) (string, error) {
 
 func (r *Relay) inZone(host string) bool {
 	return r.Zone != "" && (host == r.Zone || strings.HasSuffix(host, "."+r.Zone))
+}
+
+// portParent：`7830.herdr.example.com` → `herdr.example.com`。主机的端口代理挂在自己名字下面一层
+// （internal/portproxy），那些子域名不单独注册，跟着主机走 —— 主机拥有自己名下的这一层。
+// 只认「第一段是纯数字」：别的子域名不是端口代理，不该被顺手路由给谁。
+func portParent(sni string) string {
+	label, rest, ok := strings.Cut(sni, ".")
+	if !ok || label == "" || rest == "" {
+		return ""
+	}
+	for _, c := range label {
+		if c < '0' || c > '9' {
+			return ""
+		}
+	}
+	return rest
 }
