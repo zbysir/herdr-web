@@ -232,6 +232,11 @@
   一配就挡在外面）—— 义务是「id 过正则 + path 必须在根底下 + 必须 `.jsonl`」三条，少了最后那条
   一个被改过的 hook 报 `~/.claude/.credentials.json` 就能把凭据渲染到页面上。**只读**：发言走
   现成的发件箱，审批不留入口（会改状态的事留在 TUI）。
+  **claude 的 `/resume` 进后台会话**（`claude --bg` 起的那种）：pane 报的那份只剩几行，以
+  `continued-in` 收尾，对话全写在后台会话的文件里 —— 不跟的话「明明有消息，chat 一条都没有」
+  （用户报的）。`follow.go` 顺着跟：`continuedInSessionId` 有文件就过去，没有（前台 resume
+  后台时它指的是前台自己被挂起的 job）就认「running in the background (<job>)」，job 是后台
+  会话 id 的前 8 位，同目录恰好一份才认。
   **codex 的 `/clear`**：不新建 rollout、旧文件也不再长，而 herdr 的 `agent_session` 要等
   新会话写盘才更新（hook 挂在 `SessionStart` 上，codex 的 clear 不触发它）—— 那段窗口里
   chat 显示的是**已经作废的上一段对话**（用户报的），而数据层认不出这件事（没有结束标记、

@@ -134,6 +134,7 @@ func (s *Store) Find(ref Ref) (Source, error) {
 	if err != nil {
 		return Source{}, err
 	}
+	src = s.follow(ref, src) // `/resume` 进后台会话之后，对话写在另一份里（见 follow.go）
 	s.mu.Lock()
 	if s.cache == nil {
 		s.cache = map[string]cacheEnt{}
