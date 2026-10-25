@@ -93,7 +93,7 @@ is also a passkey approval in a browser; if the network stalls, type `~.` at the
 | **Diff** | `git diff` is unreadable in a phone terminal: this wraps lines, highlights the changed words, and streams every file of one change continuously. **Read-only** |
 | **Phones and tablets** | Touch gestures are fully taken over (drag = wheel reporting, long press = drag a pane border), the bottom dock can move to the right edge, portrait and landscape keep separate layouts |
 | **Install as an app** | PWA: its own window, no address bar or toolbar — several free terminal rows |
-| **Android app** (beta) | Same UI as the web page, plus what a web page can't do: **system notifications** when an agent finishes or waits for you, a status list in the notification shade and a home-screen widget; **automatic LAN direct connection** at home with the same address, falling back to the relay outside (top-left dot: green = direct, blue = relay) |
+| **Android app** (beta) | Same UI as the web page, plus what a web page can't do: **system notifications** when an agent finishes or waits for you, a status list in the notification shade and a home-screen widget; **automatic LAN direct connection** at home with the same address, falling back to the relay outside (top-left dot: green = direct, blue = relay); volume keys act as ↑ / ↓. The APK is on the [Releases](https://github.com/zbysir/herdr-web/releases) page |
 | **Local ports** | A dev server an agent starts on `http://localhost:7830` opens at `https://7830.your-domain` after you log in; such links in the terminal and chat go there directly |
 
 → How each one works: [使用说明 · 能干什么](docs/USAGE.zh-CN.md#能干什么) (Chinese)

@@ -13,8 +13,23 @@ plugins {
 val local = Properties().apply {
     rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
 }
-val releaseStore = local.getProperty("release.storeFile")?.let(::file)
+//
+// CI（release.yml）没有 local.properties，走环境变量：`HERDR_APP_KEYSTORE`（jks 的路径，workflow
+// 从 secret 解出来的临时文件）+ `HERDR_APP_KEY_PASS`。本机那份优先。
+val releaseStore = (local.getProperty("release.storeFile") ?: System.getenv("HERDR_APP_KEYSTORE"))
+    ?.takeIf { it.isNotBlank() }?.let(::file)
 val releasePass = local.getProperty("release.passFile")?.let { file(it).readText().trim() }
+    ?: System.getenv("HERDR_APP_KEY_PASS")?.takeIf { it.isNotBlank() }
+
+// 版本号跟着发版的 tag 走（`-PappVersion=0.10.0`，release.yml 传），不传就是本机开发那个占位。
+// versionCode 必须单调增（系统拿它判「这是不是升级」，小了不让覆盖装），按 主.次.修 各占三位算：
+// 0.10.0 → 10000、1.2.3 → 1002003。预发布后缀（-rc1）丢掉 —— 同一个号的正式版会装不上去，
+// 不过发版只打正式 tag
+val appVersion = (findProperty("appVersion") as String?)?.removePrefix("v")?.substringBefore('-') ?: "0.1.0"
+val appCode = appVersion.split('.').map { it.toIntOrNull() ?: 0 }
+    .let { (it + listOf(0, 0, 0)).take(3) }
+    .let { (ma, mi, pa) -> ma * 1_000_000 + mi * 1_000 + pa }
+    .coerceAtLeast(1)
 
 android {
     namespace = "io.github.zbysir.herdrweb"
@@ -25,8 +40,8 @@ android {
         applicationId = "io.github.zbysir.herdrweb"
         minSdk = 28
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = appCode
+        versionName = appVersion
     }
 
     signingConfigs {

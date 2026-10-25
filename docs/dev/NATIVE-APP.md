@@ -188,6 +188,22 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 debug 包才放行明文（`src/debug/AndroidManifest.xml`），release 包只认 https。
 `chrome://inspect` 能直接调 WebView 里的页面（debug 包开了 `setWebContentsDebuggingEnabled`）。
 
+### 正式包：跟着发版一起出
+
+`make release` 推 tag 之后，`release.yml` 在发完 npm 之后编一个**签好名的 release APK**
+（`herdr-web_<版本>.apk`）挂到同一个 GitHub Release 上。三条：
+
+- **版本号来自 tag**（`-PappVersion=v0.10.0`）：versionName = `0.10.0`，versionCode 按
+  主.次.修各三位算（`10000`）。系统拿 versionCode 判「是不是升级」，所以 tag 只能往上走。
+- **签名钥匙是两个仓库 secret**：`HERDR_APP_KEYSTORE_B64`（jks 的 base64）和
+  `HERDR_APP_KEY_PASS`。必须和本机 `~/.android-release/herdr-web.jks` 是**同一把** ——
+  签名对不上不让覆盖安装，已经装上的人只能卸了重装（登录状态、通知设置一起丢）。没配就整步失败，
+  不出 unsigned 包，也不拿 debug 钥匙凑合。
+- 这一步挂了不拦 npm（排在它后面）。补一个：`gh workflow run release.yml -f tag=v0.10.0 -f what=apk`。
+
+本机出正式包：`./gradlew assembleRelease -PappVersion=v0.10.0`（钥匙路径在 `local.properties`）。
+debug 包（`assembleDebug`）是另一把钥匙签的，和正式包**不能互相覆盖安装**，换过去要先卸载。
+
 ## 6. 分期
 
 1. **壳本体**（已完成）：填地址、WebView、配对码登录、导航锁、返回键、文件选择、键盘、网页那边

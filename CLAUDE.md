@@ -735,6 +735,8 @@ make release V=v0.1.0   # 打 tag 并推上去，剩下的 GitHub Actions 干
 ```
 
 推上 tag 之后 `release.yml` 会：`make test` → goreleaser（交叉编译 4 个平台、出 archive 和 `checksums.txt`、建 GitHub Release）→ 把 archive 摊成 npm 包 → **先发 4 个平台子包、最后发根包**。顺序反了会有一段时间 `npm install` 装出一个没有二进制的壳。
+最后出**签好名的安卓 APK** 挂到同一个 Release 上（钥匙是 `HERDR_APP_KEYSTORE_B64` / `HERDR_APP_KEY_PASS`
+两个 secret，必须和本机那把是同一把；挂了不拦 npm，用 `-f what=apk` 补，见 [NATIVE-APP.md](docs/dev/NATIVE-APP.md)「正式包」）。
 
 **Release 建好了但 npm 那步挂了**（发过一次，见下）用同一个 workflow 补发，不重新编译：
 
