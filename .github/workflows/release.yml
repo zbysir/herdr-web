@@ -4,7 +4,8 @@
 # 绑的就是这个 release.yml。原来那个单独的 npm-publish.yml 一旦发包，OIDC 就对不上。
 #
 # 两条路：
-#   1. 推 tag        —— 完整发布：跑测试 → goreleaser 交叉编译 + 建 GitHub Release → 发 npm
+#   1. 推 tag        —— 完整发布：跑测试 → goreleaser 交叉编译 + 建 GitHub Release
+#                       + 推中继镜像到 ghcr → 发 npm
 #                       → 出签好名的安卓 APK 挂到同一个 Release 上
 #   2. 手动 dispatch —— 补发一样（Release 已经建好了、只是某一步挂了）：
 #                       `what=npm` 补 npm：不重新编译，直接下已经发出去的那批 archive 打包，
@@ -30,6 +31,7 @@ on:
 permissions:
   contents: write # goreleaser 建 release（补发那条路只用到读）
   id-token: write # npm provenance / Trusted Publisher 的 OIDC
+  packages: write # 推中继镜像 ghcr.io/zbysir/herdr-relay
 
 jobs:
   release:
@@ -75,6 +77,18 @@ jobs:
         run: |
           npm --prefix web ci
           make test
+
+      # 中继镜像（goreleaser 的 dockers_v2）要 buildx 和 ghcr 的登录。不装 QEMU：Dockerfile 里
+      # 只有 COPY 没有 RUN，出 arm64 镜像不用在 amd64 上模拟执行任何东西。
+      # 补发那条路不出镜像（镜像和 Release 同一次 goreleaser 发的，要补就重推 tag）。
+      - uses: docker/setup-buildx-action@v4
+        if: github.event_name == 'push'
+      - uses: docker/login-action@v4
+        if: github.event_name == 'push'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       # before hook 会跑 make web 把前端 embed 进去
       - name: goreleaser（交叉编译 + 建 GitHub Release）

@@ -345,7 +345,7 @@ WebView ──CONNECT mac.h.example.com:443──▶ App 内的代理（127.0.0.
 1. ✅ **中继 + 主机隧道**：`cmd/herdr-relay`（SNI 路由、控制面、邀请码、子流头）、
    `internal/relay`（主机侧：join、隧道 `relay.Tunnel` 当公网口）、按名字推 `PUBLIC_URL`。
    *单测已验*（`internal/relay/relay_test.go`）：两台主机各走各的；TLS 在主机终止（换一张中继
-   没有的证书照样握得上）；主机看到的对端是手机地址；邀请码一次性、绑死名字、zone 外的名字进不来；
+   没有的证书照样握得上）；主机看到的对端是手机地址；邀请码一次性、绑死名字（原来还有一道「名字必须在 `HERDR_RELAY_ZONE` 下面」，2026-10-25 删了：名字已经被邀请码绑死，它什么都没多挡，只让一台中继接几个域名时要改配置）；
    换钥匙冒充被拒；新隧道顶掉旧的。没 join 就起服务 → 拒绝启动；`TLS=off` 配中继 → 拒绝启动（`TLS=proxy` 2026-10-23 起无论配不配中继都拒绝启动）。
    *还要在真 VPS 上验*：浏览器从 `https://mac.h.example.com` 配对 / passkey / 终端 / chat 全通；
    VPS 上 `tcpdump` 里看不到明文；中继控制面的 TLS-ALPN-01 自签发真能签下来。

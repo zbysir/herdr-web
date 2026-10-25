@@ -6,7 +6,6 @@
 // 配置和 herdr-web 一样只走环境变量（前缀 HERDR_RELAY_）：
 //
 //	HERDR_RELAY_DOMAIN   中继自己的域名（控制面），relay.example.com        必填
-//	HERDR_RELAY_ZONE     主机名都在它下面，h.example.com                   必填
 //	HERDR_RELAY_LISTEN   监听地址，默认 :443
 //	HERDR_RELAY_DIR      数据目录，默认 ~/.herdr-relay
 //	HERDR_RELAY_TLS_CERT / HERDR_RELAY_TLS_KEY   控制面的证书；不给就自己用 TLS-ALPN-01 签
@@ -43,10 +42,10 @@ import (
 )
 
 type config struct {
-	Domain, Zone, Listen, Dir string
-	Cert, Key, Email          string
-	Control                   string
-	ProxyProtocol             bool
+	Domain, Listen, Dir string
+	Cert, Key, Email    string
+	Control             string
+	ProxyProtocol       bool
 }
 
 func load() config {
@@ -58,7 +57,6 @@ func load() config {
 	v.SetDefault("dir", filepath.Join(home, ".herdr-relay"))
 	c := config{
 		Domain: strings.ToLower(strings.TrimSpace(v.GetString("domain"))),
-		Zone:   strings.Trim(strings.ToLower(strings.TrimSpace(v.GetString("zone"))), "."),
 		Listen: v.GetString("listen"),
 		Dir:    v.GetString("dir"),
 		Cert:   v.GetString("tls_cert"),
@@ -93,8 +91,13 @@ func main() {
 
 func serve() error {
 	c := load()
-	if c.Domain == "" || c.Zone == "" {
-		return errors.New("要给 HERDR_RELAY_DOMAIN（中继自己的域名）和 HERDR_RELAY_ZONE（主机名都在它下面）")
+	if c.Domain == "" {
+		return errors.New("要给 HERDR_RELAY_DOMAIN（中继自己的域名）")
+	}
+	// 2026-10-25 下线：它只在注册时核「名字在不在这个域名下面」，而名字早被邀请码绑死了，
+	// 这一道什么都没多挡，倒是让「一台中继接好几个域名」得改配置。配着的只警告、照样忽略。
+	if os.Getenv("HERDR_RELAY_ZONE") != "" {
+		log.Printf("HERDR_RELAY_ZONE 已经下线了（注册哪个名字由邀请码决定），这一项被忽略，可以从配置里删掉")
 	}
 	if (c.Cert == "") != (c.Key == "") {
 		return errors.New("HERDR_RELAY_TLS_CERT 和 HERDR_RELAY_TLS_KEY 要么都给，要么都不给")
@@ -135,7 +138,7 @@ func serve() error {
 		// 那样谁直连这个口都能自己写一个头、冒充任意来源地址
 		ln = &proxyproto.Listener{Listener: ln, ReadHeaderTimeout: 10 * time.Second}
 	}
-	r := &relay.Relay{Domain: c.Domain, Zone: c.Zone, TLS: conf, Store: c.store()}
+	r := &relay.Relay{Domain: c.Domain, TLS: conf, Store: c.store()}
 	if c.Control != "" {
 		cl, err := net.Listen("tcp", c.Control)
 		if err != nil {
@@ -152,8 +155,8 @@ func serve() error {
 	if err != nil {
 		return fmt.Errorf("读主机表失败（%s）: %w", c.Dir, err)
 	}
-	log.Printf("herdr-relay %s 在 %s 上跑起来了：控制面 https://%s/，主机名 *.%s，已注册 %d 台",
-		version.Version, c.Listen, c.Domain, c.Zone, len(hs))
+	log.Printf("herdr-relay %s 在 %s 上跑起来了：控制面 https://%s/，已注册 %d 台",
+		version.Version, c.Listen, c.Domain, len(hs))
 	return r.Serve(ln)
 }
 
@@ -167,9 +170,6 @@ func inviteCmd() *cobra.Command {
 			host, err := relay.CleanHost(args[0])
 			if err != nil {
 				return err
-			}
-			if c.Zone != "" && host != c.Zone && !strings.HasSuffix(host, "."+c.Zone) {
-				return fmt.Errorf("%s 不在 HERDR_RELAY_ZONE（%s）下面", host, c.Zone)
 			}
 			if host == c.Domain {
 				return fmt.Errorf("%s 是中继自己的名字，不能注册成主机", host)

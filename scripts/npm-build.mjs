@@ -35,6 +35,8 @@ const TARGETS = [
 ];
 
 const SCOPE = "@bysir";
+// 每个平台子包里放哪几个二进制。加一个就要在根包 package.json 的 bin 里加一个同名的壳
+const BINS = ["herdr-web", "herdr-relay"];
 const rootPkgDir = path.join(out, "herdr-web");
 
 function subPkgName(t) {
@@ -56,12 +58,15 @@ for (const t of TARGETS) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "herdr-web-npm-"));
   try {
     execFileSync("tar", ["-xzf", archive, "-C", tmp], { stdio: "inherit" });
-    const src = path.join(tmp, "herdr-web");
-    if (!fs.existsSync(src)) throw new Error(`${archive} 里没有 herdr-web`);
-    const dest = path.join(dir, "bin", "herdr-web");
-    fs.copyFileSync(src, dest);
-    // 可执行位必须自己设：npm 打包时保留文件模式，但 copyFileSync 不一定带过来
-    fs.chmodSync(dest, 0o755);
+    // herdr-relay（云端中继）和 herdr-web 同包发，根包的 bin 里各有一个壳指过来
+    for (const bin of BINS) {
+      const src = path.join(tmp, bin);
+      if (!fs.existsSync(src)) throw new Error(`${archive} 里没有 ${bin}`);
+      const dest = path.join(dir, "bin", bin);
+      fs.copyFileSync(src, dest);
+      // 可执行位必须自己设：npm 打包时保留文件模式，但 copyFileSync 不一定带过来
+      fs.chmodSync(dest, 0o755);
+    }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -72,7 +77,7 @@ for (const t of TARGETS) {
       {
         name: subPkgName(t),
         version,
-        description: `herdr-web 的 ${t.os}-${t.cpu} 二进制（由 @bysir/herdr-web 自动选用）`,
+        description: `herdr-web / herdr-relay 的 ${t.os}-${t.cpu} 二进制（由 @bysir/herdr-web 自动选用）`,
         license: "MIT",
         repository: { type: "git", url: "git+https://github.com/zbysir/herdr-web.git" },
         // 这两个字段是关键：npm 靠它们判断「这个包该不该在这台机器上装」
@@ -86,7 +91,7 @@ for (const t of TARGETS) {
     ) + "\n",
   );
   optional[subPkgName(t)] = version;
-  const mb = (fs.statSync(path.join(dir, "bin", "herdr-web")).size / 1048576).toFixed(1);
+  const mb = (BINS.reduce((n, b) => n + fs.statSync(path.join(dir, "bin", b)).size, 0) / 1048576).toFixed(1);
   console.log(`  ${subPkgName(t)}  ${mb} MB`);
 }
 

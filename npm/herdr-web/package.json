@@ -19,7 +19,8 @@
     "claude-code"
   ],
   "bin": {
-    "herdr-web": "bin/herdr-web.js"
+    "herdr-web": "bin/herdr-web.js",
+    "herdr-relay": "bin/herdr-relay.js"
   },
   "files": [
     "bin/",

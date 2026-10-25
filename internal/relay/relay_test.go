@@ -52,9 +52,9 @@ type rig struct {
 func newRig(t *testing.T) *rig {
 	cert, pool := testCert(t)
 	r := &Relay{
-		Domain: "relay.test", Zone: "h.test",
-		TLS:   &tls.Config{Certificates: []tls.Certificate{cert}},
-		Store: Store{Dir: t.TempDir()}, Log: t.Logf,
+		Domain: "relay.test",
+		TLS:    &tls.Config{Certificates: []tls.Certificate{cert}},
+		Store:  Store{Dir: t.TempDir()}, Log: t.Logf,
 	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -183,7 +183,7 @@ func TestTLSTerminatesOnHost(t *testing.T) {
 	}
 }
 
-// 没注册的名字、不在 zone 下的名字、钥匙不对的主机，一律进不来。
+// 没注册的名字、邀请码对不上名字的、钥匙不对的主机，一律进不来。
 func TestRejects(t *testing.T) {
 	g := newRig(t)
 	ctx := context.Background()
@@ -197,11 +197,6 @@ func TestRejects(t *testing.T) {
 	var rej *RejectedError
 	if err := Join(ctx, g.host(t, "mac.h.test"), code); !errors.As(err, &rej) {
 		t.Fatalf("邀请码绑死主机名：%v", err)
-	}
-	// 不在 zone 下
-	code, _ = g.relay.Store.NewInvite("evil.example.com")
-	if err := Join(ctx, g.host(t, "evil.example.com"), code); err == nil {
-		t.Fatal("不在 zone 下的名字不能注册")
 	}
 
 	// 注册成功之后，换一把钥匙冒充同一个名字
@@ -277,7 +272,7 @@ func TestCleanHost(t *testing.T) {
 // SNI 那个口只管主机名。中继自己没有证书（TLS == nil），SNI 是它自己名字的连接要直接断。
 func TestControlBehindFrontProxy(t *testing.T) {
 	cert, pool := testCert(t)
-	r := &Relay{Domain: "relay.test", Zone: "h.test", Store: Store{Dir: t.TempDir()}, Log: t.Logf}
+	r := &Relay{Domain: "relay.test", Store: Store{Dir: t.TempDir()}, Log: t.Logf}
 	sni, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -317,10 +312,9 @@ func TestControlBehindFrontProxy(t *testing.T) {
 	}
 }
 
-// 中继自己的名字不能被注册成主机（zone 是整个域名时它就落在 zone 里）。
+// 中继自己的名字不能被注册成主机，就算有人给它出了邀请码。
 func TestRelayDomainNotRegistrable(t *testing.T) {
 	g := newRig(t)
-	g.relay.Zone = "test" // relay.test 落在 zone 里
 	code, _ := g.relay.Store.NewInvite("relay.test")
 	if err := Join(context.Background(), g.host(t, "relay.test"), code); err == nil {
 		t.Fatal("中继自己的名字不该能注册")

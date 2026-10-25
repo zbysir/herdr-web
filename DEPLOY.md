@@ -114,9 +114,14 @@ HERDR_WEB_TLS_CERT=/path/fullchain.pem HERDR_WEB_TLS_KEY=/path/privkey.pem ./her
 也只能断你的网、看元数据。设计和威胁对照见 [docs/dev/RELAY.md](docs/dev/RELAY.md)。
 
 ```bash
-# VPS 上：跑 herdr-relay（HERDR_RELAY_DOMAIN=relay.example.com、HERDR_RELAY_ZONE=h.example.com），
+# VPS 上：跑 herdr-relay（镜像 ghcr.io/zbysir/herdr-relay，npm 包 / install.sh 里也带着它）。
+# relay.example.com 先解析到这台 VPS，控制面的证书中继自己签。数据在卷上，别丢
+docker run -d --name herdr-relay --restart always -p 443:443 -v /root/data/herdr-relay:/data \
+  -e HERDR_RELAY_DOMAIN=relay.example.com \
+  ghcr.io/zbysir/herdr-relay
+
 # 然后出一个邀请码（30 分钟、一次性、绑死这个主机名）
-herdr-relay invite mac.h.example.com
+docker exec herdr-relay herdr-relay invite mac.h.example.com
 
 # 这台机器上：注册一次。私钥留在 ~/.herdr-web/relay/，顺手打印要加的环境变量和 DNS 记录
 herdr-web relay join https://relay.example.com mac.h.example.com <邀请码>

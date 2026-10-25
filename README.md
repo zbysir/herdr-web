@@ -109,6 +109,7 @@ HERDR_WEB_HOST=0.0.0.0 herdr-web                # 2. 局域网的手机 / 平板
 HERDR_WEB_ONCONNECT= herdr-web                  # 3. 别自动进 herdr，留在 shell 里
 
 # 4. 从公网连：走云端中继（VPS 上跑 herdr-relay，只转密文，TLS 在本机终止）
+#    VPS 上用镜像 ghcr.io/zbysir/herdr-relay（npm 包和 install.sh 里也带着 herdr-relay）
 #    先 `herdr-web relay join https://relay.example.com mac.h.example.com <邀请码>` 注册一次
 HERDR_WEB_RELAY_URL=https://relay.example.com HERDR_WEB_RELAY_HOST=mac.h.example.com \
 HERDR_WEB_ACME_DNS=cloudflare HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN=... herdr-web

@@ -29,9 +29,27 @@ builds:
       - -X github.com/zbysir/herdr-web/internal/version.Date={{ .CommitDate }}
     mod_timestamp: "{{ .CommitTimestamp }}" # 可复现构建：同一个 commit 出同样的二进制
 
+  # 云端中继（跑在 VPS 上）。和 herdr-web 进同一个 archive / 同一批 npm 平台子包，
+  # 而不是另开一个包：npm 的 Trusted Publisher 要按包一个个配，另开就是再配 5 个，
+  # 漏一个发版就在半路挂掉。代价是每个人多下一个几 MB 的二进制，用不上也无妨。
+  # 它不 embed 前端，所以 before 里那个 make web 跟它无关。
+  - id: herdr-relay
+    main: ./cmd/herdr-relay
+    binary: herdr-relay
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X github.com/zbysir/herdr-web/internal/version.Version={{ .Version }}
+      - -X github.com/zbysir/herdr-web/internal/version.Commit={{ .FullCommit }}
+      - -X github.com/zbysir/herdr-web/internal/version.Date={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
 archives:
   - id: default
-    ids: [herdr-web]
+    ids: [herdr-web, herdr-relay]
     formats: [tar.gz]
     # 这个名字被三处依赖：internal/selfupdate.AssetName（自更新下载）、
     # scripts/npm-build.mjs（打 npm 包）、install.sh。改这里就要一起改。
@@ -39,6 +57,25 @@ archives:
     files:
       - README.md
       - LICENSE
+
+# 中继的镜像：VPS 上一般用 docker 跑（docker run / compose / swarm 都行），npm 包里那份是给
+# 「VPS 上本来就有 node」的人的。只出 linux。推到 ghcr，登录在 release.yml 里。
+# 第一次推上去之后 ghcr 上这个包默认是 private，要去包的设置里改成 public 一次，不然别人拉不到。
+dockers_v2:
+  - id: herdr-relay
+    ids: [herdr-relay]
+    dockerfile: docker/herdr-relay.Dockerfile
+    images: ["ghcr.io/zbysir/herdr-relay"]
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    platforms: [linux/amd64, linux/arm64]
+    labels:
+      org.opencontainers.image.source: https://github.com/zbysir/herdr-web
+      org.opencontainers.image.description: herdr-web 的云端中继：只转发密文，TLS 在主机上终止
+      org.opencontainers.image.licenses: MIT
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
 
 checksum:
   # selfupdate 和 install.sh 都靠它校验下载，名字别改
@@ -70,4 +107,6 @@ release:
     ```
 
     装成开机自启的常驻服务：`herdr-web service install`（macOS launchd / Linux systemd）。
+    云端中继 `herdr-relay`（跑在 VPS 上）：`docker pull ghcr.io/zbysir/herdr-relay:{{ .Version }}`，
+    上面两种装法也会一起装上它。
     升级：`herdr-web update`。

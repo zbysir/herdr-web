@@ -758,6 +758,14 @@ Environment name **留空**（我们的 workflow 没声明 environment，填了�
 Actions 那边一直没动静，而「没动静」和「还在排队」长得一模一样。要覆盖：
 `make release V=vX.Y.Z RELEASE_REMOTE=xxx`。
 
+**一个 archive 里两个二进制**：`herdr-web` 和云端中继 `herdr-relay`（goreleaser 两个 build、
+`npm-build.mjs` 的 `BINS`、根包 `bin` 里各一个壳、`install.sh` 也装）。不另开 npm 包是因为
+Trusted Publisher 要按包配，多一个包就多 5 处要配。`herdr-web update` 走 archive 那条路时
+**只换 herdr-web**（`selfupdate` 只解它），VPS 上要升中继就重跑一次 install.sh 或 `npm i -g`。
+中继另外还出一个**镜像** `ghcr.io/zbysir/herdr-relay`（goreleaser `dockers_v2` +
+`docker/herdr-relay.Dockerfile`，`release.yml` 里登录 ghcr），VPS 上一般用它。ghcr 上新包默认
+**private**，第一次发完要去包设置里改成 public，不然别人拉不到、而发版那边一切正常。
+
 三处名字必须对得上，改一个就要改另外两个：`.goreleaser.yaml` 的 `name_template`、`internal/selfupdate.AssetName`（自更新下载）、`scripts/npm-build.mjs`。对不上的表现是 `herdr-web update` 下载 404。
 
 `make release-dry` 跑完会**把工作区还回去**：`npm-build.mjs` 把版本号写进入库的

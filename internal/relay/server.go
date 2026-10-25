@@ -27,10 +27,6 @@ import (
 type Relay struct {
 	// Domain 是中继自己的名字（控制面，如 relay.example.com）。
 	Domain string
-	// Zone：主机名必须在它下面（如 h.example.com，也可以就是整个 example.com —— 能注册哪个名字
-	// 最终由谁出邀请码决定，zone 只是一道粗筛）。挡的是「拿邀请码注册一个不归你管的名字」——
-	// 虽然证书过不去偷不到内容，但能把那个名字的流量引到自己这儿，让人一直连不上。
-	Zone string
 	// TLS 是控制面那张证书的配置（autocert 或文件）。nil = 控制面不走这个口，由前面那层
 	// （VPS 上的 Traefik）终止 TLS 后转到 ControlHandler —— 那时 SNI 是中继自己名字的连接
 	// 根本不会到这儿，到了就断开。
@@ -289,9 +285,8 @@ func (r *Relay) handshake(ws *websocket.Conn) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !r.inZone(host) {
-		return "", fmt.Errorf("%s 不在这台中继管的 %s 下面", host, r.Zone)
-	}
+	// 不按域名再筛一道（原来的 HERDR_RELAY_ZONE）：能注册哪个名字由邀请码决定，码只有管理员出得了、
+	// 而且绑死名字。注册了一个不归自己管的名字也没用 —— 那个名字的 DNS 不指这台 VPS 就没流量进来。
 	if host == r.Domain {
 		// 控制面的名字被注册成主机的话，按 SNI 分路时两边打架（谁先匹配谁说话）
 		return "", fmt.Errorf("%s 是中继自己的名字，不能注册成主机", host)
@@ -316,10 +311,6 @@ func (r *Relay) handshake(ws *websocket.Conn) (string, error) {
 		return "", errors.New("这台主机没注册，或者钥匙对不上（重新 join 一次）")
 	}
 	return host, nil
-}
-
-func (r *Relay) inZone(host string) bool {
-	return r.Zone != "" && (host == r.Zone || strings.HasSuffix(host, "."+r.Zone))
 }
 
 // portParent：`7830.herdr.example.com` → `herdr.example.com`。主机的端口代理挂在自己名字下面一层
