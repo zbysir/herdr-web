@@ -47,6 +47,11 @@ No native Windows build; install it inside WSL (the terminal needs a real PTY). 
 too, but **what you get has no frontend** — the web assets are built by `make build` and are not in
 the repo.
 
+**Android app** (optional, beta): download `herdr-web_<version>.apk` from
+[Releases](https://github.com/zbysir/herdr-web/releases), open it, enter the address of **your own**
+herdr-web, then sign in with a pairing code or passkey. It is only a shell — install the server as
+above. Upgrade by installing a newer APK over it.
+
 → From source, pinning a version, changing the install dir: [使用说明 · 装](docs/USAGE.zh-CN.md#装) (Chinese)
 
 ## Use

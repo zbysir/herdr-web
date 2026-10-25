@@ -45,6 +45,10 @@ curl -fsSL https://raw.githubusercontent.com/zbysir/herdr-web/master/install.sh 
 Windows 没有原生版，在 WSL 里装（浏览器里那个终端要一个真 PTY）。`go install` 也能装，
 但**装出来的没有前端**（前端产物不入版本库）。
 
+**安卓 App**（可选，测试版）：从 [Releases](https://github.com/zbysir/herdr-web/releases) 下
+`herdr-web_<版本>.apk` 装到手机上，打开填**你自己那台** herdr-web 的地址，再用配对码或 passkey 登录。
+它只是个壳，服务端照上面那样装。新版 APK 直接覆盖安装就能升级。
+
 → 从源码装、换安装目录、装指定版本：[使用说明 · 装](docs/USAGE.zh-CN.md#装)
 
 ## 用
