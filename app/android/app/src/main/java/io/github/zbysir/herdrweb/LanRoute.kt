@@ -327,7 +327,11 @@ private class LocalProxy(private val route: (String, Int) -> List<Target>) {
         Thread({
             while (true) {
                 val c = try { server.accept() } catch (_: Exception) { return@Thread }
-                pool.execute { handle(c) }
+                // 兜底：这里抛出去的异常没人接，线程池 / 裸 Thread 上一个未捕获异常就是**整个 App 崩掉**
+                // （真机上踩过：从通知点开 → 回前台重探局域网 → closeRelay 掐掉正在建的那条 → 崩）
+                pool.execute {
+                    try { handle(c) } catch (e: Exception) { Log.d("LanRoute", "代理连接中断：$e") }
+                }
             }
         }, "lan-proxy").apply { isDaemon = true }.start()
     }
@@ -364,15 +368,20 @@ private class LocalProxy(private val route: (String, Int) -> List<Target>) {
             // 拨的那一刻还没有局域网这条路（targets 里压根没有它）、连上时却已经探通了：这条是从
             // 「先作废、再探」那个空档里漏过来的，closeRelay 已经扫过去了，当场补掐。
             // 试过局域网、没拨通才退到中继的那种是正当的退路，不动
+            // 补掐之后下面一取 up 的流就抛 Socket is closed —— finally 照样记账，异常由 start 里那层接住
             if (!isLan && targets.none { it.lan } && LanRoute.lan != null) runCatching { up.close() }
             try { up.use {
+                // 流**先取出来**：closeRelay 随时可能从别的线程把 up 关掉，关掉之后
+                // getInputStream / getOutputStream 直接抛（而不是返回一条读到 EOF 的流）
+                val upIn = up.getInputStream()
+                val upOut = up.getOutputStream()
                 c.soTimeout = 0
                 out.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray())
                 out.flush()
-                val t = Thread { pump(up.getInputStream(), out); runCatching { c.shutdownOutput() } }
+                val t = Thread { pump(upIn, out); runCatching { c.shutdownOutput() } }
                 t.isDaemon = true
                 t.start()
-                pump(input, up.getOutputStream())
+                pump(input, upOut)
                 runCatching { up.shutdownOutput() }
                 t.join()
             } } finally {
