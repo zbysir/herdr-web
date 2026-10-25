@@ -150,4 +150,8 @@ jobs:
           # 没签上的话 AGP 出的是 app-release-unsigned.apk，这一行就找不到文件、整步失败
           apk="$RUNNER_TEMP/herdr-web_${TAG#v}.apk"
           cp app/android/app/build/outputs/apk/release/app-release.apk "$apk"
-          gh release upload "$TAG" "$apk" --clobber
+          # 再挂一份不带版本号的：官网的下载键指 releases/latest/download/herdr-web.apk，
+          # 永远落在最新版上。原来那个键写死了某一版的地址，发了十个版本还在发最早那个
+          # （修过的闪退在用户手机上照崩，用户报的）
+          cp "$apk" "$RUNNER_TEMP/herdr-web.apk"
+          gh release upload "$TAG" "$apk" "$RUNNER_TEMP/herdr-web.apk" --clobber
