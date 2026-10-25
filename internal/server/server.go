@@ -78,8 +78,8 @@ type Server struct {
 	TLS   bool            // 浏览器眼里是不是 https（决定 cookie 的 Secure）
 	names map[string]bool // Host 头里允许出现的域名，见 guard.go
 
-	// LanPort 局域网直连口的端口（0 = 这个部署没这条路）。网页拿它 + 当前局域网
-	// 地址拼出候选去嗅探，见 lanapi.go。
+	// LanPort 局域网直连口的端口（0 = 这个部署没这条路）。拿它 + 当前局域网地址拼出
+	// 候选递给 App 的壳去探，见 lanapi.go（网页自己不再碰这个口）。
 	LanPort int
 
 	// Agents 盯着 agent 状态变化打时间戳（面板一览的「几分钟前」）。可以为 nil：
@@ -386,8 +386,6 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 		s.apiGit(w, r, seg)
 	case "chat":
 		s.apiChat(w, r, seg)
-	case "handoff":
-		s.apiHandoff(w, r)
 	default:
 		fail(w, http.StatusNotFound, errf("没有这个接口"))
 	}
@@ -421,7 +419,7 @@ func (s *Server) apiState(w http.ResponseWriter, r *http.Request) {
 		"session":     name, // 空 = 默认 session
 		"herdrSocket": s.Cfg.SessionSocket(name),
 		"version":     s.versionInfo(),
-		// 局域网直连的候选（没开这条路时是 nil，前端据此什么都不做）
+		// 局域网直连的候选（没开这条路时是 nil）。只有 App 的壳用它，网页不嗅探
 		"lan": s.lanInfo(),
 		// 端口代理的域名（空 = 没开）：前端据此把 http://localhost:7830 的链接换成子域名
 		"portDomain": s.Cfg.PortDomain,

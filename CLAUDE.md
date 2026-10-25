@@ -505,23 +505,19 @@
   `lib/prefs.ts`，两边**一字不差、顺序也一样**，有测试盯着）。加一项就是两边各加一行 +
   `applyProfiles` 里刷一下 state。模型是**服务端为准 + localStorage 镜像**：读的地方一律
   照旧读镜像（终端回调里有几处是同步读的），别改成读 state。
-- 局域网直连（`internal/lan`、`internal/server/lanapi.go`、`web/src/hooks/useLanDirect.ts`）：
-  从隧道进来的页面嗅探「能不能直连」再切过去。四条都是**静默出错**的：① 局域网那个口必须是
-  **TLS** —— https 页面对 `http://` 目标的 fetch 算 active mixed content，浏览器无条件拦死
-  （`no-cors` 也拦），明文口连嗅探都发不出去；② 那些 origin 必须进 **CSP 的 `connect-src`**，
-  不放行的话是被**自己的 CSP** 挡掉，而控制台里那条错和「连不上」长得一样；③ 嗅探只能用
-  `mode:'no-cors'`（普通 fetch 会因为没有 CORS 头 reject，于是把「通」也当成「不通」），它能
-  分清「有响应」和「连不上 / 证书不认」，而这正好是要的全部信息；④ 候选**每次现报**，别缓存 ——
-  内网 IP 会变，而且虚拟网卡（`Addr.Virtual`）要滤掉，手机碰不到 bridge/utun 上那些地址。
-  凭据那一侧还有两条：⑤ 换 origin 要带凭据过去，用的是**交接令牌**（`auth.MintHandoff`）
-  而**不是配对码** —— 配对码「只有坐在机器前的人能出」是写进 SECURITY.md 的性质（理由是
-  它创造一份不随创造者被撤销的凭据），图省事调 `MintCode()` 就是把那条禁令本身实现了一遍；
-  ⑥ 判「是不是从直连口进来的」只能按**请求落在哪个监听上**算（`server.FromLan`），**不能看
-  `Host`**（`hostOK` 对 IP 一律放行，公网那条路伪造一个内网 Host 就绕过去了），而且那个口
-  必须自己拒掉非本地对端（`lan.PeerIsLocal`）—— 「绑通配地址只有局域网碰得到」是拓扑假设，
-  Go 对 `0.0.0.0` 开的是**双栈**套接字，有全局 IPv6 的机器上那个口公网可能直接可达。
-  另外「探不通」有两种原因，**必须分开报**：在外面（安静走公网）和地址变了（旧 origin 上那一下
-  「继续访问」作废了，要提示人去新地址再点一次）—— 混成一种的话这条路会永久静默失效且查不出原因。
+- 局域网直连（`internal/lan`、`internal/server/lanapi.go`、App 的 `LanRoute.kt`）：**只有安卓 App
+  走**，壳在 WebView 外面换路、**不换 origin**（RELAY.md §4）；网页只把候选递给壳
+  （`useLanDirect` 现在就这一件事）。**网页自己那条（嗅探直连口 → 带交接令牌跳到 IP origin）
+  2026-10-25 整个下掉了，别加回来**：直连口的证书在浏览器眼里必然不对（签给域名、按 IP 连），
+  人在那个 IP 上点过一次「继续访问」之后，嗅探请求带着证书错误**成功**，Chromium 就把**公网那一页**
+  记成「加载过证书有错的内容」（页面信息里多一句「还包含其他不安全资源」，锁照样是锁），passkey
+  从此一律 `NotAllowedError`，刷新都不好、得把浏览器进程杀掉（用户报的「浏览器不给我签 passkey 了」）。
+  所以三条：① CSP 的 `connect-src` **只能是 `'self'`**（`TestCSPSelfOnly`），页面里任何发往直连口的
+  请求（fetch / img / iframe）都是同一个坑；② 设置里那一节在浏览器上**不给 IP 链接**，点开那个就是
+  去点「继续访问」；③ `/api/handoff`、`?handoff=`、`MintHandoff` 一起删了，但 `Device.Parent` 和
+  `Revoke` 里的级联**留着** —— `devices.json` 里还有当年交接出来的设备。直连口本身照旧：候选**每次
+  现报**（IP 会变，虚拟网卡 `Addr.Virtual` 要滤掉），口上必须自己拒非本地对端（`lan.PeerIsLocal` ——
+  Go 对 `0.0.0.0` 开的是**双栈**套接字，有全局 IPv6 的机器上那个口公网可能直接可达）。
 - **云端中继**（`internal/relay` + `cmd/herdr-relay`，[RELAY.md](docs/dev/RELAY.md)）：按「中继那台 VPS
   已经被拿下」设计。三条别破：① **中继不终止主机的 TLS**，只读 SNI 原样转 —— 页面一旦由中继发，
   它改一行 JS 就能读终端、替你按 passkey；② 隧道连接是**唯一的公网入口**，规则就是原来公网口那套

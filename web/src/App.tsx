@@ -97,7 +97,6 @@ import { ComposeRich, type RichHandle } from '@/components/ComposeRich'
 import { FileViewer } from '@/components/FileViewer'
 import { Pairing } from '@/components/Pairing'
 import { CopyPrompt } from '@/components/CopyPrompt'
-import { LanPrompt } from '@/components/LanPrompt'
 import { PastePrompt } from '@/components/PastePrompt'
 import { Logo } from '@/components/Logo'
 import { KeyGroupPopup } from '@/components/KeyGroupPopup'
@@ -153,10 +152,6 @@ function pairHint(): string | undefined {
       return '那个配对码不对，或者已经过期了（5 分钟）。在机器上重新 herdr-web pair 一个。'
     case 'token':
       return '链接里的旧 token 不对。旧 token 只能用来换一次凭据，换完就该删掉了。'
-    // 局域网直连的交接令牌只活 60 秒、只能用一次。走到这儿基本只有两种情况：
-    // 页面在后台压了一会儿才跳过来，或者这条链接被复制到了别处。刷新公网那个地址重来一次就好。
-    case 'handoff':
-      return '局域网直连的交接令牌过期了（只有 60 秒）。回到公网那个地址刷一下，它会重新交接一次。'
     default:
       return undefined
   }
@@ -682,9 +677,9 @@ export default function App() {
    * 间隔是服务端下发的（`HERDR_WEB_NOTICE_MS`，0 = 这个部署关了提示）。state 还没拉回来
    * 之前是 0，也就是不轮询 —— 差的那一两拍无所谓，而默认值写在前端就成了第二个真相源。
    */
-  /* 局域网直连：探得通就换到直连那个 origin 上去（见 hooks/useLanDirect.ts）。
-     等 gate === 'ok' 才开始 —— 配对页上跳走没有意义，凭据还没有。 */
-  const lanDirect = useLanDirect(state?.lan, gate === 'ok')
+  /* 局域网直连：只在 App 里，把候选地址递给壳去探（见 hooks/useLanDirect.ts —— 浏览器里
+     不做，那条路会连累 passkey）。等 gate === 'ok' 才递：配对页上换路没有意义 */
+  useLanDirect(state?.lan, gate === 'ok')
   /* 端口代理：终端 / chat 里 http://localhost:7830 的链接换成子域名（lib/portlink） */
   useEffect(() => setPortDomain(state?.portDomain), [state?.portDomain])
   /* 端口子域名那边没登录 → 主站 `/_port/<端口>` 发现这台也没登录 → 带着 `?port=&to=` 落到这儿
@@ -2601,12 +2596,6 @@ export default function App() {
             onClose={() => setPendingCopy(null)}
           />
         )}
-        <LanPrompt
-          state={lanDirect.ask}
-          onAccept={lanDirect.accept}
-          onDecline={lanDirect.decline}
-          onDismiss={lanDirect.dismiss}
-        />
         {/* 提示浮在终端右上角。**默认不弹**（设置里开，见 noticeCard）；面板开着时也先让开
             —— 那几块浮层就在同一个角上，叠上去会把面板的标题栏盖掉。
             关着的时候只是不画：未读和红点照旧在算（那是另一个开关的事） */}

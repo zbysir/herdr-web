@@ -496,7 +496,7 @@ func (c *Config) ServesTLS() bool {
 	return c.TLSMode == "auto" || c.TLSMode == "files" || c.TLSMode == "acme"
 }
 
-// LanDirectPort 是网页要去嗅探的那个端口。0 = 这个部署没有局域网直连这条路。
+// LanDirectPort 是局域网直连的那个端口（App 的壳去探它）。0 = 这个部署没有这条路。
 //
 // 显式配了 LanPort 就是它。没配的话，只有一种情况白送：主口自己就是**自签** TLS 且
 // 听着局域网 —— 那张自签证书的 SAN 里本来就有所有局域网 IP（见 cmd 的 certIPs），

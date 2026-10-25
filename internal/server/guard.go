@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-
-	"github.com/zbysir/herdr-web/internal/lan"
 )
 
 // 门卫层：Host 白名单 + 跨站检查 + 安全响应头。
@@ -57,28 +55,20 @@ const CSRFHeader = "X-Herdr-Web"
 
 func csrfHeaderOK(r *http.Request) bool { return r.Header.Get(CSRFHeader) != "" }
 
-// connectSrc 是 CSP 的 connect-src。默认只有 'self' —— 前端被注入也没法把终端内容外发。
-//
-// 开了局域网直连就得多放行**本机自己在局域网里的那几个 origin**，否则那次嗅探会被自己的
-// CSP 挡掉。放宽的边界很窄：只有私网地址（见 lan.Origins），而且那头就是本进程。
-//
-// 为什么每个响应都现算而不是启动时拼死：IP 会变。拼死的表现是换个网之后 CSP 里还是旧
-// 地址，嗅探被挡，而控制台里那条 CSP 报错和「连不上」长得一模一样。
-func (s *Server) connectSrc() string {
-	origins := lan.Origins(s.LanPort)
-	if len(origins) == 0 {
-		return "'self'"
-	}
-	return "'self' " + strings.Join(origins, " ")
-}
-
 func (s *Server) secHeaders(w http.ResponseWriter) {
 	h := w.Header()
 	// connect-src 'self' 顺带保证「万一前端被注入」也没法把终端内容外发。
+	//
+	// **别再把局域网直连口的 IP origin 加进来。** 以前网页自己去嗅探直连口，为此放行过
+	// 那几个 origin；而直连口的证书在浏览器眼里必然不对（证书签给域名、浏览器按 IP 连），
+	// 人在那个 IP 上点过一次「继续访问」之后，嗅探就带着证书错误成功了 —— Chromium 把整页
+	// 记成「加载过证书有错的内容」，从此 passkey（M110 起）一律 NotAllowedError，刷新都不好，
+	// 得重启浏览器（用户报的）。所以 2026-10-25 网页那条直连整个下掉，只留 App（壳在 WebView
+	// 外面换路、不换 origin，见 docs/dev/RELAY.md §4）。TestCSPSelfOnly 盯着。
 	// style-src 要 'unsafe-inline'：xterm.js 自己插 <style>，面板拖动也在用行内 style。
 	h.Set("content-security-policy", strings.Join([]string{
 		"default-src 'self'",
-		"connect-src " + s.connectSrc(),
+		"connect-src 'self'",
 		"img-src 'self' data: blob:",
 		"style-src 'self' 'unsafe-inline'",
 		"font-src 'self' data:",

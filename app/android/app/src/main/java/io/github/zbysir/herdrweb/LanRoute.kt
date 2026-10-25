@@ -24,8 +24,9 @@ import javax.net.ssl.SSLSocketFactory
  * 局域网换路：**同一个地址**（`https://herdr.bysir.top`），在家时连接从局域网直连口走，在外面
  * 走云端中继。设计在 docs/dev/RELAY.md §4。
  *
- * 网页那条直连（`useLanDirect`）要换 origin（跳到 `https://192.168.x.x:7790`），于是自签证书、
- * 「继续访问」、交接令牌、IP 上用不了 passkey 一串麻烦全是被「换 origin」逼出来的。App 能做的是
+ * 原来网页那条直连要换 origin（跳到 `https://192.168.x.x:7790`），于是自签证书、
+ * 「继续访问」、交接令牌、IP 上用不了 passkey 一串麻烦全是被「换 origin」逼出来的 —— 最后还连累了
+ * 公网那一页的 passkey，2026-10-25 整个下掉，现在直连只有这一条。App 能做的是
  * **决定这个域名连到哪个 IP**：WebView 走一个本机的 CONNECT 代理（`ProxyController`），代理按
  * 探测结果把 `herdr.bysir.top:443` 拨到局域网口或者照常拨域名。TLS 从 WebView 一路到 Mac，
  * **证书由 WebView 自己按域名验**（Mac 的直连口按 SNI 给出同一张真证书，见 tlsgen.BySNI）——

@@ -181,8 +181,7 @@ func serve(webDir string) error {
 		}
 	}
 
-	// 局域网直连口（HERDR_WEB_LAN_PORT）。**必须是 TLS** —— 见 config.Config.LanPort
-	// 那段注释：https 页面嗅探不到 http 目标，明文的口等于这条路不存在。
+	// 局域网直连口（HERDR_WEB_LAN_PORT）。**必须是 TLS** —— 见 config.Config.LanPort。
 	// 主口本来就是自签的话同一张就够（那张证书的 SAN 里已经有所有局域网 IP）。
 	var lanCert *tlsgen.Result
 	if cfg.LanNeedsListener() {
@@ -271,7 +270,7 @@ func serve(webDir string) error {
 	}
 
 	// 局域网直连口：和主口同一个 handler，只是自己带 TLS 且听 0.0.0.0。
-	// 起不来不影响主服务 —— 那时候只是没有加速，网页嗅探失败会安静地留在公网那条路上。
+	// 起不来不影响主服务 —— 那时候只是没有加速，App 探不通会安静地留在中继那条路上。
 	if lanCert != nil {
 		lanAddr := fmt.Sprintf("0.0.0.0:%d", cfg.LanPort)
 		if lanLn, err := net.Listen("tcp", lanAddr); err != nil {
@@ -284,13 +283,12 @@ func serve(webDir string) error {
 			if lanCert != cert {
 				conf = lanCert.TLSConfig()
 				// 主口是真证书时，按域名来的（App 走本地代理拨到这儿）给真证书，按 IP 来的
-				// （浏览器那条直连）照旧给自签 —— 见 tlsgen.BySNI
+				// （人手打 IP 打开的）照旧给自签 —— 见 tlsgen.BySNI
 				if mainTLS != nil {
 					conf = tlsgen.BySNI(cfg.CertDomains(), mainTLS, conf)
 				}
 			}
-			// 摘转发头 + 盖「从直连口进来」的章（交接令牌只在这种请求上兑得动）——
-			// 见 server.LanListener
+			// 摘转发头 + 拒非本地对端 —— 见 server.LanListener
 			h := server.LanListener(srv.Handler())
 			go func() {
 				if err := http.Serve(tls.NewListener(lanLn, conf), h); err != nil {
@@ -860,17 +858,15 @@ func banner(cfg *config.Config, store *auth.Store, passkeys *auth.Passkeys, cert
 	fmt.Println("  herdr-web " + version.Version + " 已启动")
 	fmt.Println()
 	printEntries(entries(cfg))
-	// 局域网直连口。**必须说「点一次继续访问」**：那张证书是自签的，不点过一次的话
-	// 网页那边的嗅探会因为证书不认而失败 —— 而失败是静默的（安静走公网），人根本
-	// 不会知道这条路存在过。见 internal/server/lanapi.go。
+	// 局域网直连口。**别再叫人「先开一次、点继续访问」**：那是网页自己嗅探直连口那会儿
+	// 的规矩，而那一下「继续访问」正是让公网那一页 passkey 按不动的来路（2026-10-25 网页
+	// 那条下掉了，见 internal/server/lanapi.go）。现在只有 App 走，人什么都不用做。
 	// 地址上面「局域网」那几行已经有了，这儿只说规矩 —— 同一个地址在一屏里出现两次，
 	// 人会以为是两条不同的路。
 	if len(lan.Origins(cfg.LanDirectPort())) > 0 {
 		fmt.Println()
 		fmt.Println("  局域网直连（不绕公网，按键往返快一截）走的就是上面那几个局域网地址：")
-		fmt.Println("    每台设备**先手动开一次**、点「继续访问」（自签证书）。")
-		fmt.Println("    之后从公网那个地址进来，网页会自己探到它并切过去。")
-		fmt.Println("    建议在路由器上给这台机器绑个固定内网 IP —— 地址一变那一下信任就得重来。")
+		fmt.Println("    只有安卓 App 会自动切过去（在家时），不用做任何事；浏览器一直走公网那条路。")
 	}
 
 	fmt.Println()

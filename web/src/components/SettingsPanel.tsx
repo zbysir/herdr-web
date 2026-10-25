@@ -16,7 +16,7 @@ import { SoftkeysPanel } from './SoftkeysPanel'
 import { TopbarPanel } from './TopbarPanel'
 import { ProfilePicker } from './ProfilePicker'
 import { DevicesPanel } from './DevicesPanel'
-import { lanAuto, onLoopback, setLanAuto } from '@/hooks/useLanDirect'
+import { onLoopback } from '@/hooks/useLanDirect'
 import { useRoute } from '@/hooks/useRoute'
 import { cn } from '@/lib/utils'
 
@@ -789,10 +789,8 @@ function LanDirectRow({ origins }: { origins: string[] }) {
   const route = useRoute(origins)
   const here = route.via === 'lan'
   const app = isNative()
-  // 本机开的页面上这一节说的不是「正走中继」（那是错的，它谁也没绕），而是
-  // 「下面这些地址是给别的设备用的」—— 见 useLanDirect 的 onLoopback。
+  // 本机开的页面上这一节说的不是「正走中继」（那是错的，它谁也没绕）
   const local = !app && onLoopback()
-  const [auto, setAuto] = useState(lanAuto)
   return (
     <div className="mt-3 border-t border-line pt-3">
       <div className="flex items-center gap-2">
@@ -811,50 +809,24 @@ function LanDirectRow({ origins }: { origins: string[] }) {
 
       <p className="mt-1 text-xs/relaxed text-muted">
         {app
-          // App 里换路是壳做的、不换地址（docs/dev/RELAY.md §4），没有「继续访问」这一步，
-          // 下面那个开关也管不着它 —— 照搬浏览器那套说法就是让人去点一个用不上的东西
+          // App 里换路是壳做的、不换地址（docs/dev/RELAY.md §4）
           ? (here
             ? 'App 自动换路：现在走局域网直连，按键不绕公网。地址不变，登录状态也不变。'
             : `App 自动换路：在家（和下面这个地址同一个网）时会自己切到直连，不用做任何事。${route.detail === '经云端中继' ? '' : route.detail}`)
           : here
             ? '这个页面已经是直连的 —— 按键不再绕公网。'
             : local
-              ? '这个页面是从本机开的，按键压根没出过这台机器 —— 下面的地址是给别的设备用的。'
-              : '在这台设备上先开一次下面的地址、点「继续访问」（自签证书），之后从公网地址进来就会自动切过去。'}
+              ? '这个页面是从本机开的，按键压根没出过这台机器。'
+              // 浏览器里不嗅探、不给 IP 链接：直连口的证书对不上 IP，人在那上面点一次「继续
+              // 访问」，这一页的 passkey 就按不动了（见 hooks/useLanDirect.ts）
+              : '浏览器里不自动切直连（直连口的证书对不上 IP 地址，会连累 passkey）。在家想走直连，用安卓 App。'}
       </p>
 
-      <ul className="m-0 mt-1.5 list-none p-0">
+      {app && <ul className="m-0 mt-1.5 list-none p-0">
         {origins.map((o) => (
-          <li key={o} className="flex items-center gap-2 py-0.5">
-            {app ? (
-              // App 里不给链接：点下去是 WebView 去开一个自签证书的 IP origin，只会撞上证书错误
-              <span className="truncate font-mono text-xs text-muted">{o}</span>
-            ) : <a
-              href={o + '/'}
-              target="_blank"
-              rel="noreferrer"
-              className="truncate font-mono text-xs text-brand underline decoration-brand/40 hover:decoration-brand"
-            >
-              {o}
-            </a>}
-          </li>
+          <li key={o} className="truncate py-0.5 font-mono text-xs text-muted">{o}</li>
         ))}
-      </ul>
-
-      {!app && <label className="mt-1.5 flex cursor-pointer items-start gap-2.5 rounded-md py-1 transition-colors hover:text-fg">
-        <span className="pt-px">
-          <Checkbox
-            checked={auto}
-            onCheckedChange={(v) => { setLanAuto(!!v); setAuto(!!v) }}
-          />
-        </span>
-        <span className="text-[13px]/relaxed">
-          探到局域网就自动切过去
-          <span className="block text-xs text-faint">
-            关掉之后就一直走中继那条路，不再问也不再切。
-          </span>
-        </span>
-      </label>}
+      </ul>}
     </div>
   )
 }
