@@ -509,8 +509,9 @@ export HERDR_WEB_TLS=auto
 HERDR_WEB_HOST=0.0.0.0 ./herdr-web
 
 # 3. 从公网连：走云端中继（VPS 上跑 herdr-relay，只转密文）。先注册一次：
-#    VPS 上 `herdr-relay invite mac.h.example.com` 出邀请码，本机
-#    `herdr-web relay join https://relay.example.com mac.h.example.com <邀请码>`。
+#    VPS 上 `herdr-relay invite mac.h.example.com` 出邀请码，本机带着证书配置
+#    `herdr-web relay join https://relay.example.com mac.h.example.com <邀请码>`，
+#    它注册完直接装成常驻服务（同 service install，替你加上下面前两项）。
 #    TLS 在本机终止，所以要一张真证书；二维码自动编 https://mac.h.example.com
 HERDR_WEB_RELAY_URL=https://relay.example.com \
 HERDR_WEB_RELAY_HOST=mac.h.example.com \
@@ -537,12 +538,14 @@ herdr-web service restart     # 换过二进制之后要这一步
 herdr-web service uninstall   # 停掉并删掉（数据和日志不动）
 ```
 
-**配置是装的那一刻从当前 shell 抄进去的**，所以顺序是「先把环境配对，再 install」。**装完之后想改配置也走同一条路** —— 没有「改一项」的子命令，改配置 = 换个环境重新 `install`（幂等，就是覆盖 + 重启，装着的那份会被停掉再起来）：
+**配置是装的那一刻从当前 shell 抄进去的**，所以顺序是「先把环境配对，再 install」。**装完之后想改配置也走同一条路** —— 带着要改的那几项重新 `install`（幂等，就是覆盖 + 重启，装着的那份会被停掉再起来）。**已经装过的话，原来那份里的 `HERDR_WEB_*` 会沿用**、当前 shell 里有的盖上去，`install` 打的清单里会标出哪几项是沿用的。这条是为 `relay join` 加的：它装进去的中继地址和云凭据只在 plist 里、不在你的 shell 里，以前随手再 install 一次就会把它们整份抹掉。
 
 ```bash
-HERDR_WEB_LAN_PORT=7790 herdr-web service install      # 改一项，其余照抄当前 shell
-herdr-web service install --env-file .env              # 或者让一个文件当唯一出处
+HERDR_WEB_LAN_PORT=7790 herdr-web service install      # 改一项，其余沿用已装的那份
+herdr-web service install --env-file .env              # 或者让一个文件当唯一出处（不沿用）
 ```
+
+要**删掉**一项得先 `service uninstall` 再装 —— 设成空串只是把值改成空（`HERDR_WEB_ONCONNECT=` 这种空值本身是有意思的）。
 
 抄进去的是所有 `HERDR_WEB_*`，加上 `PATH` / `SHELL` / `HOME` / `USER` / `LOGNAME` / `LANG` / `LC_ALL` / `TERM` / `HERDR_SOCKET_PATH`。`install` 会把这份清单全打出来 —— 以后「这台机器上服务到底在用哪套配置」只能靠 plist / unit 回答，装的时候看一眼最省事。事后要查就直接读那个文件（`service status` 只说装没装、跑没跑，不显示配置）：
 

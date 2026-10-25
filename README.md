@@ -110,7 +110,8 @@ HERDR_WEB_ONCONNECT= herdr-web                  # 3. 别自动进 herdr，留在
 
 # 4. 从公网连：走云端中继（VPS 上跑 herdr-relay，只转密文，TLS 在本机终止）
 #    VPS 上用镜像 ghcr.io/zbysir/herdr-relay（npm 包和 install.sh 里也带着 herdr-relay）
-#    先 `herdr-web relay join https://relay.example.com mac.h.example.com <邀请码>` 注册一次
+#    `relay join` 一条命令注册 + 装成服务（下面前两项它替你加），证书配置带在同一行：
+#    HERDR_WEB_ACME_DNS=cloudflare HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN=... herdr-web relay join https://relay.example.com mac.h.example.com <邀请码>
 HERDR_WEB_RELAY_URL=https://relay.example.com HERDR_WEB_RELAY_HOST=mac.h.example.com \
 HERDR_WEB_ACME_DNS=cloudflare HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN=... herdr-web
 
@@ -132,7 +133,7 @@ herdr-web service install    # macOS → launchd，Linux → systemd user unit�
 herdr-web update             # 查 + 升（怎么升看当初是怎么装的）
 ```
 
-配置是 `install` 那一刻从当前 shell 抄进去的，所以改配置 = 换个环境重新 `install`（幂等）。
+配置是 `install` 那一刻从当前 shell 抄进去的。改配置 = 带着要改的那几项重新 `install`（幂等），已装的那份里其余 `HERDR_WEB_*` 会沿用。
 
 → [常驻](docs/USAGE.zh-CN.md#守护进程) · [更新](docs/USAGE.zh-CN.md#更新)
 

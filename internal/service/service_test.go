@@ -193,3 +193,45 @@ func TestPlistIsValid(t *testing.T) {
 		t.Errorf("值被转义搞坏了: %q", got)
 	}
 }
+
+// 写进 plist / unit 的值要原样读得回来 —— 读错一个字符，下次 install 就把一个坏掉的 token
+// 当成「沿用」写回去，而且是静默的。专挑两边转义会碰到的字符。
+func TestInstalledEnvRoundTrip(t *testing.T) {
+	env := map[string]string{
+		"HERDR_WEB_RELAY_URL":                "https://relay.example.com",
+		"HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN": `a$b$$c\d"e&f<g>'h`,
+		"HERDR_WEB_ONCONNECT":                "herdr --session work",
+		"HERDR_WEB_EMPTY":                    "",
+		"PATH":                               "/usr/bin:/bin", // 不是 HERDR_WEB_*，不读回来
+	}
+	for _, kind := range []Kind{Launchd, Systemd} {
+		m := &Manager{Kind: kind, Exec: "/x/herdr-web", Dir: t.TempDir(), Env: env, homeDir: t.TempDir()}
+		body := m.plist()
+		if kind == Systemd {
+			body = m.unit()
+		}
+		if err := os.MkdirAll(filepath.Dir(m.UnitPath()), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(m.UnitPath(), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got := m.InstalledEnv()
+		for k, v := range env {
+			if k == "PATH" {
+				if _, ok := got[k]; ok {
+					t.Errorf("%v: PATH 不该读回来", kind)
+				}
+				continue
+			}
+			if got[k] != v {
+				t.Errorf("%v: %s 读回来是 %q，写进去的是 %q", kind, k, got[k], v)
+			}
+		}
+	}
+	// 没装过：空，不报错
+	m := &Manager{Kind: Launchd, homeDir: t.TempDir()}
+	if len(m.InstalledEnv()) != 0 {
+		t.Error("没装过应该读出空")
+	}
+}

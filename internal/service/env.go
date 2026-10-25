@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -93,4 +94,72 @@ func ParseEnvFile(path string) (map[string]string, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// InstalledEnv 读回已经装着的那份 plist / unit 里的 HERDR_WEB_*（没装过就是空）。
+//
+// 要它是因为 install 只抄**当前 shell**：`relay join` 装完之后，中继那两项和云凭据只在
+// plist 里、不在人的 shell 里，下次随手 `HERDR_WEB_PORT_DOMAIN=… herdr-web service install`
+// 就会把它们整份抹掉 —— 服务照样起来，只是公网那条路悄悄没了。所以 install 先拿这份当底，
+// 当前 shell 里有的再盖上去。只认 HERDR_WEB_*：PATH 这类照旧跟当前 shell 走。
+// 文件是我们自己写的（template.go），只按那个格式读，不当通用的 plist / unit 解析器。
+func (m *Manager) InstalledEnv() map[string]string {
+	out := map[string]string{}
+	b, err := os.ReadFile(m.UnitPath())
+	if err != nil {
+		return out
+	}
+	switch m.Kind {
+	case Launchd:
+		s := string(b)
+		i := strings.Index(s, "<key>EnvironmentVariables</key>")
+		if i < 0 {
+			return out
+		}
+		s = s[i:]
+		if j := strings.Index(s, "</dict>"); j >= 0 {
+			s = s[:j]
+		}
+		for _, mm := range plistPair.FindAllStringSubmatch(s, -1) {
+			k, v := xmlUnesc(mm[1]), xmlUnesc(mm[2])
+			if strings.HasPrefix(k, "HERDR_WEB_") {
+				out[k] = v
+			}
+		}
+	case Systemd:
+		sc := bufio.NewScanner(strings.NewReader(string(b)))
+		for sc.Scan() {
+			line := sc.Text()
+			if !strings.HasPrefix(line, `Environment="`) || !strings.HasSuffix(line, `"`) {
+				continue
+			}
+			k, v, ok := strings.Cut(line[len(`Environment="`):len(line)-1], "=")
+			if ok && strings.HasPrefix(k, "HERDR_WEB_") {
+				out[k] = sdUnesc(v)
+			}
+		}
+	}
+	return out
+}
+
+var plistPair = regexp.MustCompile(`<key>([^<]*)</key>\s*<string>([^<]*)</string>`)
+
+func xmlUnesc(s string) string {
+	r := strings.NewReplacer("&lt;", "<", "&gt;", ">", "&quot;", `"`, "&apos;", "'", "&amp;", "&")
+	return r.Replace(s)
+}
+
+// sdUnesc 是 sdEsc 的逆：一个个字符扫，别用 Replacer 串着换（`\\"` 这种会被换错）。
+func sdUnesc(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c == '\\' || c == '$') && i+1 < len(s) && (s[i+1] == c || (c == '\\' && s[i+1] == '"')) {
+			b.WriteByte(s[i+1])
+			i++
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }

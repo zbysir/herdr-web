@@ -114,8 +114,9 @@ HERDR_WEB_HOST=0.0.0.0 herdr-web                # 2. phone/tablet on the LAN: se
 HERDR_WEB_ONCONNECT= herdr-web                  # 3. stay in the shell, don't enter herdr
 
 # 4. reachable from the internet: through the cloud relay (herdr-relay on a VPS forwards
-#    ciphertext only; TLS terminates on this machine). Register once with
-#    `herdr-web relay join https://relay.example.com mac.h.example.com <invite code>`
+#    ciphertext only; TLS terminates on this machine). `relay join` registers and installs the
+#    service in one go (it adds the first two vars below); put the certificate config on the same line:
+#    HERDR_WEB_ACME_DNS=cloudflare HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN=... herdr-web relay join https://relay.example.com mac.h.example.com <invite code>
 #    on the VPS use the image ghcr.io/zbysir/herdr-relay (the npm package and install.sh ship herdr-relay too)
 HERDR_WEB_RELAY_URL=https://relay.example.com HERDR_WEB_RELAY_HOST=mac.h.example.com \
 HERDR_WEB_ACME_DNS=cloudflare HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN=... herdr-web
@@ -139,8 +140,9 @@ herdr-web service install    # macOS → launchd; Linux → systemd user unit, s
 herdr-web update             # check + upgrade, by however it was installed
 ```
 
-Configuration is snapshotted from the current shell at `install` time, so changing it means running
-`install` again with a different environment (it is idempotent).
+Configuration is snapshotted from the current shell at `install` time. To change it, run `install`
+again with the vars you want to change (it is idempotent); the other `HERDR_WEB_*` already in the
+installed service are kept.
 
 → [Daemon](docs/USAGE.zh-CN.md#守护进程) · [Updating](docs/USAGE.zh-CN.md#更新) (Chinese)
 

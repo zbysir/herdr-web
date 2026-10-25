@@ -123,15 +123,11 @@ docker run -d --name herdr-relay --restart always -p 443:443 -v /root/data/herdr
 # 然后出一个邀请码（30 分钟、一次性、绑死这个主机名）
 docker exec herdr-relay herdr-relay invite mac.h.example.com
 
-# 这台机器上：注册一次。私钥留在 ~/.herdr-web/relay/，顺手打印要加的环境变量和 DNS 记录
-herdr-web relay join https://relay.example.com mac.h.example.com <邀请码>
-
-# 之后常驻服务带上这几项（二维码自动就是 https://mac.h.example.com）
-HERDR_WEB_RELAY_URL=https://relay.example.com \
-HERDR_WEB_RELAY_HOST=mac.h.example.com \
-HERDR_WEB_ACME_DNS=cloudflare \
-HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN=... \
-./herdr-web
+# 这台机器上：一条命令注册 + 装成常驻服务。私钥留在 ~/.herdr-web/relay/；服务的环境 =
+# 当前 shell（同 service install）+ HERDR_WEB_RELAY_URL / _HOST 两项，所以证书配置写在同一行。
+# 没配真证书就在用掉邀请码之前停下。最后打印要加的 DNS 记录。二维码自动就是 https://mac.h.example.com
+HERDR_WEB_ACME_DNS=cloudflare HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN=... \
+  herdr-web relay join https://relay.example.com mac.h.example.com <邀请码>
 ```
 
 三件事别漏：

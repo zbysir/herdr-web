@@ -22,11 +22,12 @@ func serviceCmd() *cobra.Command {
 		Long: "把 herdr-web 装成 user 级常驻服务：macOS 用 launchd，Linux 用 systemd。\n\n" +
 			"配置是**装的那一刻**从当前 shell 里抄进 plist / unit 的（所有 HERDR_WEB_* 加上\n" +
 			"PATH / SHELL / LANG 这几个）。DNS 凭据也带 HERDR_WEB_ 前缀，所以一起抄进去。\n" +
-			"所以先把环境配对，再 install。装完之后改配置也是同一条路 —— 没有「改一项」的\n" +
-			"子命令，换个环境重新 install 就行（幂等，覆盖 + 重启）：\n\n" +
-			"  HERDR_WEB_PUBLIC_PORT=9000 herdr-web service install   # 改一项，其余照抄当前 shell\n" +
-			"  herdr-web service install --env-file .env              # 或者让一个文件当唯一出处\n\n" +
-			"注意它是**整份重来**：这个 shell 里没有的变量，上次装进去的那份也会跟着没了。",
+			"所以先把环境配对，再 install。装完之后改配置也是同一条路 —— 带着要改的那几项\n" +
+			"重新 install（幂等，覆盖 + 重启）。已经装过的话，原来那份里的 HERDR_WEB_* 会沿用，\n" +
+			"当前 shell 里有的盖上去：\n\n" +
+			"  HERDR_WEB_LAN_PORT=7790 herdr-web service install      # 改一项，其余沿用\n" +
+			"  herdr-web service install --env-file .env              # 或者让一个文件当唯一出处（不沿用）\n\n" +
+			"要**删掉**一项得先 service uninstall 再装（设成空串只是把值改成空）。",
 	}
 	root.AddCommand(serviceInstallCmd(), serviceUninstallCmd(), serviceStatusCmd(),
 		serviceRestartCmd(), serviceLogsCmd())
@@ -60,65 +61,91 @@ func serviceInstallCmd() *cobra.Command {
 					return err
 				}
 			}
-			env := service.EnvSnapshot(extra)
-			m, cfg, err := mgr(env)
-			if err != nil {
-				return err
-			}
-			if !m.Supported() {
-				return fmt.Errorf("%s", m.Why)
-			}
-
-			// 装之前把要写进去的配置全打出来。这一步是刻意的：这台机器上「服务到底
-			// 在用哪套配置」以后只能靠 plist / unit 回答，装的时候看一眼最省事。
-			fmt.Println()
-			fmt.Printf("  二进制  %s\n", m.Exec)
-			fmt.Printf("  方式    %s\n", m.Kind)
-			fmt.Printf("  文件    %s\n", m.UnitPath())
-			fmt.Printf("  日志    %s\n", m.LogPath())
-			fmt.Println("  抄进去的环境变量：")
-			keys := make([]string, 0, len(env))
-			for k := range env {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-			for _, k := range keys {
-				v := env[k]
-				// PATH 太长，横幅上没意义，只说抄了
-				if k == "PATH" {
-					fmt.Printf("    %-24s（%d 个目录，照抄当前 shell）\n", k, 1+countColon(v))
-					continue
-				}
-				// 云凭据和引导 token 不打明文：这段输出常常就落在一个跑着 agent 的
-				// pane 里，`service install` 一敲等于把云账号密钥念给它听。
-				// 但也不能只字不提 —— 「到底抄没抄进去」是这条路最容易错的地方，
-				// 所以照样列出名字，只把值换成长度。
-				if acme.SecretEnv(k) || k == "HERDR_WEB_TOKEN" {
-					fmt.Printf("    %-24s ****（%d 字符，没打出来）\n", k, len(v))
-					continue
-				}
-				fmt.Printf("    %-24s %s\n", k, v)
-			}
-			fmt.Println()
-
-			if err := m.Install(func(s string) { fmt.Println("  " + s) }); err != nil {
-				return err
-			}
-			fmt.Println()
-			fmt.Printf("  ✓ 装好了。看状态：herdr-web service status\n")
-			fmt.Printf("    跟日志：herdr-web service logs\n")
-			fmt.Printf("    配对新设备：herdr-web pair\n")
-			if m.Kind == service.Launchd {
-				fmt.Println()
-				fmt.Println("  注意：macOS 的 LaunchAgent 是**登录时**起，不是开机时起。")
-				fmt.Println("  这台机器开了自动登录的话二者等价；没开的话得登录一次它才起来。")
-			}
-			_ = cfg
-			return nil
+			// --env-file 是「这个文件就是全部配置」，不沿用已装的那份
+			return installService(extra, envFile == "")
 		},
 	}
 	c.Flags().StringVar(&envFile, "env-file", "", "从这个文件读配置（.env 那种 KEY=VALUE），优先级高于当前环境")
 	return c
+}
+
+// installService 就是 `service install`：抄当前环境（叠上 extra）写进 plist / unit 再起来。
+// `relay join` 注册完也走这里，extra 里带着中继那两项。
+//
+// keep：已经装过的话，原来那份里的 HERDR_WEB_* 当底、当前 shell 里有的盖上去（为什么见
+// service.InstalledEnv）。代价是「删掉一项」得先 service uninstall —— 设成空串只是把值改成空。
+func installService(extra map[string]string, keep bool) error {
+	env := service.EnvSnapshot(extra)
+	m, cfg, err := mgr(env)
+	if err != nil {
+		return err
+	}
+	if !m.Supported() {
+		return fmt.Errorf("%s", m.Why)
+	}
+	kept := map[string]bool{}
+	if keep {
+		for k, v := range m.InstalledEnv() {
+			if _, ok := env[k]; !ok {
+				env[k] = v
+				kept[k] = true
+			}
+		}
+	}
+
+	// 装之前把要写进去的配置全打出来。这一步是刻意的：这台机器上「服务到底
+	// 在用哪套配置」以后只能靠 plist / unit 回答，装的时候看一眼最省事。
+	fmt.Println()
+	fmt.Printf("  二进制  %s\n", m.Exec)
+	fmt.Printf("  方式    %s\n", m.Kind)
+	fmt.Printf("  文件    %s\n", m.UnitPath())
+	fmt.Printf("  日志    %s\n", m.LogPath())
+	fmt.Println("  抄进去的环境变量：")
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		v := env[k]
+		// PATH 太长，横幅上没意义，只说抄了
+		if k == "PATH" {
+			fmt.Printf("    %-24s（%d 个目录，照抄当前 shell）\n", k, 1+countColon(v))
+			continue
+		}
+		// 云凭据和引导 token 不打明文：这段输出常常就落在一个跑着 agent 的
+		// pane 里，`service install` 一敲等于把云账号密钥念给它听。
+		// 但也不能只字不提 —— 「到底抄没抄进去」是这条路最容易错的地方，
+		// 所以照样列出名字，只把值换成长度。
+		if acme.SecretEnv(k) || k == "HERDR_WEB_TOKEN" {
+			fmt.Printf("    %-24s ****（%d 字符，没打出来）%s\n", k, len(v), keptMark(kept[k]))
+			continue
+		}
+		fmt.Printf("    %-24s %s%s\n", k, v, keptMark(kept[k]))
+	}
+	fmt.Println()
+
+	if err := m.Install(func(s string) { fmt.Println("  " + s) }); err != nil {
+		return err
+	}
+	fmt.Println()
+	fmt.Printf("  ✓ 装好了。看状态：herdr-web service status\n")
+	fmt.Printf("    跟日志：herdr-web service logs\n")
+	fmt.Printf("    配对新设备：herdr-web pair\n")
+	if m.Kind == service.Launchd {
+		fmt.Println()
+		fmt.Println("  注意：macOS 的 LaunchAgent 是**登录时**起，不是开机时起。")
+		fmt.Println("  这台机器开了自动登录的话二者等价；没开的话得登录一次它才起来。")
+	}
+	_ = cfg
+	return nil
+}
+
+func keptMark(kept bool) string {
+	if kept {
+		return "  ← 沿用已装的服务"
+	}
+	return ""
 }
 
 func countColon(s string) int {
