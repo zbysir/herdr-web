@@ -12,6 +12,7 @@ import android.os.Message
 import android.text.InputType
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
@@ -616,6 +617,34 @@ class MainActivity : ComponentActivity() {
     }
 
     // ---- 桥调过来的 ----
+
+    /**
+     * 音量键当 ↑ / ↓ 用（设置里能关，默认开）：手机竖屏上翻 agent 的选择框、翻历史，
+     * 不用去够快捷键条上那个方向组。
+     *
+     * 只在**页面接上桥之后**拦（`bridge.ready`）：填地址那一屏、登录浮层、连不上的错误页上
+     * 页面没在听，拦下来就是「音量键按了没反应、音量也调不了」。抬起那一下也要吃掉，
+     * 不然系统照样弹音量条。按住不放靠系统自己的连发（`repeatCount > 0`），节流在页面那边做
+     * （跟着「方向键连发速度」那一档）。
+     */
+    override fun dispatchKeyEvent(e: KeyEvent): Boolean {
+        val up = e.keyCode == KeyEvent.KEYCODE_VOLUME_UP
+        if (up || e.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            val b = bridge
+            if (b != null && b.ready && volumeKeys()) {
+                if (e.action == KeyEvent.ACTION_DOWN) b.key(if (up) "up" else "down", e.repeatCount > 0)
+                return true
+            }
+        }
+        return super.dispatchKeyEvent(e)
+    }
+
+    fun volumeKeys() = getSharedPreferences("keys", MODE_PRIVATE).getBoolean("volume", true)
+
+    fun setVolumeKeys(on: Boolean) {
+        getSharedPreferences("keys", MODE_PRIVATE).edit().putBoolean("volume", on).apply()
+    }
+
 
     private fun back() {
         val b = bridge

@@ -1818,6 +1818,23 @@ export default function App() {
     fire(b)
   }
 
+  /*
+    原生壳的音量键 = ↑ / ↓（`MainActivity.dispatchKeyEvent`，设置里能关）。走和快捷键条上那个
+    ↑ 同一条路（chat 里切到终端、终端没连就连上再补发……），别另写一份。按住不放是系统自己在
+    连发（大约 20 次/秒），按「方向键连发速度」那一档节流 —— 不然调成慢档的人用音量键照样是快档。
+  */
+  const sendKeyRef = useRef(sendKeyBytes)
+  sendKeyRef.current = sendKeyBytes
+  useEffect(() => {
+    let last = 0
+    return onNative('key', (m) => {
+      const now = performance.now()
+      if (m.repeat && now - last < 1000 / holdRate()) return
+      last = now
+      sendKeyRef.current(m.k === 'up' ? '\x1b[A' : '\x1b[B')
+    })
+  }, [])
+
   /**
    * 粘滞 Ctrl / Alt。chat 模式下它修饰的是「下一个进终端的键」，而那时终端不在屏幕上 ——
    * 所以和 ^B 一样：切到终端、打开它、等下一个键按完自己回来。

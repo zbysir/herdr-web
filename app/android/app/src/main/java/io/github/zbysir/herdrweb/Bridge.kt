@@ -14,7 +14,7 @@ import org.json.JSONObject
  * **只对服务器那个 origin 开**（`addWebMessageListener` 的白名单），不用
  * `addJavascriptInterface` —— 后者对 WebView 里所有 frame、所有 origin 都可见，而这个页面里
  * 渲染着 agent 的输出（不可信文本）。也只认主 frame 发来的。桥上只放无害的口：报平台、
- * 全屏、配色、开外部链接、返回键 —— 不放读文件、发任意 Intent 这类。
+ * 全屏、配色、开外部链接、返回键、音量键 —— 不放读文件、发任意 Intent 这类。
  */
 class Bridge(private val act: MainActivity, web: WebView, origin: String) {
     /** 页面发过 hello 才有；换页 / 重载时作废（`reset`），等新页面再来一次 hello */
@@ -67,12 +67,19 @@ class Bridge(private val act: MainActivity, web: WebView, origin: String) {
                 val a = m.optJSONArray("origins") ?: return
                 LanRoute.setCandidates((0 until a.length()).map { a.optString(it) })
             }
+            "volkeys" -> {
+                if (m.optString("op") == "set") act.setVolumeKeys(m.optBoolean("on"))
+                send(JSONObject().put("t", "volkeys").put("on", act.volumeKeys()))
+            }
             "notify" -> {
                 val op = m.optString("op")
                 if (op == "get") send(act.notifyState()) else act.notifyOp(op, m.optBoolean("on"))
             }
         }
     }
+
+    /** 音量键（MainActivity.dispatchKeyEvent）：`dir` 是 up / down，`repeat` 是按住不放的连发 */
+    fun key(dir: String, repeat: Boolean) = send(JSONObject().put("t", "key").put("k", dir).put("repeat", repeat))
 
     /** 「直连 / 中继」变了（LanRoute.onChange，已经节流过） */
     fun route() = send(LanRoute.snapshot())

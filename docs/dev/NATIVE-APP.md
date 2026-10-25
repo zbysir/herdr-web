@@ -158,6 +158,8 @@ App 启动时探测有没有 GMS、有没有装分发器，登记时告诉服务
 | `setup` | 页 → 壳 | | 回到「填服务器地址」那一屏 |
 | `login` | 页 → 壳 → 页 | `reauth`；回 `state`（done / error / cancel）+ `msg` | 配对页上「用 passkey 登录 / 验证」：壳走 device flow（§3），done 之后页面自己翻进去 |
 | `notify` | 页 → 壳 → 页 | `op`（get / set / battery / test）+ `on`；回 `on` / `perm` / `battery` | 后台通知那块设置（§4a） |
+| `key` | 壳 → 页 | `k`（up / down）、`repeat` | 音量键当 ↑ / ↓（`MainActivity.dispatchKeyEvent`）：页面走快捷键条那个 ↑ 的同一条路（`App.sendKeyBytes`），按住的连发按 `holdRate` 节流。**只在页面 hello 过之后拦**，填地址 / 登录 / 错误页上音量键照常调音量 |
+| `volkeys` | 页 → 壳 → 页 | `op`（get / set）+ `on`；回 `on` | 上面那个的开关（默认开），存在壳的 SharedPreferences 里 —— 拦不拦要在 `dispatchKeyEvent` 里同步决定，等不了问页面 |
 | `lan` | 页 → 壳 | `origins`（局域网直连口，`https://192.168.x.x:7790`） | 局域网换路的候选（`LanRoute.kt`）：壳按本页域名做 TLS 握手探测，通了就让 WebView 的连接从那儿走，**不换 origin**。网页那边在 App 里不再跑「跳到 IP origin」那一套（RELAY.md §4） |
 | `route` | 壳 → 页 | `lan` / `relay`（此刻开着的隧道各几条）、`next`（新连接往哪儿拨）、`proxied` | 顶栏左上角那个状态点的颜色：绿 = 直连、蓝 = 中继（`hooks/useRoute.ts`）。按**开着的**连接算，不按 `next`：终端是条长连接，刚切过去时它还在中继上 |
 

@@ -6,7 +6,7 @@ import type { Pin } from '@/lib/api'
 import { BRANDS, HOLD_RATES, PANE_SORTS, POPUP_CLEARS, type BrandId, type HoldRate, type KeyStyle, type PaneSort, type PopupClear } from '@/lib/prefs'
 import { enableNotify, notifyState, testNotify, type NotifyState } from '@/lib/notify'
 import { installState, onInstallChange, promptInstall, type InstallState } from '@/lib/install'
-import { isNative, postNative } from '@/lib/native'
+import { isNative, onNative, postNative } from '@/lib/native'
 import { NativeNotify } from './NativeNotify'
 import { Panel } from './ui/panel'
 import { Button } from './ui/button'
@@ -499,6 +499,8 @@ function TermSection({
         <span className="text-xs text-faint">次/秒（左快右慢）。按住约 0.4 秒开始连发，只有 ↑↓←→ 和 PgUp/PgDn 有</span>
       </div>
 
+      {isNative() && <NativeVolumeKeys />}
+
       {/* chat 的「各看各的」。放在发件箱那两件**上面**：它决定的正是发件箱投给谁（开着时
           发件箱指名投给这台设备看着的那个 pane），挨着放才看得出两件是一回事。 */}
       <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-line pt-3 text-[13px]">
@@ -854,5 +856,26 @@ function LanDirectRow({ origins }: { origins: string[] }) {
         </span>
       </label>}
     </div>
+  )
+}
+
+/**
+ * App 里「音量键当 ↑ / ↓」那个开关。存在**壳那边**（拦键是 `MainActivity.dispatchKeyEvent`
+ * 同步决定的，等不了问页面），所以不跟着套走 —— 它本来就只有这台手机有。
+ */
+function NativeVolumeKeys() {
+  const [on, setOn] = useState<boolean | null>(null)
+  useEffect(() => {
+    const off = onNative('volkeys', (m) => setOn(!!m.on))
+    postNative({ t: 'volkeys', op: 'get' })
+    return off
+  }, [])
+  if (on === null) return null
+  return (
+    <label className="mt-2 flex cursor-pointer items-center gap-2 text-[13px] hover:text-fg">
+      <Checkbox checked={on} onCheckedChange={(v) => postNative({ t: 'volkeys', op: 'set', on: !!v })} />
+      音量键当 ↑ / ↓
+      <span className="text-xs text-faint">按住连发跟着上面那档；关掉就是正常调音量</span>
+    </label>
   )
 }
