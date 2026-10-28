@@ -258,7 +258,10 @@ export function ComposeRich({
           }
           // 取历史：↑ 只在框空时算，↓ 一路都算（和 textarea 那版一致）
           if (e.key === 'ArrowUp' && !text) { e.preventDefault(); onRecall(1); return }
-          if (e.key === 'ArrowDown') { e.preventDefault(); onRecall(-1) }
+          if (e.key === 'ArrowDown') { e.preventDefault(); onRecall(-1); return }
+          // 光标顶到头还往那边按：吃掉，不然安卓 WebView 拿它挪焦点、软键盘收起（和 textarea 那版一致）
+          if (/^Arrow(Left|Right|Up)$/.test(e.key) && !e.altKey && !e.metaKey && !e.ctrlKey
+            && atEdge(e.currentTarget, e.key !== 'ArrowRight')) e.preventDefault()
         }}
       />
 
@@ -275,4 +278,17 @@ export function ComposeRich({
       </Button>
     </section>
   )
+}
+
+/** 光标（没选中字）是不是在框的最开头（back）/ 最末尾：那一侧没有字、也没有 chip 和换行（`<br>`）。 */
+function atEdge(box: HTMLElement, back: boolean) {
+  const sel = getSelection()
+  if (!sel?.rangeCount || !sel.isCollapsed) return false
+  const c = sel.getRangeAt(0)
+  const r = document.createRange()
+  r.selectNodeContents(box)
+  if (back) r.setEnd(c.startContainer, c.startOffset)
+  else r.setStart(c.endContainer, c.endOffset)
+  const f = r.cloneContents()
+  return f.textContent === '' && !f.querySelector('*')
 }

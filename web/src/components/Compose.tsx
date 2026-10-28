@@ -131,7 +131,15 @@ export function Compose({
           // 取历史：↑ 只在框空时算（框里有字时它是「把光标挪上一行」），而 ↓ 一路都算 ——
           // 取回一条之后框里就有字了，再要求「空」的话人就卡在历史里出不来
           if (e.key === 'ArrowUp' && !text) { e.preventDefault(); onRecall(1); return }
-          if (e.key === 'ArrowDown') { e.preventDefault(); onRecall(-1) }
+          if (e.key === 'ArrowDown') { e.preventDefault(); onRecall(-1); return }
+          // 光标顶到头还往那边按（开头 ← ↑、末尾 →）：吃掉。浏览器这时什么都不做、事件算「没人处理」，
+          // 安卓 WebView 会把它还给系统当方向键导航，焦点挪出网页、软键盘直接收起
+          // （输入法「文字编辑」面板里的方向键就是这么来的）
+          if (/^Arrow(Left|Right|Up)$/.test(e.key) && !e.altKey && !e.metaKey && !e.ctrlKey) {
+            const el = e.currentTarget
+            const edge = e.key === 'ArrowRight' ? el.value.length : 0
+            if (el.selectionStart === edge && el.selectionEnd === edge) e.preventDefault()
+          }
         }}
       />
 
