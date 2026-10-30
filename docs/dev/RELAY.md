@@ -1,5 +1,11 @@
 # 云端中继：主机主动连出去，手机只认一个云端地址
 
+> **2026-10-30：中继拆成了独立项目 [dialhome](https://github.com/zbysir/dialhome)**（`~/dev/bysir/dialhome`）。
+> 中继服务端（原 `cmd/herdr-relay`）和主机侧的包（原 `internal/relay`，现在 import
+> `github.com/zbysir/dialhome/relay`）都在那边，gerdr 也用同一个包。这份文档的完整版也搬过去了
+> （`docs/DESIGN.md`，外加网页后台那节）；这里留着是因为 §2.3 / §3 / §4 讲的是 herdr-web 主机侧，
+> 文中 `cmd/herdr-relay`、`internal/relay` 的说法是拆分前的位置。
+>
 > **状态（2026-10-23）**：第 1 期已实现并上线（`cmd/herdr-relay` + `internal/relay` + herdr-web 的第五个口）：
 > 作者自己的 `herdr.bysir.top` 已经走中继，VPS 上的 Traefik 只做透传。第 3 期（App 换路）也已上线；第 2 期（多人、CAA 自检、CT）未做。
 

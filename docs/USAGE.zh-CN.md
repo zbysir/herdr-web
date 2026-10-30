@@ -461,7 +461,7 @@ export HERDR_WEB_TLS=auto
 | `HERDR_WEB_LAN_PORT` | 关 | 在 `0.0.0.0:<端口>` 上**另开一个监听**，给**安卓 App** 在家时换路用：App 打开的还是公网地址，壳在后台探通这个口就让连接从局域网走（每个字的往返从两跳公网变成一跳交换机），地址、登录状态、passkey 都不变，什么都不用做。**浏览器不会自己切过来**（原来那条「网页嗅探 + 跳到内网 IP」会连累 passkey，2026-10-25 下掉了）。主口本来就在局域网上服务自签 TLS 的话不用配它。细节见 [DEPLOY.md](../DEPLOY.md) |
 | `HERDR_WEB_HOSTNAME` | 空 | 允许出现在 `Host` 头里的域名，逗号分隔。**IP 一律放行，域名必须在名单里** —— 这是 DNS rebinding 的唯一防线，不在名单里直接 421 |
 | `HERDR_WEB_PUBLIC_URL` | 见说明 | 你**实际访问**的地址，决定横幅上的二维码编哪个地址。连中继时默认就是 `https://<RELAY_HOST>`，一般不用给。里面的域名自动进白名单 |
-| `HERDR_WEB_RELAY_URL` | 空 | 云端中继（`herdr-relay`）的地址，`https://relay.example.com`。和下一项一起给，这台机器就主动连上去，手机打开 `https://<RELAY_HOST>/` 就能进。中继**只转密文**：TLS 在本机终止，所以必须配一张真证书（`HERDR_WEB_ACME_DNS`），`TLS=off` 时拒绝启动。**这是从公网进来的唯一一条路**，隧道进来的连接按公网的规则对待（不认本机免配对、限速不豁免）。先在 VPS 上 `herdr-relay invite <主机名>` 出邀请码、本机 `herdr-web relay join` 注册一次，见 [docs/dev/RELAY.md](dev/RELAY.md) |
+| `HERDR_WEB_RELAY_URL` | 空 | 云端中继（[dialhome](https://github.com/zbysir/dialhome)）的地址，`https://relay.example.com`。和下一项一起给，这台机器就主动连上去，手机打开 `https://<RELAY_HOST>/` 就能进。中继**只转密文**：TLS 在本机终止，所以必须配一张真证书（`HERDR_WEB_ACME_DNS`），`TLS=off` 时拒绝启动。**这是从公网进来的唯一一条路**，隧道进来的连接按公网的规则对待（不认本机免配对、限速不豁免）。先在 VPS 上 `herdr-relay invite <主机名>` 出邀请码、本机 `herdr-web relay join` 注册一次，见 [docs/dev/RELAY.md](dev/RELAY.md) |
 | `HERDR_WEB_PORT_DOMAIN` | 空 | **端口代理**：设成主机名（如 `herdr.bysir.top`）之后，这台机器上 `http://127.0.0.1:7830` 在 `https://7830.herdr.bysir.top/` 上能看，**先过 herdr-web 的认证**（没登录就绕主站登一次，passkey 重验照旧生效）。终端和 chat 里 `http://localhost:<端口>` 的链接点下去自动走这儿。要 DNS 上一条 `*.<域名>` 通配记录、CAA 放开通配（`issuewild`），证书会多签一个 `*.<域名>`。只代理 1024 以上、不是 herdr-web 自己的端口。见 [docs/dev/PORT-PROXY.md](dev/PORT-PROXY.md) |
 | `HERDR_WEB_RELAY_HOST` | 空 | 这台机器在中继上的名字（`mac.h.example.com`）。自动进白名单 / 证书 / passkey 的 Origin；没给 `PUBLIC_URL` 时它就是二维码上的地址 |
 | `HERDR_WEB_DEVICE_TTL_DAYS` | `90` | 设备凭据多久不活跃就失效（每次用都续期）。`0` = **永不过期** |
@@ -508,8 +508,8 @@ export HERDR_WEB_TLS=auto
 # 2. 局域网里的手机 / 平板：自签 TLS，扫横幅上的二维码配对
 HERDR_WEB_HOST=0.0.0.0 ./herdr-web
 
-# 3. 从公网连：走云端中继（VPS 上跑 herdr-relay，只转密文）。先注册一次：
-#    VPS 上 `herdr-relay invite mac.h.example.com` 出邀请码，本机带着证书配置
+# 3. 从公网连：走云端中继（VPS 上跑 dialhome，只转密文）。先注册一次：
+#    在 dialhome 的网页后台里给 mac.h.example.com 出邀请码，本机带着证书配置
 #    `herdr-web relay join https://relay.example.com mac.h.example.com <邀请码>`，
 #    它注册完直接装成常驻服务（同 service install，替你加上下面前两项）。
 #    TLS 在本机终止，所以要一张真证书；二维码自动编 https://mac.h.example.com

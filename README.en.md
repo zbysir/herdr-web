@@ -113,11 +113,12 @@ herdr-web                                       # 1. purely local (default), pla
 HERDR_WEB_HOST=0.0.0.0 herdr-web                # 2. phone/tablet on the LAN: self-signed TLS + QR
 HERDR_WEB_ONCONNECT= herdr-web                  # 3. stay in the shell, don't enter herdr
 
-# 4. reachable from the internet: through the cloud relay (herdr-relay on a VPS forwards
+# 4. reachable from the internet: through the cloud relay (dialhome on a VPS forwards
 #    ciphertext only; TLS terminates on this machine). `relay join` registers and installs the
 #    service in one go (it adds the first two vars below); put the certificate config on the same line:
 #    HERDR_WEB_ACME_DNS=cloudflare HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN=... herdr-web relay join https://relay.example.com mac.h.example.com <invite code>
-#    on the VPS use the image ghcr.io/zbysir/herdr-relay (the npm package and install.sh ship herdr-relay too)
+#    the relay is a separate project, https://github.com/zbysir/dialhome (image ghcr.io/zbysir/dialhome);
+#    invite codes come from its web admin
 HERDR_WEB_RELAY_URL=https://relay.example.com HERDR_WEB_RELAY_HOST=mac.h.example.com \
 HERDR_WEB_ACME_DNS=cloudflare HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN=... herdr-web
 

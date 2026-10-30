@@ -28,7 +28,7 @@
 | **chat 模式**（对话流代替那一屏 TUI） | [CHAT.md](docs/dev/CHAT.md) |
 | **要不要在网页这边新做一块界面**（还是留在 TUI / 去扩 herdr） | [TUI-VS-GUI.md](docs/dev/TUI-VS-GUI.md) |
 | **原生 App 用什么做**（为什么是原生壳 + WebView、不用 nsh） | [WHY-NOT-NSH.md](docs/dev/WHY-NOT-NSH.md) |
-| **云端中继**（`cmd/herdr-relay`、`internal/relay`、`HERDR_WEB_RELAY_*`） | [RELAY.md](docs/dev/RELAY.md) |
+| **云端中继**（`HERDR_WEB_RELAY_*`、`cmd/herdr-web/relay.go`；中继本体在 [dialhome](https://github.com/zbysir/dialhome)） | [RELAY.md](docs/dev/RELAY.md) |
 
 ## ⚠️ 起服务之前：本机的端口不一定只有本机能连
 
@@ -518,8 +518,10 @@
   `Revoke` 里的级联**留着** —— `devices.json` 里还有当年交接出来的设备。直连口本身照旧：候选**每次
   现报**（IP 会变，虚拟网卡 `Addr.Virtual` 要滤掉），口上必须自己拒非本地对端（`lan.PeerIsLocal` ——
   Go 对 `0.0.0.0` 开的是**双栈**套接字，有全局 IPv6 的机器上那个口公网可能直接可达）。
-- **云端中继**（`internal/relay` + `cmd/herdr-relay`，[RELAY.md](docs/dev/RELAY.md)）：按「中继那台 VPS
-  已经被拿下」设计。三条别破：① **中继不终止主机的 TLS**，只读 SNI 原样转 —— 页面一旦由中继发，
+- **云端中继**（[RELAY.md](docs/dev/RELAY.md)）：2026-10-30 拆成独立项目 **dialhome**（`~/dev/bysir/dialhome`，
+  `github.com/zbysir/dialhome`），herdr-web 只 import 它的 `relay` 包（主机侧：`Join` / `Start` / `CleanHost`）
+  —— gerdr 用的是同一个包，**协议只在那边改**，这边别再抄一份。中继服务端、网页后台、镜像都在那边发。
+  按「中继那台 VPS 已经被拿下」设计。三条别破：① **中继不终止主机的 TLS**，只读 SNI 原样转 —— 页面一旦由中继发，
   它改一行 JS 就能读终端、替你按 passkey；② 隧道连接是**唯一的公网入口**，规则就是原来公网口那套
   （`server.PublicListener` / `auth.FromPublicPort`，公网口 2026-10-23 下线、名字留着），别接到主口上：主口看对端地址，而这里的对端地址（子流头里的 `src`）
   是中继**说的**，只能拿来限速；③ 本进程必须自己终止 TLS（`TLS=off` 配中继拒绝启动；`TLS=proxy` 已下线，配着就拒绝启动）。
@@ -610,7 +612,6 @@
 
 ```
 cmd/herdr-web/        main：flag、子命令、监听、启动横幅、网卡打分
-cmd/herdr-relay/      云端中继（跑在 VPS 上）：serve / invite / hosts / remove，配置走 HERDR_RELAY_*
 internal/
   config/             环境变量（viper，只认 env）、路径、部署形态（TLS 档位 / 暴露声明 / 白名单）
   auth/               配对码 + 设备凭据（只存哈希）+ 限速封锁（gate.go）
@@ -647,9 +648,6 @@ internal/
                       `agent_session`（`herdr integration install` 装的 hook 报的），
                       id → 路径这一步自己做。**边界自己钉**（不借文件浏览那一处，理由见
                       包注释）。为什么不读屏、两家格式的坑，在 docs/dev/CHAT.md
-  relay/              云端中继的两头：中继（server.go，按 SNI 原样转 TLS、邀请码、Ed25519 握手）
-                      和主机侧（host.go，主动连出去、隧道当成一个监听）。**中继手里不许有任何
-                      能登录 / 解密的东西**（不终止主机的 TLS、只存公钥和邀请码哈希），见 RELAY.md
   remote/             `herdr-web connect`：在另一台电脑的原生终端里连 /pty（配对码 → Bearer
                       令牌、raw 模式转发、断线重连、行首 `~.` 断开、断开时复位本地终端模式）
   clip/               读这台机器的剪贴板（pbpaste / wl-paste / xclip）—— herdr 的复制
@@ -758,13 +756,9 @@ Environment name **留空**（我们的 workflow 没声明 environment，填了�
 Actions 那边一直没动静，而「没动静」和「还在排队」长得一模一样。要覆盖：
 `make release V=vX.Y.Z RELEASE_REMOTE=xxx`。
 
-**一个 archive 里两个二进制**：`herdr-web` 和云端中继 `herdr-relay`（goreleaser 两个 build、
-`npm-build.mjs` 的 `BINS`、根包 `bin` 里各一个壳、`install.sh` 也装）。不另开 npm 包是因为
-Trusted Publisher 要按包配，多一个包就多 5 处要配。`herdr-web update` 走 archive 那条路时
-**只换 herdr-web**（`selfupdate` 只解它），VPS 上要升中继就重跑一次 install.sh 或 `npm i -g`。
-中继另外还出一个**镜像** `ghcr.io/zbysir/herdr-relay`（goreleaser `dockers_v2` +
-`docker/herdr-relay.Dockerfile`，`release.yml` 里登录 ghcr），VPS 上一般用它。ghcr 上新包默认
-**private**，第一次发完要去包设置里改成 public，不然别人拉不到、而发版那边一切正常。
+**云端中继不在这儿发了**：原来 archive / npm 包 / install.sh 里还带着一个 `herdr-relay`、另出一个
+`ghcr.io/zbysir/herdr-relay` 镜像，2026-10-30 中继拆成 dialhome 之后整个撤掉，由 dialhome 自己发
+（`ghcr.io/zbysir/dialhome`）。已经发出去的 herdr-relay 镜像留着，VPS 换成 dialhome 之前照样能用。
 
 三处名字必须对得上，改一个就要改另外两个：`.goreleaser.yaml` 的 `name_template`、`internal/selfupdate.AssetName`（自更新下载）、`scripts/npm-build.mjs`。对不上的表现是 `herdr-web update` 下载 404。
 

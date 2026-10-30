@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/zbysir/dialhome/relay"
 
 	"github.com/zbysir/herdr-web/internal/acme"
 	"github.com/zbysir/herdr-web/internal/config"
-	"github.com/zbysir/herdr-web/internal/relay"
 )
 
 // relayCmd：`herdr-web relay join` —— 拿中继那边出的邀请码，把这台机器注册上去，然后直接装成

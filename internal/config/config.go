@@ -18,8 +18,7 @@ import (
 	"strings"
 
 	"github.com/spf13/viper"
-
-	"github.com/zbysir/herdr-web/internal/relay"
+	"github.com/zbysir/dialhome/relay"
 )
 
 type Config struct {
@@ -57,7 +56,7 @@ type Config struct {
 	// `https://7830.<PortDomain>/` 上能看，先过 herdr-web 的认证。空 = 功能关。
 	// 要一张 `*.<PortDomain>` 的通配证书（ACME 那边自动加上），所以必须本进程终止 TLS。
 	PortDomain string
-	Dir       string // ~/.herdr-web：配置和文件（softkeys.json / tls / uploads）
+	Dir        string // ~/.herdr-web：配置和文件（softkeys.json / tls / uploads）
 	// DataDir 是**内部数据**：设备凭据、passkey 公钥。用户不该手改，所以和配置分开放。
 	// （为什么不上 SQLite：这点数据量换 +5MB 二进制和「cat 不了」不划算，而它唯一
 	//   能解决的跨进程写，用锁文件就够了 —— 见 internal/runlock。）

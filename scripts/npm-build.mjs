@@ -36,7 +36,7 @@ const TARGETS = [
 
 const SCOPE = "@bysir";
 // 每个平台子包里放哪几个二进制。加一个就要在根包 package.json 的 bin 里加一个同名的壳
-const BINS = ["herdr-web", "herdr-relay"];
+const BINS = ["herdr-web"];
 const rootPkgDir = path.join(out, "herdr-web");
 
 function subPkgName(t) {
@@ -58,7 +58,6 @@ for (const t of TARGETS) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "herdr-web-npm-"));
   try {
     execFileSync("tar", ["-xzf", archive, "-C", tmp], { stdio: "inherit" });
-    // herdr-relay（云端中继）和 herdr-web 同包发，根包的 bin 里各有一个壳指过来
     for (const bin of BINS) {
       const src = path.join(tmp, bin);
       if (!fs.existsSync(src)) throw new Error(`${archive} 里没有 ${bin}`);
@@ -77,7 +76,7 @@ for (const t of TARGETS) {
       {
         name: subPkgName(t),
         version,
-        description: `herdr-web / herdr-relay 的 ${t.os}-${t.cpu} 二进制（由 @bysir/herdr-web 自动选用）`,
+        description: `herdr-web 的 ${t.os}-${t.cpu} 二进制（由 @bysir/herdr-web 自动选用）`,
         license: "MIT",
         repository: { type: "git", url: "git+https://github.com/zbysir/herdr-web.git" },
         // 这两个字段是关键：npm 靠它们判断「这个包该不该在这台机器上装」

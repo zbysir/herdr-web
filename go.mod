@@ -7,14 +7,17 @@ require (
 	github.com/go-acme/lego/v4 v4.35.2
 	github.com/go-webauthn/webauthn v0.17.4
 	github.com/gorilla/websocket v1.5.3
-	github.com/hashicorp/yamux v0.1.2
 	github.com/miekg/dns v1.1.72
-	github.com/pires/go-proxyproto v0.16.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
-	golang.org/x/crypto v0.58.0
+	github.com/zbysir/dialhome v0.0.0-20261030023122-a174ecec1b50
 	golang.org/x/term v0.47.0
+)
+
+require (
+	github.com/hashicorp/yamux v0.1.2 // indirect
+	golang.org/x/crypto v0.58.0 // indirect
 )
 
 require (

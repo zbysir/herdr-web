@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -29,6 +30,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/zbysir/dialhome/relay"
 
 	"github.com/zbysir/herdr-web/internal/acme"
 	"github.com/zbysir/herdr-web/internal/admin"
@@ -38,7 +40,6 @@ import (
 	"github.com/zbysir/herdr-web/internal/ctl"
 	"github.com/zbysir/herdr-web/internal/lan"
 	"github.com/zbysir/herdr-web/internal/qr"
-	"github.com/zbysir/herdr-web/internal/relay"
 	"github.com/zbysir/herdr-web/internal/runlock"
 	"github.com/zbysir/herdr-web/internal/selfupdate"
 	"github.com/zbysir/herdr-web/internal/server"
@@ -306,6 +307,9 @@ func serve(webDir string) error {
 	// 连不上中继是软失败，隧道自己一直重连。
 	if cfg.RelayURL != "" {
 		tn, err := relay.Start(relay.HostConfig{URL: cfg.RelayURL, Host: cfg.RelayHost, Dir: cfg.RelayDir()})
+		if errors.Is(err, relay.ErrNotJoined) {
+			return fmt.Errorf("中继：%w：先跑一次 herdr-web relay join", err)
+		}
 		if err != nil {
 			return fmt.Errorf("中继：%w", err)
 		}

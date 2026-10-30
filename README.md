@@ -108,8 +108,8 @@ herdr-web                                       # 1. 纯本机（默认），明
 HERDR_WEB_HOST=0.0.0.0 herdr-web                # 2. 局域网的手机 / 平板，自签 TLS + 二维码
 HERDR_WEB_ONCONNECT= herdr-web                  # 3. 别自动进 herdr，留在 shell 里
 
-# 4. 从公网连：走云端中继（VPS 上跑 herdr-relay，只转密文，TLS 在本机终止）
-#    VPS 上用镜像 ghcr.io/zbysir/herdr-relay（npm 包和 install.sh 里也带着 herdr-relay）
+# 4. 从公网连：走云端中继（VPS 上跑 dialhome，只转密文，TLS 在本机终止）
+#    中继是独立项目 https://github.com/zbysir/dialhome（镜像 ghcr.io/zbysir/dialhome），网页后台里出邀请码
 #    `relay join` 一条命令注册 + 装成服务（下面前两项它替你加），证书配置带在同一行：
 #    HERDR_WEB_ACME_DNS=cloudflare HERDR_WEB_CLOUDFLARE_DNS_API_TOKEN=... herdr-web relay join https://relay.example.com mac.h.example.com <邀请码>
 HERDR_WEB_RELAY_URL=https://relay.example.com HERDR_WEB_RELAY_HOST=mac.h.example.com \

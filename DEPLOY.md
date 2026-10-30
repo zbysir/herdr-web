@@ -69,7 +69,7 @@ TLS、临时把鉴权关掉调一下 —— 都变成公网上的一个洞，而
 | **A 只本机** | 无 | 零步骤 | — |
 | **B 局域网 · 用 IP 访问** | 无 | 点一次「继续访问」（或装一次 CA 证书） | 不能用 |
 | **C 局域网 · 用自己的域名** | 域名 + DNS 的 API token | 零步骤 | 能用 |
-| **D 公网** | 同 C，再加一台 VPS 跑云端中继（`herdr-relay`） | 零步骤 | 能用 |
+| **D 公网** | 同 C，再加一台 VPS 跑云端中继（[dialhome](https://github.com/zbysir/dialhome)） | 零步骤 | 能用 |
 
 **A** 直接 `./herdr-web` 就行。
 
@@ -109,19 +109,19 @@ HERDR_WEB_TLS_CERT=/path/fullchain.pem HERDR_WEB_TLS_KEY=/path/privkey.pem ./her
 直接消失。
 
 真要一个公网地址（不想在每台设备上装 VPN），**唯一的一条路是云端中继**：VPS 上跑一个只转密文的
-`herdr-relay`，这台机器主动连上去；手机打开 `https://mac.h.example.com`，中继按 SNI 把整条 TLS
+[dialhome](https://github.com/zbysir/dialhome)（原来叫 `herdr-relay`，2026-10-30 拆成独立项目），这台机器主动连上去；手机打开 `https://mac.h.example.com`，中继按 SNI 把整条 TLS
 原样转过来。**TLS 在这台机器上终止，证书私钥、设备表、passkey 都不离开它** —— VPS 被整台拿下
 也只能断你的网、看元数据。设计和威胁对照见 [docs/dev/RELAY.md](docs/dev/RELAY.md)。
 
 ```bash
-# VPS 上：跑 herdr-relay（镜像 ghcr.io/zbysir/herdr-relay，npm 包 / install.sh 里也带着它）。
-# relay.example.com 先解析到这台 VPS，控制面的证书中继自己签。数据在卷上，别丢
-docker run -d --name herdr-relay --restart always -p 443:443 -v /root/data/herdr-relay:/data \
-  -e HERDR_RELAY_DOMAIN=relay.example.com \
-  ghcr.io/zbysir/herdr-relay
+# VPS 上：跑 dialhome。relay.example.com 先解析到这台 VPS，控制面的证书中继自己签。数据在卷上，别丢
+docker run -d --name dialhome --restart always -p 443:443 -v /root/data/dialhome:/data \
+  -e DIALHOME_DOMAIN=relay.example.com \
+  ghcr.io/zbysir/dialhome
+docker exec dialhome dialhome admin init   # 印一个链接，浏览器里打开注册管理员 passkey
 
-# 然后出一个邀请码（30 分钟、一次性、绑死这个主机名）
-docker exec herdr-relay herdr-relay invite mac.h.example.com
+# 然后在 https://relay.example.com/ 后台里出邀请码（30 分钟、一次性、绑死这个主机名），
+# 或者命令行：docker exec dialhome dialhome invite mac.h.example.com
 
 # 这台机器上：一条命令注册 + 装成常驻服务。私钥留在 ~/.herdr-web/relay/；服务的环境 =
 # 当前 shell（同 service install）+ HERDR_WEB_RELAY_URL / _HOST 两项，所以证书配置写在同一行。

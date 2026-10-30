@@ -81,13 +81,6 @@ cp "$tmp/herdr-web" "$DIR/.herdr-web.new"
 chmod 755 "$DIR/.herdr-web.new"
 mv "$DIR/.herdr-web.new" "$DIR/herdr-web"
 say "装到  $DIR/herdr-web"
-# 云端中继（跑在 VPS 上）和它同一个 archive。老版本的 archive 里没有，没有就不装
-if [ -f "$tmp/herdr-relay" ]; then
-  cp "$tmp/herdr-relay" "$DIR/.herdr-relay.new"
-  chmod 755 "$DIR/.herdr-relay.new"
-  mv "$DIR/.herdr-relay.new" "$DIR/herdr-relay"
-  say "装到  $DIR/herdr-relay"
-fi
 
 echo
 case ":$PATH:" in
@@ -101,5 +94,5 @@ say "接下来："
 say "  herdr-web                     直接跑（只听 127.0.0.1）"
 say "  herdr-web service install     装成开机自启的常驻服务"
 say "  herdr-web update              升级"
-say "  herdr-relay --help            云端中继（放在 VPS 上跑，让手机从公网连回来）"
+say "  云端中继（让手机从公网连回来）：https://github.com/zbysir/dialhome"
 echo
